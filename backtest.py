@@ -634,10 +634,19 @@ class ProfessionalBacktester:
         log.success(f"📁 Sonuçlar kaydedildi: {filename}")
 
 
-# KULLANIM ÖRNEĞİ
+
 async def main():
-    """Demo backtest"""
+    """
+    UPDATED MAIN - Optimize edilmiş risk ile test
+    """
+    from risk.optimized_configs import RiskProfiles
     
+    log.info("="*70)
+    log.info("   🎯 OPTİMİZE EDİLMİŞ BACKTEST")
+    log.info("="*70 + "\n")
+    
+    # Test 1: AAPL - MODERATE RISK (ÖNERİLEN)
+    log.info("📊 Test 1: AAPL - MODERATE Risk Profili")
     backtester = ProfessionalBacktester(
         symbol="AAPL",
         initial_capital=100_000,
@@ -646,17 +655,20 @@ async def main():
         use_risk_management=True
     )
     
+    # Risk profilini değiştir
+    backtester.risk_manager.config = RiskProfiles.MODERATE
+    
     metrics = await backtester.run(
         strategy_class=AdvancedMomentum,
         strategy_params={
             'fast_period': 10,
             'slow_period': 30,
-            'min_confidence': 0.6
+            'min_confidence': 0.5  # Daha düşük (daha fazla işlem)
         }
     )
     
-    # Export results
-    # backtester.export_results("aapl_backtest.csv")
+    if metrics:
+        log.success(f"✅ CAGR: {metrics.cagr:.2f}%, Sharpe: {metrics.sharpe_ratio:.3f}")
 
 
 if __name__ == "__main__":
