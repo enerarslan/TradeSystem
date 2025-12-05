@@ -12,3 +12,10 @@ venv/
 
 # IDE ayarları
 .vscode/
+# Veri Deposu (Büyük CSV dosyaları yüklenmesin)
+data/storage/*.csv
+data/storage/*.xlsx
+
+# Veritabanı dosyaları (Geçmiş işlemleri yükleme)
+*.db
+*.sqlite3
