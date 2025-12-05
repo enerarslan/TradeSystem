@@ -1,0 +1,14 @@
+# Python gereksiz dosyaları
+__pycache__/
+*.py[cod]
+
+# Sanal ortam
+venv/
+.env
+
+# Veritabanı dosyaları
+*.sqlite3
+*.log
+
+# IDE ayarları
+.vscode/
