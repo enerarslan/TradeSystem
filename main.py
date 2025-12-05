@@ -9,73 +9,66 @@ from execution.portfolio import PortfolioManager
 from execution.handler import ExecutionHandler
 
 async def main_system():
-    # --- AÇILIŞ EKRANI ---
-    log.info("==================================================")
-    log.info(f"   {settings.PROJECT_NAME} v{settings.VERSION}")
-    log.info("   JPMorgan Grade Architecture | Active")
-    log.info("==================================================")
-
-    # 1. Veritabanını Başlat (Tablolar yoksa oluşturur)
-    await init_db()
-    log.success("Veritabanı bağlantısı kuruldu.")
+    log.info("=== SİSTEM BAŞLATILIYOR ===")
     
-    # 2. Modülleri Yükle
-    stream = DataStream(exchange_id='binance')
+    # 1. Veritabanı
+    await init_db()
+    
+    # 2. Modüller
+    # NOT: API Key olmadığı için 'binance' sadece public veri çeker.
+    stream = DataStream(exchange_id='binance') 
     portfolio = PortfolioManager(initial_balance=10000.0)
     risk_engine = RiskManager()
-    execution_handler = ExecutionHandler(portfolio) # Handler, portföyü yönetecek
+    execution_handler = ExecutionHandler(portfolio)
     
-    # 3. Stratejiyi Seç
+    # 3. Strateji
     target_symbol = "BTC/USDT"
-    strategy = SimpleMomentum(symbol=target_symbol, window_size=15)
+    strategy = SimpleMomentum(symbol=target_symbol, window_size=10) # Pencereyi 10'a düşürdük daha hızlı başlasın
 
     # 4. Bağlantı
     await stream.connect()
 
+    log.info("⏳ Tampon veri toplanıyor (İlk 10 saniye işlem olmaz)...")
+
     try:
-        log.info("🚀 Motor Çalışıyor. Piyasalar dinleniyor...")
-        
         while True:
-            # --- FAZ 1: GÖZLEM (Data) ---
             tick = await stream.get_latest_price(target_symbol)
             
             if tick:
-                # --- FAZ 2: ANALİZ (Strategy) ---
+                # Portföydeki anlık fiyatı güncelle (Mark-to-Market)
+                portfolio.update_price(tick.symbol, tick.price)
+                
+                # Sinyal Üret
                 signal = await strategy.on_tick(tick)
                 
                 if signal:
-                    # --- FAZ 3: KORUMA (Risk) ---
-                    # Risk motoruna "Şu anki cüzdanımla bu işlemi yapabilir miyim?" diye sor
                     portfolio_state = portfolio.get_state()
-                    risk_decision = risk_engine.analyze_signal(signal, portfolio_state)
                     
-                    if risk_decision.passed:
-                        # --- FAZ 4: İCRA (Execution) ---
-                        # Onaylanan miktarı (Risk tarafından düşürülmüş olabilir) uygula
-                        log.success(f"✅ ONAY: {signal.side} Sinyali geçerli. İletiliyor...")
-                        
-                        await execution_handler.execute_order(
-                            signal=signal,
-                            approved_quantity=risk_decision.adjusted_quantity
-                        )
-                        
-                        # Bakiyeyi ekrana bas
-                        new_state = portfolio.get_state()
-                        log.info(f"💰 CÜZDAN: {new_state.cash_balance:.2f} USD | Açık Pozisyon: {new_state.open_positions_count}")
-                        
+                    # --- BASİT FİLTRE: Zaten pozisyon varsa ve AL diyorsa engelle ---
+                    current_qty = portfolio.positions.get(signal.symbol, 0)
+                    if signal.side == "BUY" and current_qty > 0:
+                        pass # Zaten elimizde var, ekleme yapma (Simple Momentum kuralı)
+                    elif signal.side == "SELL" and current_qty == 0:
+                        pass # Elimizde yokken satamayız
                     else:
-                        log.warning(f"⛔ RED: Risk limiti engeli -> {risk_decision.reason}")
+                        # Risk Analizi
+                        risk_decision = risk_engine.analyze_signal(signal, portfolio_state)
+                        
+                        if risk_decision.passed:
+                            await execution_handler.execute_order(
+                                signal=signal,
+                                approved_quantity=risk_decision.adjusted_quantity
+                            )
+                            # Bakiye Bilgisi
+                            st = portfolio.get_state()
+                            log.info(f"💰 Bakiye: {st.cash_balance:.2f} USD | PnL: {st.daily_pnl:.2f}")
 
-            # CPU'yu rahatlat (HFT değilsek 1 saniye iyidir)
-            await asyncio.sleep(1)
+            await asyncio.sleep(1) # API limitlerine takılmamak için
 
     except KeyboardInterrupt:
-        log.warning("Kullanıcı tarafından durduruluyor...")
-    except Exception as e:
-        log.exception(f"KRİTİK SİSTEM HATASI: {e}")
+        log.warning("Durduruluyor...")
     finally:
         await stream.close()
-        log.success("Sistem güvenli kapatıldı.")
 
 if __name__ == "__main__":
     asyncio.run(main_system())
