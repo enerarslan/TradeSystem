@@ -121,7 +121,15 @@ class SignalType(str, Enum):
 
 class TradingConstants:
     """Trading-related constants."""
-    
+ 
+
+    # Periods per year for different data frequencies
+    PERIODS_PER_YEAR_DAILY = 252
+    PERIODS_PER_YEAR_15MIN_REGULAR = 6552 
+    PERIODS_PER_YEAR_15MIN_EXTENDED = 15794
+
+    DEFAULT_PERIODS_PER_YEAR = 15794  # Default to extended hours for 15min data
+   
     # Market hours (US Eastern Time)
     MARKET_OPEN: time = time(9, 30)
     MARKET_CLOSE: time = time(16, 0)

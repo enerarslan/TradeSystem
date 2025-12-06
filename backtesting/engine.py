@@ -937,6 +937,7 @@ class BacktestEngine:
             initial_capital=self.config.initial_capital,
             benchmark_returns=benchmark_returns,
             strategy_name=self._strategies[0].name if self._strategies else "Backtest",
+            periods_per_year=15794,
         )
         
         return calculator.calculate_all()

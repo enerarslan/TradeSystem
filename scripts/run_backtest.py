@@ -430,6 +430,64 @@ def main(args: argparse.Namespace | None = None) -> int:
     except Exception as e:
         logger.exception(f"Backtest failed: {e}")
         return 1
+def validate_backtest_metrics(report) -> bool:
+    """
+    Validate that metrics are mathematically possible.
+    Call this after calculating metrics.
+    """
+    errors = []
+    
+    total_ret = report.total_return_pct
+    sharpe = report.sharpe_ratio
+    sortino = report.sortino_ratio
+    max_dd = report.max_drawdown
+    var_95 = report.var_95
+    n_trades = report.trade_stats.total_trades
+    
+    # Check 1: Sharpe sign
+    if total_ret > 0.10 and sharpe < 0:
+        errors.append(
+            f"IMPOSSIBLE: Sharpe={sharpe:.2f} is negative with "
+            f"positive return={total_ret:.2%}"
+        )
+    
+    # Check 2: Sortino sign  
+    if total_ret > 0.10 and sortino < 0:
+        errors.append(
+            f"IMPOSSIBLE: Sortino={sortino:.2f} is negative with "
+            f"positive return={total_ret:.2%}"
+        )
+    
+    # Check 3: Zero risk metrics with trades
+    if n_trades > 100:
+        if var_95 == 0:
+            errors.append(f"IMPOSSIBLE: VaR=0% with {n_trades} trades")
+        if abs(max_dd) < 0.0001:
+            errors.append(f"UNLIKELY: Max DD={max_dd:.4%} with {n_trades} trades")
+    
+    # Check 4: Annualized vs Total consistency
+    # For 4.5 years, (1+total)^(1/4.5)-1 = annual
+    if total_ret > 1.0:  # > 100%
+        expected_annual = (1 + total_ret) ** (1/4.5) - 1
+        if report.annualized_return < expected_annual * 0.5:  # Allow 50% margin
+            errors.append(
+                f"INCONSISTENT: Annual={report.annualized_return:.2%} "
+                f"too low for total={total_ret:.2%} over 4.5 years"
+            )
+    
+    if errors:
+        print("\n" + "=" * 70)
+        print("⚠️  METRICS VALIDATION FAILED - CHECK periods_per_year!")
+        print("=" * 70)
+        for e in errors:
+            print(f"  ❌ {e}")
+        print(f"\n  Your data needs: periods_per_year = 15794")
+        print(f"  Current setting may be: 252 (wrong!)")
+        print("=" * 70 + "\n")
+        return False
+    
+    print("✅ Metrics validation passed")
+    return True
 
 
 if __name__ == "__main__":

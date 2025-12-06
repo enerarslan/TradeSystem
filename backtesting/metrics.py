@@ -35,6 +35,7 @@ logger = get_logger(__name__)
 # CONSTANTS
 # =============================================================================
 
+DEFAULT_PERIODS_PER_YEAR_EXTENDED = 15794
 TRADING_DAYS_PER_YEAR = TradingConstants.TRADING_DAYS_PER_YEAR  # 252
 RISK_FREE_RATE = TradingConstants.RISK_FREE_RATE  # 0.05 (5%)
 PERIODS_PER_YEAR = {
