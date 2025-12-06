@@ -505,72 +505,72 @@ class BaseStrategy(ABC):
         """
         pass
     
-def on_fill(self, event: FillEvent) -> None:
-    """
-    Called when an order is filled.
+    def on_fill(self, event: FillEvent) -> None:
+        """
+        Called when an order is filled.
     
-    Updates position tracking and metrics.
+        Updates position tracking and metrics.
     
-    Properly handles all combinations of:
-    - Buy on long/flat position (add to long)
-    - Buy on short position (close/reduce short)
-    - Sell on long position (close/reduce long)
-    - Sell on short/flat position (add to short)
+        Properly handles all combinations of:
+        - Buy on long/flat position (add to long)
+        - Buy on short position (close/reduce short)
+        - Sell on long position (close/reduce long)
+        - Sell on short/flat position (add to short)
     
-    Args:
-        event: Fill event
-    """
-    symbol = event.symbol
+        Args:
+            event: Fill event
+        """
+        symbol = event.symbol
     
-    # Update position tracking
-    if symbol not in self._current_positions:
-        self._current_positions[symbol] = Position(symbol=symbol)
+        # Update position tracking
+        if symbol not in self._current_positions:
+            self._current_positions[symbol] = Position(symbol=symbol)
     
-    position = self._current_positions[symbol]
-    current_qty = position.quantity  # KEY: Check current state first!
+        position = self._current_positions[symbol]
+        current_qty = position.quantity  # KEY: Check current state first!
     
-    if event.side == "buy":
-        if current_qty < 0:
-            # Closing/reducing a SHORT position
-            reduce_qty = min(event.quantity, abs(current_qty))
-            pnl = position.reduce(reduce_qty, event.price)
+        if event.side == "buy":
+            if current_qty < 0:
+                # Closing/reducing a SHORT position
+                reduce_qty = min(event.quantity, abs(current_qty))
+                pnl = position.reduce(reduce_qty, event.price)
             
-            if not position.is_open:
-                self._cooldown_tracker[symbol] = self.config.cooldown_bars
-                if symbol in self._entry_bars:
-                    del self._entry_bars[symbol]
-                self.metrics.update(trade_closed=True, pnl=pnl)
-        else:
-            # Opening/adding to a LONG position
-            position.add(event.quantity, event.price)
-            if symbol not in self._entry_bars:
-                self._entry_bars[symbol] = self._bar_count
-            self.metrics.trades_opened += 1
+                if not position.is_open:
+                    self._cooldown_tracker[symbol] = self.config.cooldown_bars
+                    if symbol in self._entry_bars:
+                        del self._entry_bars[symbol]
+                    self.metrics.update(trade_closed=True, pnl=pnl)
+            else:
+                # Opening/adding to a LONG position
+                position.add(event.quantity, event.price)
+                if symbol not in self._entry_bars:
+                    self._entry_bars[symbol] = self._bar_count
+                self.metrics.trades_opened += 1
     
-    else:  # event.side == "sell"
-        if current_qty > 0:
-            # Closing/reducing a LONG position
-            reduce_qty = min(event.quantity, current_qty)
-            pnl = position.reduce(reduce_qty, event.price)
+        else:  # event.side == "sell"
+            if current_qty > 0:
+                # Closing/reducing a LONG position
+                reduce_qty = min(event.quantity, current_qty)
+                pnl = position.reduce(reduce_qty, event.price)
             
-            if not position.is_open:
-                self._cooldown_tracker[symbol] = self.config.cooldown_bars
-                if symbol in self._entry_bars:
-                    del self._entry_bars[symbol]
-                self.metrics.update(trade_closed=True, pnl=pnl)
-        else:
-            # Opening/adding to a SHORT position
-            position.add(-event.quantity, event.price)
-            if symbol not in self._entry_bars:
-                self._entry_bars[symbol] = self._bar_count
-            self.metrics.trades_opened += 1
+                if not position.is_open:
+                    self._cooldown_tracker[symbol] = self.config.cooldown_bars
+                    if symbol in self._entry_bars:
+                        del self._entry_bars[symbol]
+                    self.metrics.update(trade_closed=True, pnl=pnl)
+            else:
+                # Opening/adding to a SHORT position
+                position.add(-event.quantity, event.price)
+                if symbol not in self._entry_bars:
+                    self._entry_bars[symbol] = self._bar_count
+                self.metrics.trades_opened += 1
     
-    # Call subclass handler
-    self._on_fill(event)
+        # Call subclass handler
+        self._on_fill(event)
     
     def _on_fill(self, event: FillEvent) -> None:
-        """Override for custom fill handling."""
-        pass
+            """Override for custom fill handling."""
+            pass
     
     def on_order(self, event: OrderEvent) -> None:
         """

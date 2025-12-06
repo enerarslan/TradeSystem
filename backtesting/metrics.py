@@ -1024,6 +1024,11 @@ def calculate_trade_stats(
         entry = t.get("entry_time")
         exit_time = t.get("exit_time")
         if entry and exit_time:
+            # Handle both datetime objects and ISO format strings
+            if isinstance(entry, str):
+                entry = datetime.fromisoformat(entry.replace('Z', '+00:00'))
+            if isinstance(exit_time, str):
+                exit_time = datetime.fromisoformat(exit_time.replace('Z', '+00:00'))
             duration = (exit_time - entry).total_seconds() / 3600  # hours
             holding_periods.append(duration)
     
@@ -1053,6 +1058,9 @@ def calculate_trade_stats(
     for t in trades:
         entry = t.get("entry_time")
         if entry:
+            # Handle both datetime objects and ISO format strings
+            if isinstance(entry, str):
+                entry = datetime.fromisoformat(entry.replace('Z', '+00:00'))
             day_key = entry.strftime("%A")
             hour = entry.hour
             
