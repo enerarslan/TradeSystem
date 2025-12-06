@@ -212,12 +212,12 @@ class SignalEvent(Event):
     @property
     def is_entry(self) -> bool:
         """Check if this is an entry signal."""
-        return self.signal_type in ("entry", "scale_in")
+        return self.signal_type in ("entry", "entry_long", "entry_short", "scale_in")
     
     @property
     def is_exit(self) -> bool:
         """Check if this is an exit signal."""
-        return self.signal_type in ("exit", "scale_out")
+        return self.signal_type in ("exit", "exit_long", "exit_short", "scale_out")
     
     @property
     def is_long(self) -> bool:

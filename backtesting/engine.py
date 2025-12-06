@@ -733,6 +733,12 @@ class BacktestEngine:
     
     def _validate_signal(self, signal: SignalEvent) -> bool:
         """Validate if signal can be executed."""
+        # Reject entry signals when there's already a position
+        if signal.is_entry:
+            pos = self.portfolio.get_position(signal.symbol)
+            if pos and pos.is_open:
+                logger.debug(f"Signal rejected: already have position in {signal.symbol}")
+                return False
         # Check position limits
         if signal.is_entry:
             if self.portfolio.num_positions >= self.config.max_positions:

@@ -185,8 +185,8 @@ def trend_following_strategy():
     
     config = TrendFollowingConfig(
         symbols=["TEST"],
-        ma_fast_period=10,
-        ma_slow_period=20,
+        fast_ma_period=10,
+        slow_ma_period=20,
         adx_period=14,
         adx_threshold=20,
     )
