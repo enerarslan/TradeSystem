@@ -2,31 +2,67 @@
 Configuration Module
 ====================
 
-Centralized configuration management for the algorithmic trading platform.
-Uses Pydantic v2 for validation and environment variable loading.
+Central configuration management for the algorithmic trading platform.
+
+Exports:
+- Settings and configuration classes
+- Constants and enums
+- Logging utilities
 
 Author: Algo Trading Platform
 License: MIT
 """
 
 from config.settings import (
-    Settings,
-    get_settings,
-    TradingMode,
+    # Enums
     LogLevel,
+    TradingMode,
     TimeFrame,
-    OrderSide,
-    OrderType,
-    PositionSide,
+    
+    # Constants
+    TradingConstants,
+    IndicatorDefaults,
+    RiskDefaults,
+    MLDefaults,
+    
+    # Settings classes
+    DatabaseSettings,
+    AlpacaSettings,
+    DataSettings,
+    BacktestSettings,
+    RiskSettings,
+    MLSettings,
+    Settings,
+    
+    # Functions
+    get_settings,
+    get_logger,
+    configure_logging,
 )
 
 __all__ = [
-    "Settings",
-    "get_settings",
-    "TradingMode",
+    # Enums
     "LogLevel",
+    "TradingMode",
     "TimeFrame",
-    "OrderSide",
-    "OrderType",
-    "PositionSide",
+    
+    # Constants
+    "TradingConstants",
+    "IndicatorDefaults",
+    "RiskDefaults",
+    "MLDefaults",
+    
+    # Settings classes
+    "DatabaseSettings",
+    "AlpacaSettings",
+    "DataSettings",
+    "BacktestSettings",
+    "RiskSettings",
+    "MLSettings",
+    "Settings",
+    
+    # Functions
+    "get_settings",
+    "get_logger",
+    "configure_logging",
 ]
