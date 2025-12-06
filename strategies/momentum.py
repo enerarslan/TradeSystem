@@ -63,7 +63,7 @@ class TrendFollowingConfig(StrategyConfig):
     # Trend strength filter
     use_adx_filter: bool = True
     adx_period: int = 14
-    adx_threshold: float = 25.0
+    adx_threshold: float = 20.0  # Lowered from 25 for more signals
     
     # Entry conditions
     require_price_above_trend_ma: bool = True
@@ -178,10 +178,10 @@ class TrendFollowingStrategy(BaseStrategy):
         if self.config.require_price_above_trend_ma and trend_ma:
             trend_ok = close > trend_ma
         
-        # Current position
-        position = self.get_position(symbol)
-        has_long = position and position.quantity > 0
-        has_short = position and position.quantity < 0
+        # Current position - Use portfolio positions for accurate state
+        position = portfolio.positions.get(symbol) if portfolio.positions else None
+        has_long = position is not None and getattr(position, 'quantity', 0) > 0
+        has_short = position is not None and getattr(position, 'quantity', 0) < 0
         
         # Check for crossover
         bullish_cross = prev_fast <= prev_slow and fast_ma > slow_ma
@@ -460,10 +460,10 @@ class BreakoutStrategy(BaseStrategy):
             self.config.min_atr_pct <= atr_pct <= self.config.max_atr_pct
         )
         
-        # Current position
-        position = self.get_position(symbol)
-        has_long = position and position.quantity > 0
-        has_short = position and position.quantity < 0
+        # Current position - Use portfolio positions for accurate state
+        position = portfolio.positions.get(symbol) if portfolio.positions else None
+        has_long = position is not None and getattr(position, 'quantity', 0) > 0
+        has_short = position is not None and getattr(position, 'quantity', 0) < 0
         
         # Check breakouts
         upward_breakout = prev_close <= prev_upper and close > upper_channel
@@ -711,10 +711,10 @@ class MeanReversionStrategy(BaseStrategy):
                 else:
                     trend_ok = True  # Trade both directions
         
-        # Current position
-        position = self.get_position(symbol)
-        has_long = position and position.quantity > 0
-        has_short = position and position.quantity < 0
+        # Current position - Use portfolio positions for accurate state
+        position = portfolio.positions.get(symbol) if portfolio.positions else None
+        has_long = position is not None and getattr(position, 'quantity', 0) > 0
+        has_short = position is not None and getattr(position, 'quantity', 0) < 0
         
         # Entry conditions
         oversold = rsi_val < self.config.rsi_oversold and bb_pctb < 0.1
@@ -1055,10 +1055,10 @@ class RSIDivergenceStrategy(BaseStrategy):
         close = current["close"]
         rsi_val = current.get(f"rsi_{self.config.rsi_period}", 50)
         
-        # Current position
-        position = self.get_position(symbol)
-        has_long = position and position.quantity > 0
-        has_short = position and position.quantity < 0
+        # Current position - Use portfolio positions for accurate state
+        position = portfolio.positions.get(symbol) if portfolio.positions else None
+        has_long = position is not None and getattr(position, 'quantity', 0) > 0
+        has_short = position is not None and getattr(position, 'quantity', 0) < 0
         
         # Entry signals
         if not has_long and not has_short:
@@ -1275,10 +1275,10 @@ class MACDStrategy(BaseStrategy):
             bullish_cross = bullish_cross and macd_val > 0
             bearish_cross = bearish_cross and macd_val < 0
         
-        # Current position
-        position = self.get_position(symbol)
-        has_long = position and position.quantity > 0
-        has_short = position and position.quantity < 0
+        # Current position - Use portfolio positions for accurate state
+        position = portfolio.positions.get(symbol) if portfolio.positions else None
+        has_long = position is not None and getattr(position, 'quantity', 0) > 0
+        has_short = position is not None and getattr(position, 'quantity', 0) < 0
         
         # Entry signals
         if not has_long and not has_short:

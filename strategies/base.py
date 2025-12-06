@@ -110,7 +110,7 @@ class StrategyConfig:
     use_take_profit: bool = True
     take_profit_pct: float = 0.04
     max_holding_period: int | None = None
-    min_signal_strength: float = 0.5
+    min_signal_strength: float = 0.3  # Lowered from 0.5 for more signals
     cooldown_bars: int = 0
     allow_pyramiding: bool = False
     max_pyramid_levels: int = 3
@@ -804,6 +804,10 @@ class BaseStrategy(ABC):
                         continue
             
             filtered.append(signal)
+            logger.debug(f"Signal passed all filters: {signal.symbol} {signal.signal_type}")
+        
+        if len(filtered) < len(signals):
+            logger.info(f"Filtered {len(signals) - len(filtered)} of {len(signals)} signals")
         
         return filtered
     

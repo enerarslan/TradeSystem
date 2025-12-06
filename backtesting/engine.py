@@ -895,6 +895,15 @@ class BacktestEngine:
                 # Notify strategy
                 for strategy in self._strategies:
                     strategy.on_fill(fill_event)
+                    
+                    # Sync strategy position state with portfolio
+                    if hasattr(strategy, '_current_positions'):
+                        portfolio_pos = self.portfolio.get_position(order.symbol)
+                        if portfolio_pos:
+                            strategy._current_positions[order.symbol] = portfolio_pos
+                        elif order.symbol in strategy._current_positions:
+                            # Position closed - remove from strategy tracking
+                            del strategy._current_positions[order.symbol]
         
         # Remove filled orders
         for order in orders_to_remove:
