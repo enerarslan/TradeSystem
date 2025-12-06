@@ -809,10 +809,10 @@ def on_fill(self, event: FillEvent) -> None:
     
     def _update_cooldowns(self) -> None:
         """Decrement cooldown counters."""
-        for symbol in self._cooldown_tracker:          
-            if self._cooldown_tracker[symbol] > 0:      
-                self._cooldown_tracker[symbol] -= 1     
-    
+        for symbol in self._cooldown_tracker:
+            if self._cooldown_tracker[symbol] > 0:
+                self._cooldown_tracker[symbol] -= 1
+
     def _check_holding_period_exits(
         self,
         symbol: str,
