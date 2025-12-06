@@ -64,10 +64,12 @@ async def run_single_backtest(symbol: str, capital: float, start_date=None, end_
     results = await backtester.run(
         strategy_class=AdvancedMomentum,
         strategy_params={
+            'fast_period': 10,
+            'slow_period': 30,
             'rsi_period': 14,
-            'rsi_oversold': 30,
-            'rsi_overbought': 70,
-            'min_confidence': 0.6
+            'min_confidence': 0.3,              # LOWERED from 0.6
+            'use_regime_filter': False,          # ADDED - disable
+            'use_volume_confirmation': False     # ADDED - disable
         },
         start_date=start_date,
         end_date=end_date
