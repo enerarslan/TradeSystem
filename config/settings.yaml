@@ -70,7 +70,7 @@ strategy:
 # MACHINE LEARNING
 # ============================================================================
 ml:
-  enabled: false
+  enabled: true 
   model_type: xgboost              # xgboost, lstm, transformer
   lookback_period: 60              # Bars to look back
   prediction_horizon: 5            # Bars ahead to predict

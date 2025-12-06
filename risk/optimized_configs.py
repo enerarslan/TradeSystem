@@ -34,10 +34,10 @@ class RiskProfiles:
         max_portfolio_leverage=1.0,
         max_daily_loss_pct=3.0,
         max_total_drawdown_pct=10.0,
-        max_daily_trades=100,
-        max_open_positions=15,
+        max_daily_trades=200,
+        max_open_positions=20,
         max_var_1d=5_000,
-        min_cash_reserve_pct=15.0
+        min_cash_reserve_pct=10.0
     )
     
     # AGGRESSIVE - Yüksek risk/getiri

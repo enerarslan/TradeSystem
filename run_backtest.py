@@ -17,6 +17,7 @@ Usage:
 
 import asyncio
 import argparse
+from html import parser
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -47,7 +48,7 @@ async def run_single_backtest(symbol: str, capital: float, start_date=None, end_
     """
     # Import here to avoid circular imports
     from backtest import ProfessionalBacktester
-    from strategies.momentum import AdvancedMomentum
+    from strategies.momentum import AdvancedMomentum, MLMomentumStrategy
     
     print(f"📊 Single Stock Backtest: {symbol}")
     print(f"💰 Capital: ${capital:,.2f}")
@@ -64,10 +65,10 @@ async def run_single_backtest(symbol: str, capital: float, start_date=None, end_
     results = await backtester.run(
         strategy_class=AdvancedMomentum,
         strategy_params={
-            'fast_period': 10,
-            'slow_period': 30,
+            'fast_period': 8,
+            'slow_period': 21,
             'rsi_period': 14,
-            'min_confidence': 0.3,              # LOWERED from 0.6
+            'min_confidence': 0.4,              # LOWERED from 0.6
             'use_regime_filter': False,          # ADDED - disable
             'use_volume_confirmation': False     # ADDED - disable
         },
@@ -314,6 +315,10 @@ Examples:
         action="store_true",
         help="List all available symbols and exit"
     )
+
+    parser.add_argument("--ml", action="store_true", default=True)
+    parser.add_argument("--no-ml", action="store_true")
+
     
     return parser.parse_args()
 
