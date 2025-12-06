@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
 ============================================================================
-ALPHATRADE - BACKTEST RUNNER
+ALPHATRADE - BACKTEST RUNNER (FIXED VERSION)
 ============================================================================
-The main entry point for running backtests on your 46 stock dataset.
+Replace your run_backtest.py with this file.
+
+Changes made:
+1. Uses MLMomentumStrategy when --ml flag is set
+2. Uses MODERATE risk profile for more trades
+3. Lowered min_confidence significantly
+4. Added proper ML parameters
 
 Usage:
-    python run_backtest.py                    # Run with default settings
-    python run_backtest.py --mode portfolio   # Run portfolio backtest
-    python run_backtest.py --mode walkforward # Run walk-forward optimization
-    python run_backtest.py --symbol AAPL      # Run single stock
-    python run_backtest.py --help             # Show all options
+    python run_backtest.py --symbol AAPL --capital 100000 --ml
+    python run_backtest.py --symbol AAPL --capital 100000 --no-ml
+    python run_backtest.py --mode portfolio --capital 100000
 
 ============================================================================
 """
 
 import asyncio
 import argparse
-from html import parser
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -36,7 +39,7 @@ def print_banner():
     print("=" * 70 + "\n")
 
 
-async def run_single_backtest(symbol: str, capital: float, start_date=None, end_date=None):
+async def run_single_backtest(symbol: str, capital: float, start_date=None, end_date=None, use_ml: bool = True):
     """
     Run backtest on a single stock.
     
@@ -45,13 +48,16 @@ async def run_single_backtest(symbol: str, capital: float, start_date=None, end_
         capital: Initial capital
         start_date: Optional start date
         end_date: Optional end date
+        use_ml: Use ML-enhanced strategy (default: True)
     """
     # Import here to avoid circular imports
     from backtest import ProfessionalBacktester
     from strategies.momentum import AdvancedMomentum, MLMomentumStrategy
+    from risk.optimized_configs import RiskProfiles
     
     print(f"📊 Single Stock Backtest: {symbol}")
     print(f"💰 Capital: ${capital:,.2f}")
+    print(f"🤖 ML Strategy: {'YES - MLMomentumStrategy' if use_ml else 'NO - AdvancedMomentum'}")
     print("-" * 50)
     
     backtester = ProfessionalBacktester(
@@ -62,19 +68,56 @@ async def run_single_backtest(symbol: str, capital: float, start_date=None, end_
         use_risk_management=True
     )
     
-    results = await backtester.run(
-        strategy_class=AdvancedMomentum,
-        strategy_params={
-            'fast_period': 8,
-            'slow_period': 21,
-            'rsi_period': 14,
-            'min_confidence': 0.4,              # LOWERED from 0.6
-            'use_regime_filter': False,          # ADDED - disable
-            'use_volume_confirmation': False     # ADDED - disable
-        },
-        start_date=start_date,
-        end_date=end_date
-    )
+    # IMPORTANT: Use MODERATE risk profile for more trades
+    backtester.risk_manager.config = RiskProfiles.MODERATE
+    
+    if use_ml:
+        # ============================================
+        # ML + TECHNICAL FUSION STRATEGY
+        # ============================================
+        print("🤖 Using MLMomentumStrategy with online learning...")
+        
+        results = await backtester.run(
+            strategy_class=MLMomentumStrategy,
+            strategy_params={
+                # Technical parameters
+                'fast_period': 8,
+                'slow_period': 21,
+                'rsi_period': 14,
+                
+                # ML parameters
+                'ml_model_type': 'xgboost',
+                'ml_model_path': None,          # No pre-trained model
+                'ml_weight': 0.4,               # 40% ML, 60% Technical
+                'online_learning': True,        # Train during backtest!
+                
+                # Signal thresholds - CRITICAL FOR MORE TRADES
+                'min_confidence': 0.25,         # VERY LOW - more signals
+                'min_agreement': 0.3,           # LOW - less strict agreement
+                'lookback': 100                 # Shorter lookback
+            },
+            start_date=start_date,
+            end_date=end_date
+        )
+    else:
+        # ============================================
+        # PURE TECHNICAL STRATEGY
+        # ============================================
+        print("📈 Using AdvancedMomentum (pure technical)...")
+        
+        results = await backtester.run(
+            strategy_class=AdvancedMomentum,
+            strategy_params={
+                'fast_period': 8,
+                'slow_period': 21,
+                'rsi_period': 14,
+                'min_confidence': 0.2,          # VERY LOW
+                'use_regime_filter': False,
+                'use_volume_confirmation': False
+            },
+            start_date=start_date,
+            end_date=end_date
+        )
     
     return results
 
@@ -82,11 +125,6 @@ async def run_single_backtest(symbol: str, capital: float, start_date=None, end_
 async def run_portfolio_backtest(capital: float, max_positions: int, allocation: str):
     """
     Run backtest on all 46 stocks together.
-    
-    Args:
-        capital: Initial capital
-        max_positions: Maximum concurrent positions
-        allocation: Allocation mode (equal_weight, risk_parity, etc.)
     """
     from backtest.portfolio import MultiAssetPortfolioBacktest
     
@@ -113,12 +151,6 @@ async def run_portfolio_backtest(capital: float, max_positions: int, allocation:
 async def run_walk_forward(symbol: str, capital: float, train_days: int, test_days: int):
     """
     Run walk-forward optimization on a single stock.
-    
-    Args:
-        symbol: Stock symbol
-        capital: Initial capital
-        train_days: Training period in days
-        test_days: Testing period in days
     """
     from backtest.walk_forward import WalkForwardOptimizer
     from strategies.momentum import AdvancedMomentum
@@ -139,10 +171,10 @@ async def run_walk_forward(symbol: str, capital: float, train_days: int, test_da
     
     # Parameter grid to optimize
     param_grid = {
+        'fast_period': [5, 8, 10],
+        'slow_period': [15, 21, 30],
         'rsi_period': [10, 14, 20],
-        'rsi_oversold': [25, 30, 35],
-        'rsi_overbought': [65, 70, 75],
-        'volume_threshold': [1.2, 1.5, 2.0]
+        'min_confidence': [0.2, 0.3, 0.4]
     }
     
     results = await optimizer.run(
@@ -156,224 +188,134 @@ async def run_walk_forward(symbol: str, capital: float, train_days: int, test_da
     return results
 
 
-async def run_all_stocks_sequential(capital: float):
+async def run_all_stocks_sequential(capital: float, use_ml: bool = True):
     """
     Run backtest on each stock individually (sequential).
-    Useful for comparing performance across stocks.
     """
-    from data.csv_loader import LocalCSVLoader
-    from backtest import ProfessionalBacktester
-    from strategies.momentum import AdvancedMomentum
+    from pathlib import Path
     
-    print(f"📊 Sequential Backtest: All Stocks")
-    print(f"💰 Capital per stock: ${capital:,.2f}")
-    print("-" * 50)
-    
-    # Discover all symbols
-    loader = LocalCSVLoader()
     storage_path = Path("data/storage")
+    csv_files = list(storage_path.glob("*_15min.csv"))
     
-    symbols = []
-    for file in storage_path.glob("*_15min.csv"):
-        symbol = file.stem.replace("_15min", "")
-        symbols.append(symbol)
+    if not csv_files:
+        print("❌ No data files found!")
+        return None
     
-    print(f"📁 Found {len(symbols)} symbols: {', '.join(symbols[:5])}...")
+    symbols = [f.stem.replace("_15min", "") for f in csv_files]
+    print(f"📊 Running backtest on {len(symbols)} stocks...")
     
-    results_summary = []
-    
+    results = {}
     for i, symbol in enumerate(symbols, 1):
         print(f"\n[{i}/{len(symbols)}] Testing {symbol}...")
-        
         try:
-            backtester = ProfessionalBacktester(
-                symbol=symbol,
-                initial_capital=capital,
-                use_risk_management=True
-            )
-            
-            result = await backtester.run(
-                strategy_class=AdvancedMomentum,
-                strategy_params={'rsi_period': 14}
-            )
-            
+            result = await run_single_backtest(symbol, capital, use_ml=use_ml)
             if result:
-                results_summary.append({
-                    'symbol': symbol,
+                results[symbol] = {
                     'return': result.total_return,
                     'sharpe': result.sharpe_ratio,
-                    'max_dd': result.max_drawdown,
-                    'trades': result.total_trades,
-                    'win_rate': result.win_rate
-                })
+                    'trades': result.total_trades
+                }
         except Exception as e:
-            print(f"   ❌ Error: {e}")
+            print(f"  ❌ Error: {e}")
     
-    # Print summary
+    # Summary
     print("\n" + "=" * 70)
-    print("   📊 RESULTS SUMMARY")
+    print("   SEQUENTIAL BACKTEST SUMMARY")
     print("=" * 70)
-    print(f"{'Symbol':<10} {'Return':>10} {'Sharpe':>10} {'MaxDD':>10} {'Trades':>8} {'WinRate':>10}")
-    print("-" * 70)
     
-    for r in sorted(results_summary, key=lambda x: x['return'], reverse=True):
-        print(f"{r['symbol']:<10} {r['return']:>+9.2%} {r['sharpe']:>10.2f} "
-              f"{r['max_dd']:>9.2%} {r['trades']:>8} {r['win_rate']:>9.1%}")
+    for symbol, data in sorted(results.items(), key=lambda x: x[1]['return'], reverse=True)[:10]:
+        print(f"   {symbol:<6} | Return: {data['return']:>+8.2f}% | Sharpe: {data['sharpe']:>6.2f} | Trades: {data['trades']:>4}")
     
-    return results_summary
+    return results
 
 
-def list_available_symbols():
-    """List all available symbols in data/storage"""
-    storage_path = Path("data/storage")
+def main():
+    print_banner()
     
-    if not storage_path.exists():
-        print("❌ data/storage folder not found!")
-        return []
-    
-    symbols = []
-    for file in storage_path.glob("*.csv"):
-        symbol = file.stem.replace("_15min", "")
-        file_size = file.stat().st_size / (1024 * 1024)  # MB
-        symbols.append((symbol, file_size))
-    
-    print("\n📁 Available Symbols in data/storage:")
-    print("-" * 40)
-    for symbol, size in sorted(symbols):
-        print(f"   {symbol:<15} ({size:.1f} MB)")
-    print("-" * 40)
-    print(f"   Total: {len(symbols)} symbols")
-    
-    return [s[0] for s in symbols]
-
-
-def parse_args():
-    """Parse command line arguments"""
     parser = argparse.ArgumentParser(
         description="AlphaTrade Backtest Runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python run_backtest.py --mode single --symbol AAPL
-    python run_backtest.py --mode portfolio --capital 100000
-    python run_backtest.py --mode walkforward --symbol MSFT
-    python run_backtest.py --mode all
-    python run_backtest.py --list-symbols
+  python run_backtest.py --symbol AAPL --capital 100000 --ml
+  python run_backtest.py --symbol AAPL --capital 100000 --no-ml
+  python run_backtest.py --mode portfolio --capital 100000
+  python run_backtest.py --mode walkforward --symbol AAPL
+  python run_backtest.py --mode sequential --capital 100000
         """
     )
     
-    parser.add_argument(
-        "--mode",
-        choices=["single", "portfolio", "walkforward", "all"],
-        default="single",
-        help="Backtest mode (default: single)"
-    )
+    parser.add_argument("--mode", type=str, default="single",
+                        choices=["single", "portfolio", "walkforward", "sequential"],
+                        help="Backtest mode (default: single)")
     
-    parser.add_argument(
-        "--symbol",
-        default="AAPL",
-        help="Stock symbol for single/walkforward mode (default: AAPL)"
-    )
+    parser.add_argument("--symbol", type=str, default="AAPL",
+                        help="Symbol for single backtest (default: AAPL)")
     
-    parser.add_argument(
-        "--capital",
-        type=float,
-        default=100000,
-        help="Initial capital (default: 100000)"
-    )
+    parser.add_argument("--capital", type=float, default=100000,
+                        help="Initial capital (default: 100000)")
     
-    parser.add_argument(
-        "--max-positions",
-        type=int,
-        default=20,
-        help="Max positions for portfolio mode (default: 20)"
-    )
+    parser.add_argument("--ml", action="store_true", default=False,
+                        help="Use ML-enhanced strategy (MLMomentumStrategy)")
     
-    parser.add_argument(
-        "--allocation",
-        choices=["equal_weight", "risk_parity", "markowitz"],
-        default="equal_weight",
-        help="Portfolio allocation mode (default: equal_weight)"
-    )
+    parser.add_argument("--no-ml", action="store_true", default=False,
+                        help="Use pure technical strategy (AdvancedMomentum)")
     
-    parser.add_argument(
-        "--train-days",
-        type=int,
-        default=180,
-        help="Training period for walk-forward (default: 180)"
-    )
+    parser.add_argument("--train-days", type=int, default=180,
+                        help="Training days for walk-forward (default: 180)")
     
-    parser.add_argument(
-        "--test-days",
-        type=int,
-        default=30,
-        help="Test period for walk-forward (default: 30)"
-    )
+    parser.add_argument("--test-days", type=int, default=30,
+                        help="Test days for walk-forward (default: 30)")
     
-    parser.add_argument(
-        "--list-symbols",
-        action="store_true",
-        help="List all available symbols and exit"
-    )
-
-    parser.add_argument("--ml", action="store_true", default=True)
-    parser.add_argument("--no-ml", action="store_true")
-
+    parser.add_argument("--max-positions", type=int, default=10,
+                        help="Max positions for portfolio mode (default: 10)")
     
-    return parser.parse_args()
-
-
-async def main():
-    """Main entry point"""
-    args = parse_args()
+    parser.add_argument("--allocation", type=str, default="equal_weight",
+                        choices=["equal_weight", "risk_parity", "momentum"],
+                        help="Allocation mode for portfolio (default: equal_weight)")
     
-    print_banner()
+    args = parser.parse_args()
     
-    # List symbols and exit
-    if args.list_symbols:
-        list_available_symbols()
-        return
+    # Determine ML usage: default is NO ML unless --ml is specified
+    use_ml = args.ml and not args.no_ml
     
-    # Run selected mode
-    try:
-        if args.mode == "single":
-            results = await run_single_backtest(
-                symbol=args.symbol,
-                capital=args.capital
-            )
-            
-        elif args.mode == "portfolio":
-            results = await run_portfolio_backtest(
-                capital=args.capital,
-                max_positions=args.max_positions,
-                allocation=args.allocation
-            )
-            
-        elif args.mode == "walkforward":
-            results = await run_walk_forward(
-                symbol=args.symbol,
-                capital=args.capital,
-                train_days=args.train_days,
-                test_days=args.test_days
-            )
-            
-        elif args.mode == "all":
-            results = await run_all_stocks_sequential(
-                capital=args.capital
-            )
-        
-        print("\n" + "=" * 70)
-        print("   ✅ BACKTEST COMPLETE")
-        print("=" * 70)
-        
-    except KeyboardInterrupt:
-        print("\n\n⚠️ Interrupted by user")
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    print(f"📋 Mode: {args.mode.upper()}")
+    print(f"🤖 ML Strategy: {'ENABLED' if use_ml else 'DISABLED'}")
+    print("-" * 50)
+    
+    # Run based on mode
+    if args.mode == "single":
+        asyncio.run(run_single_backtest(
+            symbol=args.symbol,
+            capital=args.capital,
+            use_ml=use_ml
+        ))
+    
+    elif args.mode == "portfolio":
+        asyncio.run(run_portfolio_backtest(
+            capital=args.capital,
+            max_positions=args.max_positions,
+            allocation=args.allocation
+        ))
+    
+    elif args.mode == "walkforward":
+        asyncio.run(run_walk_forward(
+            symbol=args.symbol,
+            capital=args.capital,
+            train_days=args.train_days,
+            test_days=args.test_days
+        ))
+    
+    elif args.mode == "sequential":
+        asyncio.run(run_all_stocks_sequential(
+            capital=args.capital,
+            use_ml=use_ml
+        ))
+    
+    print("\n" + "=" * 70)
+    print("   ✅ BACKTEST COMPLETE")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

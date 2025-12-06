@@ -556,10 +556,10 @@ class AdvancedMomentum(BaseStrategy):
             final_score *= 0.7
         
         # Determine side and confidence
-        if final_score > 0.15:
+        if final_score > 0.05:
             side = Side.BUY
             confidence = min(1.0, abs(final_score) * regime.regime_confidence)
-        elif final_score < -0.15:
+        elif final_score < -0.05:
             side = Side.SELL
             confidence = min(1.0, abs(final_score) * regime.regime_confidence)
         else:
