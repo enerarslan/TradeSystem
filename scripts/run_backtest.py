@@ -79,7 +79,6 @@ def load_data(
     end_date: datetime | None = None,
 ) -> dict[str, pl.DataFrame]:
     """Load and process data for symbols."""
-    loader = CSVLoader(storage_path=data_path, use_cache=True)
     processor = DataProcessor()
     
     data = {}
@@ -96,22 +95,34 @@ def load_data(
             file_path = data_path / pattern
             if file_path.exists():
                 logger.info(f"Loading {symbol} from {file_path}")
-                df = loader.load(file_path)
                 
-                # Process data
-                df = processor.process(df)
-                
-                # Filter by date range
-                if start_date:
-                    df = df.filter(pl.col("timestamp") >= start_date)
-                if end_date:
-                    df = df.filter(pl.col("timestamp") <= end_date)
-                
-                if len(df) > 0:
-                    data[symbol] = df
-                    logger.info(f"  Loaded {len(df)} bars for {symbol}")
-                    loaded = True
-                    break
+                # Load directly with polars
+                try:
+                    df = pl.read_csv(file_path)
+                    
+                    # Ensure timestamp column is datetime
+                    if "timestamp" in df.columns:
+                        df = df.with_columns([
+                            pl.col("timestamp").str.to_datetime().alias("timestamp")
+                        ])
+                    
+                    # Process data
+                    df = processor.process(df)
+                    
+                    # Filter by date range
+                    if start_date:
+                        df = df.filter(pl.col("timestamp") >= start_date)
+                    if end_date:
+                        df = df.filter(pl.col("timestamp") <= end_date)
+                    
+                    if len(df) > 0:
+                        data[symbol] = df
+                        logger.info(f"  Loaded {len(df)} bars for {symbol}")
+                        loaded = True
+                        break
+                except Exception as e:
+                    logger.error(f"Error loading {file_path}: {e}")
+                    continue
         
         if not loaded:
             logger.warning(f"Could not find data for {symbol}")

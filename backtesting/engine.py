@@ -560,6 +560,7 @@ class BacktestEngine:
         symbols = list(self._data.keys())
         for strategy in self._strategies:
             strategy.initialize(symbols, timestamps[0], timestamps[-1])
+            strategy.start()
         
         self._is_running = True
         n_bars = len(timestamps)
