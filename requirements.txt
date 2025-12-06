@@ -1,96 +1,80 @@
 # =============================================================================
-# ALGO TRADING PLATFORM - REQUIREMENTS
+# ALGO TRADING PLATFORM - DEVELOPMENT DEPENDENCIES
 # =============================================================================
-# Install: pip install -r requirements.txt
-# Python: 3.11+
+# Install with: pip install -r requirements-dev.txt
+# Note: Install main requirements first: pip install -r requirements.txt
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# Core Data Processing
-# -----------------------------------------------------------------------------
-polars>=0.20.0              # High-performance DataFrame library
-numpy>=1.24.0               # Numerical computing
-pandas>=2.0.0               # DataFrame compatibility (some libs need it)
-pyarrow>=14.0.0             # Parquet support for Polars
+# =============================================================================
+# Testing
+# =============================================================================
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.5.0           # Parallel test execution
+pytest-timeout>=2.2.0         # Test timeouts
+pytest-mock>=3.12.0           # Mocking utilities
+hypothesis>=6.92.0            # Property-based testing
+freezegun>=1.2.0              # Time mocking
+faker>=22.0.0                 # Fake data generation
 
-# -----------------------------------------------------------------------------
-# Configuration & Environment
-# -----------------------------------------------------------------------------
-pydantic>=2.5.0             # Data validation and settings
-pydantic-settings>=2.1.0    # Settings management
-python-dotenv>=1.0.0        # Environment variable loading
+# =============================================================================
+# Code Quality
+# =============================================================================
+ruff>=0.1.9                   # Fast Python linter
+black>=23.12.0                # Code formatter
+isort>=5.13.0                 # Import sorter
+mypy>=1.8.0                   # Static type checker
+pylint>=3.0.0                 # Additional linting
 
-# -----------------------------------------------------------------------------
-# Logging & Monitoring
-# -----------------------------------------------------------------------------
-structlog>=23.2.0           # Structured logging
-rich>=13.7.0                # Rich console output
+# Type stubs
+types-requests>=2.31.0
+types-python-dateutil>=2.8.0
+pandas-stubs>=2.1.0
 
-# -----------------------------------------------------------------------------
-# Technical Analysis
-# -----------------------------------------------------------------------------
-ta-lib>=0.4.28              # Technical analysis (optional, needs C lib)
-scipy>=1.11.0               # Scientific computing
-statsmodels>=0.14.0         # Statistical models
+# =============================================================================
+# Documentation
+# =============================================================================
+mkdocs>=1.5.0                 # Documentation generator
+mkdocs-material>=9.5.0        # Material theme
+mkdocstrings>=0.24.0          # Auto-generate docs from docstrings
+mkdocstrings-python>=1.7.0    # Python handler for mkdocstrings
 
-# -----------------------------------------------------------------------------
-# Machine Learning - Classical
-# -----------------------------------------------------------------------------
-scikit-learn>=1.3.0         # ML fundamentals
-lightgbm>=4.2.0             # Gradient boosting
-xgboost>=2.0.0              # Gradient boosting
-optuna>=3.5.0               # Hyperparameter optimization
-shap>=0.44.0                # Model interpretability
+# =============================================================================
+# Development Tools
+# =============================================================================
+pre-commit>=3.6.0             # Git hooks
+ipython>=8.19.0               # Enhanced Python shell
+ipdb>=0.13.13                 # IPython debugger
+rich>=13.7.0                  # Rich terminal output
 
-# -----------------------------------------------------------------------------
-# Machine Learning - Deep Learning
-# -----------------------------------------------------------------------------
-torch>=2.1.0                # PyTorch for deep learning
-# tensorflow>=2.15.0        # TensorFlow (optional, uncomment if needed)
+# =============================================================================
+# Profiling & Debugging
+# =============================================================================
+line-profiler>=4.1.0          # Line-by-line profiling
+memory-profiler>=0.61.0       # Memory profiling
+py-spy>=0.3.14                # Sampling profiler
+snakeviz>=2.2.0               # Profile visualization
 
-# -----------------------------------------------------------------------------
-# Broker & Trading APIs
-# -----------------------------------------------------------------------------
-alpaca-py>=0.13.0           # Alpaca trading API
-websockets>=12.0            # WebSocket connections
+# =============================================================================
+# Jupyter/Notebooks
+# =============================================================================
+jupyter>=1.0.0
+jupyterlab>=4.0.0
+ipywidgets>=8.1.0
+nbformat>=5.9.0
+nbconvert>=7.14.0
 
-# -----------------------------------------------------------------------------
-# API & Web
-# -----------------------------------------------------------------------------
-fastapi>=0.109.0            # REST API framework
-uvicorn>=0.27.0             # ASGI server
-httpx>=0.26.0               # Async HTTP client
+# =============================================================================
+# Security
+# =============================================================================
+bandit>=1.7.0                 # Security linter
+safety>=2.3.0                 # Dependency security check
 
-# -----------------------------------------------------------------------------
-# Data Visualization
-# -----------------------------------------------------------------------------
-plotly>=5.18.0              # Interactive charts
-matplotlib>=3.8.0           # Static charts
-seaborn>=0.13.0             # Statistical visualization
-
-# -----------------------------------------------------------------------------
-# Dashboard
-# -----------------------------------------------------------------------------
-streamlit>=1.30.0           # Dashboard framework
-
-# -----------------------------------------------------------------------------
-# Database
-# -----------------------------------------------------------------------------
-sqlalchemy>=2.0.0           # Database ORM
-aiosqlite>=0.19.0           # Async SQLite
-
-# -----------------------------------------------------------------------------
-# Utilities
-# -----------------------------------------------------------------------------
-tqdm>=4.66.0                # Progress bars
-joblib>=1.3.0               # Parallel processing
-cachetools>=5.3.0           # Caching utilities
-schedule>=1.2.0             # Job scheduling
-
-# -----------------------------------------------------------------------------
-# Testing & Development (move to requirements-dev.txt for production)
-# -----------------------------------------------------------------------------
-pytest>=7.4.0               # Testing framework
-pytest-asyncio>=0.23.0      # Async test support
-pytest-cov>=4.1.0           # Coverage reporting
-hypothesis>=6.92.0          # Property-based testing
+# =============================================================================
+# Build & Packaging
+# =============================================================================
+build>=1.0.0
+twine>=4.0.0
+wheel>=0.42.0
+setuptools>=69.0.0

@@ -21,7 +21,7 @@ License: MIT
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from core.enums import MarketRegime
 from typing import Any
 
 import numpy as np
@@ -59,13 +59,6 @@ class StatisticalConfig:
 DEFAULT_STAT_CONFIG = StatisticalConfig()
 
 
-class MarketRegime(str, Enum):
-    """Market regime classification."""
-    HIGH_VOL_UPTREND = "high_vol_uptrend"
-    HIGH_VOL_DOWNTREND = "high_vol_downtrend"
-    LOW_VOL_UPTREND = "low_vol_uptrend"
-    LOW_VOL_DOWNTREND = "low_vol_downtrend"
-    RANGING = "ranging"
 
 
 # =============================================================================

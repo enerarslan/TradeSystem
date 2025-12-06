@@ -25,6 +25,8 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from core.enums import MarketRegime 
+
 
 import structlog
 from pydantic import Field, field_validator, model_validator
@@ -111,14 +113,6 @@ class SignalType(str, Enum):
     EXIT_SHORT = "exit_short"
     HOLD = "hold"
 
-
-class MarketRegime(str, Enum):
-    """Market regime classification."""
-    TRENDING_UP = "trending_up"
-    TRENDING_DOWN = "trending_down"
-    RANGING = "ranging"
-    HIGH_VOLATILITY = "high_volatility"
-    LOW_VOLATILITY = "low_volatility"
 
 
 # =============================================================================

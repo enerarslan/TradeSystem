@@ -12,7 +12,7 @@ Exports:
 Author: Algo Trading Platform
 License: MIT
 """
-
+from core.enums import MarketRegime
 from config.settings import (
     # Enums
     LogLevel,
