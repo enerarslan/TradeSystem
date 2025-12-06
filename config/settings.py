@@ -471,25 +471,22 @@ def configure_logging(settings: Settings) -> None:
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.stdlib.add_logger_name,
+        # structlog.stdlib.add_logger_name,  # REMOVED - incompatible
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.UnicodeDecoder(),
     ]
     
     if settings.debug:
-        # Development: colored console output
         processors = shared_processors + [
             structlog.dev.ConsoleRenderer(colors=True)
         ]
     else:
-        # Production: JSON output
         processors = shared_processors + [
             structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer()
         ]
     
-    # Configure structlog
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(log_level),
@@ -498,14 +495,12 @@ def configure_logging(settings: Settings) -> None:
         cache_logger_on_first_use=True,
     )
     
-    # Configure stdlib logging
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
         level=log_level,
     )
     
-    # Suppress noisy loggers
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("asyncio").setLevel(logging.WARNING)
 
