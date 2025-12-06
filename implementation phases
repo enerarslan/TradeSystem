@@ -1,0 +1,39 @@
+Project structure creation
+Configuration system (settings.py)
+Core types & events
+Data loader + processor
+Technical indicators (50+ indicators)
+Base strategy interface
+requirements.txt with all dependencies
+
+PHASE 2: Backtesting Engine
+□ Event-driven backtester
+□ Execution model (slippage, commission)
+□ Performance metrics
+□ 3 baseline strategies
+□ Walk-forward validation
+
+PHASE 3: ML Pipeline
+□ Feature pipeline
+□ Training infrastructure
+□ LightGBM + XGBoost models
+□ LSTM + Transformer models
+□ Hyperparameter optimization (Optuna)
+
+PHASE 4: Risk & Portfolio
+□ Position sizing
+□ VaR calculations
+□ Portfolio optimization
+□ Risk limits & circuit breakers
+
+PHASE 5: Live Trading
+□ Alpaca integration
+□ Paper trading mode
+□ Order execution algorithms
+□ Real-time monitoring
+
+PHASE 6: Production
+□ FastAPI endpoints
+□ Docker deployment
+□ Cloud setup (AWS/GCP)
+□ Dashboard (Streamlit)
