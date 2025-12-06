@@ -1,0 +1,52 @@
+# requirements.txt (Consolidated)
+
+# Core
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Data Processing
+polars==0.20.0
+pandas==2.1.0
+numpy==1.26.0
+pyarrow==14.0.0
+
+# Technical Analysis
+ta-lib==0.4.28
+pandas-ta==0.3.14b
+
+# Machine Learning
+scikit-learn==1.3.0
+lightgbm==4.1.0
+xgboost==2.0.0
+catboost==1.2.2
+optuna==3.4.0
+
+# Deep Learning
+torch==2.1.0
+pytorch-lightning==2.1.0
+
+# Statistics
+scipy==1.11.0
+statsmodels==0.14.0
+arch==6.2.0
+
+# Broker
+alpaca-py==0.13.0
+
+# API
+fastapi==0.104.0
+uvicorn==0.24.0
+
+# Visualization
+plotly==5.18.0
+matplotlib==3.8.0
+
+# Utilities
+structlog==23.2.0
+httpx==0.25.0
+aiohttp==3.9.0
+
+# Database
+sqlalchemy==2.0.23
+alembic==1.12.0
