@@ -76,6 +76,23 @@ class EnterpriseRiskManager:
     Risk limitlerini aşan işlemler otomatik reddedilir veya ayarlanır.
     """
     
+
+    def reset_daily_stats(self):
+
+    
+       self.daily_stats = {
+        'trades_count': 0,
+        'rejected_trades': 0,
+        'start_balance': 0.0,
+        'peak_balance': 0.0,
+        'current_drawdown': 0.0,
+        'max_drawdown_today': 0.0
+
+
+
+
+         }
+    
     def __init__(self, config: Optional[RiskLimitConfig] = None):
         """
         Args:
