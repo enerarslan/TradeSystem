@@ -2,30 +2,22 @@
 Models Module
 =============
 
-Production-grade machine learning models for algorithmic trading.
-Implements JPMorgan-level ML standards with proper validation.
+Machine learning models for the algorithmic trading platform.
 
-Components:
-- base: Model base classes and registry
-- classifiers: Gradient boosting, ensemble classifiers
-- deep: LSTM, Transformer, TCN neural networks
-- reinforcement: DQN, PPO reinforcement learning
+Modules:
+- base: Base model class and utilities
+- classifiers: Gradient boosting and ensemble classifiers
+- deep: Deep learning models (LSTM, Transformer, TCN)
+- reinforcement: Reinforcement learning agents
 - training: Training pipeline with Optuna optimization
-
-Model Categories:
-- Classifiers: LightGBM, XGBoost, CatBoost, RandomForest
-- Ensembles: Stacking, Voting
-- Deep Learning: LSTM, Transformer, TCN
-- Reinforcement Learning: DQN, PPO
+- model_manager: Centralized model registry for all 46 symbols
 
 Author: Algo Trading Platform
 License: MIT
 """
 
-from __future__ import annotations
-
 # =============================================================================
-# BASE MODULE
+# BASE MODEL COMPONENTS
 # =============================================================================
 
 from models.base import (
@@ -46,30 +38,25 @@ from models.base import (
 )
 
 # =============================================================================
-# CLASSIFIER MODELS
+# CLASSIFIERS
 # =============================================================================
 
 from models.classifiers import (
-    # LightGBM
+    # Configs
     LightGBMClassifierConfig,
-    LightGBMClassifier,
-    # XGBoost
     XGBoostClassifierConfig,
-    XGBoostClassifier,
-    # CatBoost
     CatBoostClassifierConfig,
-    CatBoostClassifier,
-    # Random Forest
     RandomForestClassifierConfig,
-    RandomForestClassifier,
-    # Extra Trees
     ExtraTreesClassifierConfig,
-    ExtraTreesClassifier,
-    # Stacking
     StackingClassifierConfig,
-    StackingClassifier,
-    # Voting
     VotingClassifierConfig,
+    # Models
+    LightGBMClassifier,
+    XGBoostClassifier,
+    CatBoostClassifier,
+    RandomForestClassifier,
+    ExtraTreesClassifier,
+    StackingClassifier,
     VotingClassifier,
     # Factory
     create_classifier,
@@ -138,6 +125,26 @@ from models.training import (
     # Param spaces
     PARAM_SPACES,
 )
+
+# =============================================================================
+# MODEL MANAGER (NEW - for 46 symbol support)
+# =============================================================================
+
+from models.model_manager import (
+    # Data classes
+    ModelMetadata,
+    SymbolModelRegistry,
+    
+    # Main manager
+    ModelManager,
+    
+    # Convenience functions
+    get_model_manager,
+    save_model,
+    load_model,
+    list_models,
+)
+
 
 # =============================================================================
 # EXPORTS
@@ -222,4 +229,15 @@ __all__ = [
     "auto_ml",
     # === Training - Param Spaces ===
     "PARAM_SPACES",
+    
+    # === Model Manager - Data Classes ===
+    "ModelMetadata",
+    "SymbolModelRegistry",
+    # === Model Manager - Main Class ===
+    "ModelManager",
+    # === Model Manager - Functions ===
+    "get_model_manager",
+    "save_model",
+    "load_model",
+    "list_models",
 ]

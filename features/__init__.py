@@ -3,12 +3,12 @@ Features Module
 ===============
 
 Feature engineering for the algorithmic trading platform.
-Includes technical indicators, statistical features, and ML features.
 
-Components:
+Modules:
 - technical: 50+ technical indicators (momentum, trend, volatility, volume)
-- statistical: Statistical and derived features
+- statistical: Statistical features (returns, correlations, regime)
 - pipeline: Feature orchestration and management
+- advanced: JPMorgan-level features (Triple Barrier, Meta-labeling, etc.)
 
 Author: Algo Trading Platform
 License: MIT
@@ -22,48 +22,16 @@ from features.technical import (
     # Configuration
     IndicatorConfig,
     DEFAULT_CONFIG,
-    # Class
+    
+    # Generator class
     TechnicalIndicators,
+    
+    # Convenience functions
     add_all_indicators,
-    # Momentum indicators
-    rsi,
-    macd,
-    stochastic,
-    williams_r,
-    roc,
-    momentum,
-    cci,
-    cmo,
-    ultimate_oscillator,
-    tsi,
-    # Trend indicators
-    sma,
-    ema,
-    wma,
-    dema,
-    tema,
-    adx,
-    supertrend,
-    aroon,
-    ichimoku,
-    parabolic_sar,
-    # Volatility indicators
-    bollinger_bands,
-    atr,
-    keltner_channels,
-    donchian_channels,
-    natr,
-    historical_volatility,
-    # Volume indicators
-    obv,
-    vwap,
-    mfi,
-    ad_line,
-    cmf,
-    force_index,
-    vwma,
-    eom,
-    volume_profile,
+    add_momentum_indicators,
+    add_trend_indicators,
+    add_volatility_indicators,
+    add_volume_indicators,
 )
 
 # =============================================================================
@@ -74,40 +42,14 @@ from features.statistical import (
     # Configuration
     StatisticalConfig,
     DEFAULT_STAT_CONFIG,
-    MarketRegime,
-    # Class
+    
+    # Generator class
     StatisticalFeatures,
+    
+    # Convenience functions
     add_statistical_features,
-    # Returns
-    log_returns,
-    simple_returns,
-    cumulative_returns,
-    excess_returns,
-    # Rolling statistics
-    rolling_stats,
-    rolling_higher_moments,
-    rolling_quantiles,
-    # Momentum features
-    price_momentum,
-    trend_strength,
-    price_acceleration,
-    # Volatility features
-    volatility_features,
-    volatility_regime,
-    intraday_volatility,
-    # Correlation
-    rolling_correlation,
-    rolling_beta,
-    # Regime detection
-    detect_market_regime,
-    trend_regime,
-    # Distribution
-    zscore,
-    percentile_rank,
-    distance_from_extremes,
-    # Mean reversion
-    mean_reversion_features,
-    half_life,
+    add_return_features,
+    add_rolling_features,
 )
 
 # =============================================================================
@@ -119,8 +61,10 @@ from features.pipeline import (
     FeatureCategory,
     FeatureConfig,
     create_default_config,
-    # Pipeline
+    
+    # Pipeline class
     FeaturePipeline,
+    
     # Convenience functions
     create_default_pipeline,
     generate_all_features,
@@ -128,99 +72,113 @@ from features.pipeline import (
 )
 
 # =============================================================================
+# ADVANCED FEATURES (JPMorgan-level)
+# =============================================================================
+
+from features.advanced import (
+    # Enums
+    BarrierType,
+    LabelType,
+    
+    # Configurations
+    TripleBarrierConfig,
+    MetaLabelConfig,
+    AdvancedFeatureConfig,
+    
+    # Triple Barrier Method
+    TripleBarrierLabeler,
+    
+    # Meta-Labeling
+    MetaLabeler,
+    
+    # Fractional Differentiation
+    FractionalDifferentiation,
+    
+    # Microstructure Features
+    MicrostructureFeatures,
+    
+    # Calendar Features
+    CalendarFeatures,
+    
+    # Feature Interactions
+    FeatureInteractions,
+    
+    # Advanced Pipeline
+    AdvancedFeaturePipeline,
+)
+
+
+# =============================================================================
 # EXPORTS
 # =============================================================================
 
 __all__ = [
-    # Technical Configuration
+    # === Technical - Config ===
     "IndicatorConfig",
     "DEFAULT_CONFIG",
-    # Technical Class
+    
+    # === Technical - Generator ===
     "TechnicalIndicators",
+    
+    # === Technical - Functions ===
     "add_all_indicators",
-    # Momentum Indicators
-    "rsi",
-    "macd",
-    "stochastic",
-    "williams_r",
-    "roc",
-    "momentum",
-    "cci",
-    "cmo",
-    "ultimate_oscillator",
-    "tsi",
-    # Trend Indicators
-    "sma",
-    "ema",
-    "wma",
-    "dema",
-    "tema",
-    "adx",
-    "supertrend",
-    "aroon",
-    "ichimoku",
-    "parabolic_sar",
-    # Volatility Indicators
-    "bollinger_bands",
-    "atr",
-    "keltner_channels",
-    "donchian_channels",
-    "natr",
-    "historical_volatility",
-    # Volume Indicators
-    "obv",
-    "vwap",
-    "mfi",
-    "ad_line",
-    "cmf",
-    "force_index",
-    "vwma",
-    "eom",
-    "volume_profile",
-    # Statistical Configuration
+    "add_momentum_indicators",
+    "add_trend_indicators",
+    "add_volatility_indicators",
+    "add_volume_indicators",
+    
+    # === Statistical - Config ===
     "StatisticalConfig",
     "DEFAULT_STAT_CONFIG",
-    "MarketRegime",
-    # Statistical Class
+    
+    # === Statistical - Generator ===
     "StatisticalFeatures",
+    
+    # === Statistical - Functions ===
     "add_statistical_features",
-    # Returns
-    "log_returns",
-    "simple_returns",
-    "cumulative_returns",
-    "excess_returns",
-    # Rolling Statistics
-    "rolling_stats",
-    "rolling_higher_moments",
-    "rolling_quantiles",
-    # Momentum Features
-    "price_momentum",
-    "trend_strength",
-    "price_acceleration",
-    # Volatility Features
-    "volatility_features",
-    "volatility_regime",
-    "intraday_volatility",
-    # Correlation
-    "rolling_correlation",
-    "rolling_beta",
-    # Regime Detection
-    "detect_market_regime",
-    "trend_regime",
-    # Distribution
-    "zscore",
-    "percentile_rank",
-    "distance_from_extremes",
-    # Mean Reversion
-    "mean_reversion_features",
-    "half_life",
-    # Pipeline Configuration
+    "add_return_features",
+    "add_rolling_features",
+    
+    # === Pipeline - Config ===
     "FeatureCategory",
     "FeatureConfig",
     "create_default_config",
-    # Pipeline
+    
+    # === Pipeline - Class ===
     "FeaturePipeline",
+    
+    # === Pipeline - Functions ===
     "create_default_pipeline",
     "generate_all_features",
     "create_ml_dataset",
+    
+    # === Advanced - Enums ===
+    "BarrierType",
+    "LabelType",
+    
+    # === Advanced - Configs ===
+    "TripleBarrierConfig",
+    "MetaLabelConfig",
+    "AdvancedFeatureConfig",
+    
+    # === Advanced - Triple Barrier ===
+    "TripleBarrierLabeler",
+    
+    # === Advanced - Meta-Labeling ===
+    "MetaLabeler",
+    
+    # === Advanced - Fractional Differentiation ===
+    "FractionalDifferentiation",
+    
+    # === Advanced - Microstructure ===
+    "MicrostructureFeatures",
+    
+    # === Advanced - Calendar ===
+    "CalendarFeatures",
+    
+    # === Advanced - Interactions ===
+    "FeatureInteractions",
+    
+    # === Advanced - Pipeline ===
+    "AdvancedFeaturePipeline",
 ]

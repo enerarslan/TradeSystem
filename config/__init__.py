@@ -2,75 +2,147 @@
 Configuration Module
 ====================
 
-Central configuration management for the algorithmic trading platform.
+Centralized configuration management for the algorithmic trading platform.
 
-Exports:
-- Settings and configuration classes
-- Constants and enums
-- Logging utilities
+Modules:
+- settings: Main settings and environment configuration
+- symbols: Symbol management for 46 supported stocks
 
 Author: Algo Trading Platform
 License: MIT
 """
-from core.enums import MarketRegime
+
+# =============================================================================
+# SETTINGS - Core Configuration
+# =============================================================================
+
 from config.settings import (
     # Enums
-    LogLevel,
+    Environment,
     TradingMode,
     TimeFrame,
     OrderSide,
     OrderType,
     PositionSide,
-    SignalType,
-    MarketRegime,
-    
-    # Constants (correct names from settings.py)
-    TradingConstants,
-    RiskConstants,
-    MLConstants,
     
     # Settings classes
-    DatabaseSettings,
-    AlpacaSettings,
     DataSettings,
-    BacktestSettings,
+    TradingSettings,
     RiskSettings,
     MLSettings,
+    LiveTradingSettings,
     Settings,
+    
+    # Constants
+    RiskConstants,
+    ModelConstants,
     
     # Functions
     get_settings,
-    get_logger,
     configure_logging,
+    get_logger,
 )
 
-__all__ = [
+# =============================================================================
+# SYMBOLS - Stock Symbol Management
+# =============================================================================
+
+from config.symbols import (
     # Enums
-    "LogLevel",
+    Sector,
+    MarketCapTier,
+    Index,
+    
+    # Data classes
+    SymbolInfo,
+    
+    # Symbol data
+    SYMBOL_INFO,
+    ALL_SYMBOLS,
+    DOW_JONES_SYMBOLS,
+    NASDAQ100_SYMBOLS,
+    TECH_SYMBOLS,
+    HEALTHCARE_SYMBOLS,
+    FINANCIAL_SYMBOLS,
+    MEGA_CAP_SYMBOLS,
+    CORE_SYMBOLS,
+    
+    # Functions
+    get_symbol_info,
+    get_symbols_by_sector,
+    get_symbols_by_index,
+    validate_symbol,
+    validate_symbols,
+    discover_symbols_from_data,
+    get_sector_allocation,
+    
+    # Model naming utilities
+    get_model_filename,
+    parse_model_filename,
+    get_model_directory,
+)
+
+
+# =============================================================================
+# EXPORTS
+# =============================================================================
+
+__all__ = [
+    # === Settings - Enums ===
+    "Environment",
     "TradingMode",
     "TimeFrame",
     "OrderSide",
     "OrderType",
     "PositionSide",
-    "SignalType",
-    "MarketRegime",
     
-    # Constants
-    "TradingConstants",
-    "RiskConstants",
-    "MLConstants",
-    
-    # Settings classes
-    "DatabaseSettings",
-    "AlpacaSettings",
+    # === Settings - Classes ===
     "DataSettings",
-    "BacktestSettings",
+    "TradingSettings",
     "RiskSettings",
     "MLSettings",
+    "LiveTradingSettings",
     "Settings",
     
-    # Functions
+    # === Settings - Constants ===
+    "RiskConstants",
+    "ModelConstants",
+    
+    # === Settings - Functions ===
     "get_settings",
-    "get_logger",
     "configure_logging",
+    "get_logger",
+    
+    # === Symbols - Enums ===
+    "Sector",
+    "MarketCapTier",
+    "Index",
+    
+    # === Symbols - Data Classes ===
+    "SymbolInfo",
+    
+    # === Symbols - Symbol Data ===
+    "SYMBOL_INFO",
+    "ALL_SYMBOLS",
+    "DOW_JONES_SYMBOLS",
+    "NASDAQ100_SYMBOLS",
+    "TECH_SYMBOLS",
+    "HEALTHCARE_SYMBOLS",
+    "FINANCIAL_SYMBOLS",
+    "MEGA_CAP_SYMBOLS",
+    "CORE_SYMBOLS",
+    
+    # === Symbols - Functions ===
+    "get_symbol_info",
+    "get_symbols_by_sector",
+    "get_symbols_by_index",
+    "validate_symbol",
+    "validate_symbols",
+    "discover_symbols_from_data",
+    "get_sector_allocation",
+    
+    # === Symbols - Model Naming ===
+    "get_model_filename",
+    "parse_model_filename",
+    "get_model_directory",
 ]
