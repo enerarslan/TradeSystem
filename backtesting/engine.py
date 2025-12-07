@@ -536,19 +536,13 @@ class BacktestEngine:
                 hist_to_now = hist_data.filter(pl.col("timestamp") <= timestamp)
                 
                 # Create MarketEvent for the strategy
+                # MarketEvent only takes: symbol, data, timeframe, is_realtime
                 market_event = MarketEvent(
                     timestamp=timestamp,
                     symbol=symbol,
                     data=hist_to_now,
-                    ohlcv=OHLCV(
-                        timestamp=timestamp,
-                        open=data.get("open", 0),
-                        high=data.get("high", 0),
-                        low=data.get("low", 0),
-                        close=data.get("close", 0),
-                        volume=data.get("volume", 0),
-                        symbol=symbol,
-                    ),
+                    timeframe=self.config.timeframe,
+                    is_realtime=False,
                 )
                 
                 # CRITICAL FIX: Call on_bar() with correct signature!
@@ -668,22 +662,19 @@ class BacktestEngine:
             
             bar = bar_data[order.symbol]
             
-            # Determine fill price
-            if self.config.fill_mode == OrderFillMode.CURRENT_BAR:
-                fill_price = bar.get("close", 0)
-            elif self.config.fill_mode == OrderFillMode.NEXT_BAR_OPEN:
-                fill_price = bar.get("open", 0)
-            else:
-                fill_price = bar.get("close", 0)
-            
-            # Execute order
-            fill = self.execution.execute(
-                order=order,
-                price=fill_price,
-                volume=bar.get("volume", 1000000),
-                high=bar.get("high", fill_price),
-                low=bar.get("low", fill_price),
+            # Create OHLCV object for the execution simulator
+            ohlcv = OHLCV(
+                timestamp=timestamp,
+                open=bar.get("open", 0),
+                high=bar.get("high", 0),
+                low=bar.get("low", 0),
+                close=bar.get("close", 0),
+                volume=bar.get("volume", 0),
+                symbol=order.symbol,
             )
+            
+            # Execute order using simulate_fill (correct method name!)
+            fill = self.execution.simulate_fill(order=order, bar=ohlcv)
             
             fill.metadata["symbol"] = order.symbol
             fill.metadata["side"] = order.side
