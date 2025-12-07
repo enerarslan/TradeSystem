@@ -230,7 +230,7 @@ class PortfolioTracker:
                     pos, fill.fill_quantity, fill.fill_price,
                     fill.commission, timestamp
                 )
-                self.cash += fill.fill_quantity * fill.fill_price - fill.commission
+                self.cash -= fill.fill_quantity * fill.fill_price - fill.commission
                 return trade
             else:
                 # Opening or adding to long
