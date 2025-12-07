@@ -15,6 +15,9 @@ venv/
 # Veri Deposu (Büyük CSV dosyaları yüklenmesin)
 data/storage/*.csv
 data/storage/*.xlsx
+*.pkl
+*.json
+
 
 # Veritabanı dosyaları (Geçmiş işlemleri yükleme)
 *.db

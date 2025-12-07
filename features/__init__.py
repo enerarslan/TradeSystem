@@ -26,12 +26,8 @@ from features.technical import (
     # Generator class
     TechnicalIndicators,
     
-    # Convenience functions
+    # Convenience function
     add_all_indicators,
-    add_momentum_indicators,
-    add_trend_indicators,
-    add_volatility_indicators,
-    add_volume_indicators,
 )
 
 # =============================================================================
@@ -48,8 +44,6 @@ from features.statistical import (
     
     # Convenience functions
     add_statistical_features,
-    add_return_features,
-    add_rolling_features,
 )
 
 # =============================================================================
@@ -122,10 +116,6 @@ __all__ = [
     
     # === Technical - Functions ===
     "add_all_indicators",
-    "add_momentum_indicators",
-    "add_trend_indicators",
-    "add_volatility_indicators",
-    "add_volume_indicators",
     
     # === Statistical - Config ===
     "StatisticalConfig",
@@ -136,8 +126,6 @@ __all__ = [
     
     # === Statistical - Functions ===
     "add_statistical_features",
-    "add_return_features",
-    "add_rolling_features",
     
     # === Pipeline - Config ===
     "FeatureCategory",
