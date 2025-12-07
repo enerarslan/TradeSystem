@@ -921,10 +921,16 @@ class ModelLoader:
         return loaded
     
     def _load_pickle(self, path: Path) -> Any:
-        """Safely load a pickle file."""
+        """Safely load a pickle file. FIXED: extracts model from wrapper."""
         try:
             with open(path, "rb") as f:
-                return pickle.load(f)
+                data = pickle.load(f)
+            
+            # FIX: Extract actual model from wrapper dict
+            if isinstance(data, dict) and "model" in data:
+                return data["model"]
+            return data
+            
         except Exception as e:
             warnings.warn(f"Failed to load {path}: {e}")
             return None

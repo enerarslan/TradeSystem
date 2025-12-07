@@ -225,7 +225,13 @@ class SimpleModelLoader:
             try:
                 import pickle
                 with open(model_file, "rb") as f:
-                    model = pickle.load(f)
+                    data = pickle.load(f)
+                
+                # FIX: Extract actual model from wrapper dict
+                if isinstance(data, dict) and "model" in data:
+                    model = data["model"]
+                else:
+                    model = data
                 
                 # Extract model type from filename
                 parts = model_file.stem.split("_")
