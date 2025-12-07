@@ -9,12 +9,14 @@ Components:
 - base: Model base classes and registry
 - classifiers: Gradient boosting, ensemble classifiers
 - deep: LSTM, Transformer, TCN neural networks
+- reinforcement: DQN, PPO reinforcement learning
 - training: Training pipeline with Optuna optimization
 
 Model Categories:
 - Classifiers: LightGBM, XGBoost, CatBoost, RandomForest
 - Ensembles: Stacking, Voting
 - Deep Learning: LSTM, Transformer, TCN
+- Reinforcement Learning: DQN, PPO
 
 Author: Algo Trading Platform
 License: MIT
@@ -93,6 +95,25 @@ from models.deep import (
 )
 
 # =============================================================================
+# REINFORCEMENT LEARNING MODELS
+# =============================================================================
+
+from models.reinforcement import (
+    # Configs
+    RLConfig,
+    DQNConfig,
+    PPOConfig,
+    # Agents
+    DQNAgent,
+    PPOAgent,
+    # Factory
+    create_rl_agent,
+    # Utilities
+    ReplayBuffer,
+    TradingEnvironment,
+)
+
+# =============================================================================
 # TRAINING PIPELINE
 # =============================================================================
 
@@ -145,7 +166,6 @@ __all__ = [
     "ExtraTreesClassifierConfig",
     "StackingClassifierConfig",
     "VotingClassifierConfig",
-    
     # === Classifiers - Models ===
     "LightGBMClassifier",
     "XGBoostClassifier",
@@ -154,7 +174,6 @@ __all__ = [
     "ExtraTreesClassifier",
     "StackingClassifier",
     "VotingClassifier",
-    
     # === Classifiers - Factory ===
     "create_classifier",
     
@@ -163,43 +182,44 @@ __all__ = [
     "LSTMConfig",
     "TransformerConfig",
     "TCNConfig",
-    
     # === Deep Learning - Models ===
     "DeepLearningModel",
     "LSTMModel",
     "TransformerModel",
     "TCNModel",
-    
     # === Deep Learning - Factory ===
     "create_deep_model",
+    
+    # === Reinforcement Learning - Configs ===
+    "RLConfig",
+    "DQNConfig",
+    "PPOConfig",
+    # === Reinforcement Learning - Agents ===
+    "DQNAgent",
+    "PPOAgent",
+    # === Reinforcement Learning - Factory ===
+    "create_rl_agent",
+    # === Reinforcement Learning - Utilities ===
+    "ReplayBuffer",
+    "TradingEnvironment",
     
     # === Training - Enums ===
     "OptimizationDirection",
     "SamplerType",
     "PrunerType",
-    
     # === Training - Config ===
     "OptimizationConfig",
     "TrainingConfig",
-    
     # === Training - Cross-validation ===
     "PurgedKFold",
     "CombinatorialPurgedKFold",
-    
-    # === Training - Classes ===
+    # === Training - Optimizer ===
     "HyperparameterOptimizer",
+    # === Training - Pipeline ===
     "TrainingPipeline",
-    
     # === Training - Functions ===
     "quick_train",
     "auto_ml",
+    # === Training - Param Spaces ===
     "PARAM_SPACES",
 ]
-
-
-# =============================================================================
-# VERSION INFO
-# =============================================================================
-
-__version__ = "1.0.0"
-__author__ = "Algo Trading Platform"

@@ -1,8 +1,8 @@
 """
-Test Fixtures
-=============
+Pytest Configuration and Fixtures
+==================================
 
-Shared pytest fixtures for the algo trading platform tests.
+Shared fixtures for all tests in the algo trading platform.
 
 Author: Algo Trading Platform
 License: MIT
@@ -13,8 +13,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Generator
-from uuid import uuid4
+from typing import Any, Generator
 
 import numpy as np
 import polars as pl
@@ -26,61 +25,85 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 
 # =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+@pytest.fixture(scope="session")
+def project_root() -> Path:
+    """Get project root path."""
+    return PROJECT_ROOT
+
+
+@pytest.fixture(scope="session")
+def data_path(project_root: Path) -> Path:
+    """Get data directory path."""
+    return project_root / "data" / "storage"
+
+
+@pytest.fixture(scope="session")
+def test_data_path(project_root: Path) -> Path:
+    """Get test data directory path."""
+    path = project_root / "tests" / "test_data"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+# =============================================================================
 # DATA FIXTURES
 # =============================================================================
 
 @pytest.fixture
 def sample_ohlcv_data() -> pl.DataFrame:
     """Generate sample OHLCV data for testing."""
-    np.random.seed(42)
-    
     n_bars = 1000
     base_price = 100.0
+    timestamps = [datetime(2023, 1, 1) + timedelta(minutes=15 * i) for i in range(n_bars)]
     
-    # Generate random returns
+    np.random.seed(42)
     returns = np.random.normal(0.0001, 0.02, n_bars)
+    prices = base_price * np.cumprod(1 + returns)
     
-    # Generate prices
-    close = base_price * np.cumprod(1 + returns)
-    
-    # Generate OHLCV
-    high = close * (1 + np.abs(np.random.normal(0, 0.01, n_bars)))
-    low = close * (1 - np.abs(np.random.normal(0, 0.01, n_bars)))
-    open_price = low + (high - low) * np.random.random(n_bars)
-    volume = np.random.uniform(100000, 1000000, n_bars)
-    
-    # Generate timestamps (15-min bars)
-    start_time = datetime(2023, 1, 1, 9, 30)
-    timestamps = [start_time + timedelta(minutes=15 * i) for i in range(n_bars)]
-    
-    return pl.DataFrame({
+    df = pl.DataFrame({
         "timestamp": timestamps,
-        "open": open_price,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
+        "open": prices * (1 + np.random.uniform(-0.005, 0.005, n_bars)),
+        "high": prices * (1 + np.random.uniform(0.001, 0.015, n_bars)),
+        "low": prices * (1 - np.random.uniform(0.001, 0.015, n_bars)),
+        "close": prices,
+        "volume": np.random.uniform(1e6, 1e7, n_bars),
     })
+    
+    # Ensure high >= close >= low
+    df = df.with_columns([
+        pl.when(pl.col("high") < pl.col("close"))
+        .then(pl.col("close"))
+        .otherwise(pl.col("high"))
+        .alias("high"),
+        pl.when(pl.col("low") > pl.col("close"))
+        .then(pl.col("close"))
+        .otherwise(pl.col("low"))
+        .alias("low"),
+    ])
+    
+    return df
 
 
 @pytest.fixture
 def sample_multi_symbol_data(sample_ohlcv_data: pl.DataFrame) -> dict[str, pl.DataFrame]:
     """Generate sample data for multiple symbols."""
-    np.random.seed(42)
-    
     symbols = ["AAPL", "GOOGL", "MSFT"]
     data = {}
     
-    for symbol in symbols:
-        # Add some random variation to each symbol
-        df = sample_ohlcv_data.clone()
-        multiplier = np.random.uniform(0.8, 1.2)
+    for i, symbol in enumerate(symbols):
+        # Add some variation to each symbol
+        np.random.seed(42 + i)
+        multiplier = 1 + np.random.uniform(-0.1, 0.1)
         
-        df = df.with_columns([
+        df = sample_ohlcv_data.with_columns([
             (pl.col("open") * multiplier).alias("open"),
             (pl.col("high") * multiplier).alias("high"),
             (pl.col("low") * multiplier).alias("low"),
             (pl.col("close") * multiplier).alias("close"),
+            pl.lit(symbol).alias("symbol"),
         ])
         
         data[symbol] = df
@@ -89,89 +112,44 @@ def sample_multi_symbol_data(sample_ohlcv_data: pl.DataFrame) -> dict[str, pl.Da
 
 
 @pytest.fixture
-def trending_data() -> pl.DataFrame:
-    """Generate data with a clear uptrend."""
-    np.random.seed(42)
+def sample_features_data(sample_ohlcv_data: pl.DataFrame) -> pl.DataFrame:
+    """Generate sample data with features."""
+    from features.pipeline import FeaturePipeline, create_default_config
     
-    n_bars = 500
-    base_price = 100.0
-    
-    # Generate uptrending prices
-    trend = np.linspace(0, 0.5, n_bars)  # 50% gain over period
-    noise = np.random.normal(0, 0.01, n_bars)
-    close = base_price * (1 + trend + noise)
-    
-    high = close * (1 + np.abs(np.random.normal(0, 0.005, n_bars)))
-    low = close * (1 - np.abs(np.random.normal(0, 0.005, n_bars)))
-    open_price = low + (high - low) * np.random.random(n_bars)
-    volume = np.random.uniform(100000, 1000000, n_bars)
-    
-    start_time = datetime(2023, 1, 1, 9, 30)
-    timestamps = [start_time + timedelta(minutes=15 * i) for i in range(n_bars)]
-    
-    return pl.DataFrame({
-        "timestamp": timestamps,
-        "open": open_price,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    })
+    pipeline = FeaturePipeline(create_default_config())
+    return pipeline.generate(sample_ohlcv_data)
 
 
 @pytest.fixture
-def mean_reverting_data() -> pl.DataFrame:
-    """Generate mean-reverting data."""
+def sample_ml_data() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Generate sample ML training data."""
     np.random.seed(42)
     
-    n_bars = 500
-    base_price = 100.0
+    n_samples = 1000
+    n_features = 50
     
-    # Generate mean-reverting process (Ornstein-Uhlenbeck)
-    theta = 0.1  # Mean reversion speed
-    mu = 0.0  # Long-term mean
-    sigma = 0.02  # Volatility
+    X = np.random.randn(n_samples, n_features)
+    y = (np.random.rand(n_samples) > 0.5).astype(int)  # Binary classification
     
-    x = np.zeros(n_bars)
-    for i in range(1, n_bars):
-        x[i] = x[i-1] + theta * (mu - x[i-1]) + sigma * np.random.normal()
+    feature_names = [f"feature_{i}" for i in range(n_features)]
     
-    close = base_price * np.exp(x)
-    
-    high = close * (1 + np.abs(np.random.normal(0, 0.005, n_bars)))
-    low = close * (1 - np.abs(np.random.normal(0, 0.005, n_bars)))
-    open_price = low + (high - low) * np.random.random(n_bars)
-    volume = np.random.uniform(100000, 1000000, n_bars)
-    
-    start_time = datetime(2023, 1, 1, 9, 30)
-    timestamps = [start_time + timedelta(minutes=15 * i) for i in range(n_bars)]
-    
-    return pl.DataFrame({
-        "timestamp": timestamps,
-        "open": open_price,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    })
+    return X, y, feature_names
 
-
-# =============================================================================
-# CONFIGURATION FIXTURES
-# =============================================================================
 
 @pytest.fixture
-def backtest_config():
-    """Create default backtest configuration."""
-    from backtesting.engine import BacktestConfig
+def sample_multiclass_data() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Generate sample multi-class ML data."""
+    np.random.seed(42)
     
-    return BacktestConfig(
-        initial_capital=100_000,
-        commission_pct=0.001,
-        slippage_pct=0.0005,
-        allow_shorting=True,
-        margin_requirement=0.25,
-    )
+    n_samples = 1000
+    n_features = 50
+    
+    X = np.random.randn(n_samples, n_features)
+    y = np.random.randint(0, 3, n_samples)  # 3 classes: -1, 0, 1 (sell, hold, buy)
+    
+    feature_names = [f"feature_{i}" for i in range(n_features)]
+    
+    return X, y, feature_names
 
 
 # =============================================================================
@@ -180,52 +158,86 @@ def backtest_config():
 
 @pytest.fixture
 def trend_following_strategy():
-    """Create trend following strategy."""
-    from strategies.momentum import TrendFollowingStrategy, TrendFollowingConfig
+    """Create a trend following strategy for testing."""
+    from strategies import TrendFollowingStrategy, TrendFollowingConfig
     
     config = TrendFollowingConfig(
-        symbols=["TEST"],
-        fast_ma_period=10,
-        slow_ma_period=20,
-        adx_period=14,
-        adx_threshold=20,
+        fast_period=10,
+        slow_period=30,
     )
     return TrendFollowingStrategy(config)
 
 
 @pytest.fixture
 def mean_reversion_strategy():
-    """Create mean reversion strategy."""
-    from strategies.momentum import MeanReversionStrategy, MeanReversionConfig
+    """Create a mean reversion strategy for testing."""
+    from strategies import MeanReversionStrategy, MeanReversionConfig
     
     config = MeanReversionConfig(
-        symbols=["TEST"],
-        bb_period=20,
-        bb_std=2.0,
-        rsi_period=14,
-        rsi_oversold=30,
-        rsi_overbought=70,
+        period=20,
+        std_multiplier=2.0,
     )
     return MeanReversionStrategy(config)
 
 
+# =============================================================================
+# MODEL FIXTURES
+# =============================================================================
+
 @pytest.fixture
-def breakout_strategy():
-    """Create breakout strategy."""
-    from strategies.momentum import BreakoutStrategy, BreakoutConfig
+def lightgbm_model():
+    """Create a LightGBM model for testing."""
+    from models.classifiers import LightGBMClassifier, LightGBMClassifierConfig
     
-    config = BreakoutConfig(
-        symbols=["TEST"],
-        lookback_period=20,
-        volume_factor=1.5,
-        atr_multiplier=2.0,
+    config = LightGBMClassifierConfig(
+        n_estimators=100,
+        max_depth=5,
     )
-    return BreakoutStrategy(config)
+    return LightGBMClassifier(config)
+
+
+@pytest.fixture
+def xgboost_model():
+    """Create an XGBoost model for testing."""
+    from models.classifiers import XGBoostClassifier, XGBoostClassifierConfig
+    
+    config = XGBoostClassifierConfig(
+        n_estimators=100,
+        max_depth=5,
+    )
+    return XGBoostClassifier(config)
+
+
+@pytest.fixture
+def trained_lightgbm_model(sample_multiclass_data, lightgbm_model):
+    """Create a trained LightGBM model."""
+    X, y, feature_names = sample_multiclass_data
+    
+    # Split data
+    split_idx = int(len(X) * 0.8)
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
+    
+    lightgbm_model.fit(X_train, y_train, feature_names=feature_names)
+    
+    return lightgbm_model
 
 
 # =============================================================================
-# ENGINE FIXTURES
+# BACKTESTING FIXTURES
 # =============================================================================
+
+@pytest.fixture
+def backtest_config():
+    """Create backtest configuration."""
+    from backtesting.engine import BacktestConfig
+    
+    return BacktestConfig(
+        initial_capital=100_000.0,
+        commission_pct=0.001,
+        slippage_pct=0.0005,
+    )
+
 
 @pytest.fixture
 def backtest_engine(backtest_config):
@@ -240,49 +252,52 @@ def backtest_engine(backtest_config):
 # =============================================================================
 
 @pytest.fixture
-def temp_data_dir(tmp_path: Path) -> Path:
-    """Create temporary data directory."""
-    data_dir = tmp_path / "data" / "storage"
-    data_dir.mkdir(parents=True)
-    return data_dir
+def temp_model_dir(tmp_path: Path) -> Path:
+    """Create temporary directory for model artifacts."""
+    model_dir = tmp_path / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    return model_dir
 
 
 @pytest.fixture
-def sample_csv_file(temp_data_dir: Path, sample_ohlcv_data: pl.DataFrame) -> Path:
-    """Create sample CSV file."""
-    file_path = temp_data_dir / "TEST_15min.csv"
-    sample_ohlcv_data.write_csv(file_path)
-    return file_path
+def temp_report_dir(tmp_path: Path) -> Path:
+    """Create temporary directory for reports."""
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    return report_dir
 
 
 # =============================================================================
-# MOCK FIXTURES
+# ASYNC FIXTURES
 # =============================================================================
 
 @pytest.fixture
-def mock_broker():
-    """Create mock broker for testing."""
-    from unittest.mock import MagicMock
-    
-    broker = MagicMock()
-    broker.is_market_open.return_value = True
-    broker.get_account_info.return_value = {
-        "cash": 100000,
-        "equity": 100000,
-        "buying_power": 200000,
-    }
-    broker.get_positions.return_value = []
-    broker.submit_order.return_value = str(uuid4())
-    
-    return broker
+def event_loop():
+    """Create event loop for async tests."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
 
 # =============================================================================
-# MARKERS
+# CLEANUP FIXTURES
+# =============================================================================
+
+@pytest.fixture(autouse=True)
+def cleanup_after_test():
+    """Cleanup after each test."""
+    yield
+    # Any cleanup code here
+
+
+# =============================================================================
+# MARKS
 # =============================================================================
 
 def pytest_configure(config):
     """Configure pytest markers."""
     config.addinivalue_line("markers", "slow: marks tests as slow")
     config.addinivalue_line("markers", "integration: marks tests as integration tests")
-    config.addinivalue_line("markers", "requires_data: marks tests that require real data")
+    config.addinivalue_line("markers", "gpu: marks tests requiring GPU")
+    config.addinivalue_line("markers", "live: marks tests requiring live data")

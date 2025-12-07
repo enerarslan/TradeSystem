@@ -114,6 +114,13 @@ from strategies.ml_strategy import (
     create_ml_strategy,
 )
 
+from strategies.alpha_ml import (
+    MarketRegime,
+    AlphaMLConfig,
+    AlphaMLStrategy,
+    create_alpha_ml_strategy,
+)
+
 
 logger = get_logger(__name__)
 
@@ -356,6 +363,15 @@ class StrategyRegistry:
             category=StrategyCategory.ML_NEURAL,
             config_class=NeuralNetConfig,
             strategy_class=NeuralNetStrategy,
+            min_history=200,
+        )
+        cls._register_builtin(
+            key="alpha_ml",
+            name="Alpha ML",
+            description="Advanced ML ensemble with LightGBM + XGBoost",
+            category=StrategyCategory.ML_ENSEMBLE,
+            config_class=AlphaMLConfig,
+            strategy_class=AlphaMLStrategy,
             min_history=200,
         )
         
