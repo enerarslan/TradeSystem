@@ -17,6 +17,8 @@ pytest-mock>=3.12.0           # Mocking utilities
 hypothesis>=6.92.0            # Property-based testing
 freezegun>=1.2.0              # Time mocking
 faker>=22.0.0                 # Fake data generation
+xgboost>=2.0.0
+lightgbm>=4.0.0
 
 # =============================================================================
 # Code Quality
