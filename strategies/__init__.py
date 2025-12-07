@@ -41,17 +41,26 @@ from strategies.base import (
 # =============================================================================
 
 from strategies.momentum import (
-    # Configs
-    MACDStrategyConfig,
-    RSIMomentumConfig,
-    BreakoutStrategyConfig,
+    # Configs - FIXED: Use actual names from momentum.py
+    TrendFollowingConfig,
+    BreakoutConfig,            # Was: BreakoutStrategyConfig
+    MeanReversionConfig,
     DualMomentumConfig,
-    # Strategies
-    MACDStrategy,
-    RSIMomentumStrategy,
+    RSIDivergenceConfig,       # Was: RSIMomentumConfig
+    MACDStrategyConfig,
+    # Strategies - FIXED: Use actual names from momentum.py
+    TrendFollowingStrategy,
     BreakoutStrategy,
+    MeanReversionStrategy,
     DualMomentumStrategy,
+    RSIDivergenceStrategy,     # Was: RSIMomentumStrategy
+    MACDStrategy,
 )
+
+# Backward compatibility aliases
+RSIMomentumConfig = RSIDivergenceConfig
+RSIMomentumStrategy = RSIDivergenceStrategy
+BreakoutStrategyConfig = BreakoutConfig
 
 # =============================================================================
 # STATISTICAL STRATEGIES
@@ -185,6 +194,7 @@ class StrategyRegistry:
             return
         
         cls._register_builtin_strategies()
+        cls._initialized = True
     
     @classmethod
     def _register_builtin_strategies(cls) -> None:
@@ -204,8 +214,8 @@ class StrategyRegistry:
             name="RSI Momentum",
             description="RSI overbought/oversold strategy",
             category=StrategyCategory.MOMENTUM,
-            config_class=RSIMomentumConfig,
-            strategy_class=RSIMomentumStrategy,
+            config_class=RSIDivergenceConfig,
+            strategy_class=RSIDivergenceStrategy,
         )
         
         cls._register_builtin(
@@ -213,8 +223,35 @@ class StrategyRegistry:
             name="Breakout",
             description="Price breakout with volume confirmation",
             category=StrategyCategory.BREAKOUT,
-            config_class=BreakoutStrategyConfig,
+            config_class=BreakoutConfig,
             strategy_class=BreakoutStrategy,
+        )
+        
+        cls._register_builtin(
+            key="trend_following",
+            name="Trend Following",
+            description="Trend following with moving averages",
+            category=StrategyCategory.TREND,
+            config_class=TrendFollowingConfig,
+            strategy_class=TrendFollowingStrategy,
+        )
+        
+        cls._register_builtin(
+            key="mean_reversion",
+            name="Mean Reversion",
+            description="Mean reversion with Bollinger Bands",
+            category=StrategyCategory.MEAN_REVERSION,
+            config_class=MeanReversionConfig,
+            strategy_class=MeanReversionStrategy,
+        )
+        
+        cls._register_builtin(
+            key="dual_momentum",
+            name="Dual Momentum",
+            description="Absolute and relative momentum",
+            category=StrategyCategory.MOMENTUM,
+            config_class=DualMomentumConfig,
+            strategy_class=DualMomentumStrategy,
         )
         
         # Statistical strategies
@@ -301,7 +338,6 @@ class StrategyRegistry:
             min_history=200,
         )
         
-        cls._initialized = True
         logger.info(f"StrategyRegistry initialized with {len(cls._strategies)} strategies")
     
     @classmethod
@@ -323,33 +359,20 @@ class StrategyRegistry:
             category=category,
             config_class=config_class,
             strategy_class=strategy_class,
-            requires_multiple_symbols=requires_multiple,
             min_history_bars=min_history,
+            requires_multiple_symbols=requires_multiple,
         )
     
     @classmethod
     def register(
         cls,
         key: str,
-        strategy_class: Type[BaseStrategy],
-        config_class: Type[StrategyConfig],
-        category: StrategyCategory = StrategyCategory.CUSTOM,
-        name: str | None = None,
-        description: str = "",
-        **kwargs: Any,
+        metadata: StrategyMetadata,
     ) -> None:
         """Register a custom strategy."""
         cls._ensure_initialized()
-        
-        cls._strategies[key] = StrategyMetadata(
-            name=name or key.replace("_", " ").title(),
-            description=description,
-            category=category,
-            config_class=config_class,
-            strategy_class=strategy_class,
-            **kwargs,
-        )
-        logger.info(f"Registered custom strategy: {key}")
+        cls._strategies[key] = metadata
+        logger.info(f"Registered strategy: {key}")
     
     @classmethod
     def get(cls, key: str) -> StrategyMetadata | None:
@@ -358,53 +381,32 @@ class StrategyRegistry:
         return cls._strategies.get(key)
     
     @classmethod
+    def list_all(cls) -> list[str]:
+        """List all registered strategy keys."""
+        cls._ensure_initialized()
+        return list(cls._strategies.keys())
+    
+    @classmethod
     def create(
         cls,
         key: str,
         config: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> BaseStrategy:
-        """Create a strategy instance by key."""
+        """Create a strategy instance."""
         cls._ensure_initialized()
         
         metadata = cls._strategies.get(key)
         if not metadata:
-            available = list(cls._strategies.keys())
-            raise ValueError(f"Unknown strategy: {key}. Available: {available}")
+            raise ValueError(f"Unknown strategy: {key}")
         
-        config_obj = metadata.config_class(**(config or {}))
-        return metadata.strategy_class(config_obj, **kwargs)
-    
-    @classmethod
-    def list_all(cls) -> list[str]:
-        """List all registered strategies."""
-        cls._ensure_initialized()
-        return list(cls._strategies.keys())
-    
-    @classmethod
-    def list_by_category(cls, category: StrategyCategory) -> list[str]:
-        """List strategies by category."""
-        cls._ensure_initialized()
-        return [
-            key for key, meta in cls._strategies.items()
-            if meta.category == category
-        ]
-    
-    @classmethod
-    def get_ml_strategies(cls) -> list[str]:
-        """Get all ML-based strategies."""
-        cls._ensure_initialized()
-        ml_categories = {
-            StrategyCategory.ML_CLASSIFIER,
-            StrategyCategory.ML_REGRESSOR,
-            StrategyCategory.ML_ENSEMBLE,
-            StrategyCategory.ML_NEURAL,
-            StrategyCategory.ML_ALPHA_V2,
-        }
-        return [
-            key for key, meta in cls._strategies.items()
-            if meta.category in ml_categories
-        ]
+        # Create config
+        config_dict = config or {}
+        config_dict.update(kwargs)
+        strategy_config = metadata.config_class(**config_dict)
+        
+        # Create strategy
+        return metadata.strategy_class(strategy_config)
 
 
 # =============================================================================
@@ -417,7 +419,7 @@ def create_strategy(
     **kwargs: Any,
 ) -> BaseStrategy:
     """
-    Factory function to create any strategy.
+    Create a strategy instance by type.
     
     Args:
         strategy_type: Strategy key (e.g., "macd", "alpha_ml_v2")
@@ -437,6 +439,11 @@ def create_strategy(
     return StrategyRegistry.create(strategy_type, config, **kwargs)
 
 
+def list_strategies() -> list[str]:
+    """List all available strategy keys."""
+    return StrategyRegistry.list_all()
+
+
 def list_available_strategies() -> dict[str, str]:
     """
     List all available strategies with descriptions.
@@ -452,6 +459,19 @@ def list_available_strategies() -> dict[str, str]:
 
 
 # =============================================================================
+# STRATEGY FACTORY (BACKWARD COMPATIBILITY)
+# =============================================================================
+
+class StrategyFactory:
+    """Factory for creating strategies (backward compatibility)."""
+    
+    @staticmethod
+    def create(strategy_type: str, **kwargs) -> BaseStrategy:
+        """Create a strategy."""
+        return create_strategy(strategy_type, kwargs)
+
+
+# =============================================================================
 # EXPORTS
 # =============================================================================
 
@@ -464,15 +484,22 @@ __all__ = [
     "StrategyMetrics",
     
     # === Momentum - Configs ===
-    "MACDStrategyConfig",
-    "RSIMomentumConfig",
-    "BreakoutStrategyConfig",
+    "TrendFollowingConfig",
+    "BreakoutConfig",
+    "BreakoutStrategyConfig",  # Alias
+    "MeanReversionConfig",
     "DualMomentumConfig",
+    "RSIDivergenceConfig",
+    "RSIMomentumConfig",  # Alias
+    "MACDStrategyConfig",
     # === Momentum - Strategies ===
-    "MACDStrategy",
-    "RSIMomentumStrategy",
+    "TrendFollowingStrategy",
     "BreakoutStrategy",
+    "MeanReversionStrategy",
     "DualMomentumStrategy",
+    "RSIDivergenceStrategy",
+    "RSIMomentumStrategy",  # Alias
+    "MACDStrategy",
     
     # === Statistical - Configs ===
     "PairsTradingConfig",
@@ -519,8 +546,10 @@ __all__ = [
     "StrategyCategory",
     "StrategyMetadata",
     "StrategyRegistry",
+    "StrategyFactory",
     
     # === Convenience Functions ===
     "create_strategy",
+    "list_strategies",
     "list_available_strategies",
 ]
