@@ -354,7 +354,7 @@ class AlphaMLStrategy(BaseStrategy):
         
         config = FeatureConfig(
             enabled_categories=enabled_categories,
-            dropna=True,
+            drop_na=True,
             normalize=True,
         )
         
@@ -395,9 +395,43 @@ class AlphaMLStrategy(BaseStrategy):
             logger.warning("No pre-trained models found. Will train on first sufficient data.")
     
     def _load_model(self, path: str | Path) -> Any:
-        """Load a model from disk."""
-        from models.base import BaseModel
-        return BaseModel.load(path)
+        """Load a model from disk with automatic class detection."""
+        import pickle
+        from pathlib import Path
+        
+        path = Path(path)
+        
+        # First, peek at the file to determine the class name
+        with open(path, "rb") as f:
+            save_data = pickle.load(f)
+        
+        class_name = save_data.get("class_name", "")
+        
+        # Import and use the correct concrete class
+        if "LightGBM" in class_name:
+            from models.classifiers import LightGBMClassifier
+            return LightGBMClassifier.load(path)
+        elif "XGBoost" in class_name:
+            from models.classifiers import XGBoostClassifier
+            return XGBoostClassifier.load(path)
+        elif "CatBoost" in class_name:
+            from models.classifiers import CatBoostClassifier
+            return CatBoostClassifier.load(path)
+        elif "RandomForest" in class_name:
+            from models.classifiers import RandomForestClassifier
+            return RandomForestClassifier.load(path)
+        elif "ExtraTrees" in class_name:
+            from models.classifiers import ExtraTreesClassifier
+            return ExtraTreesClassifier.load(path)
+        elif "LSTM" in class_name:
+            from models.deep import LSTMModel
+            return LSTMModel.load(path)
+        elif "Transformer" in class_name:
+            from models.deep import TransformerModel
+            return TransformerModel.load(path)
+        else:
+            raise ValueError(f"Unknown model class: {class_name}. "
+                            f"Cannot load model from {path}")
     
     def _set_model_weights(self) -> None:
         """Set ensemble model weights."""
@@ -487,59 +521,69 @@ class AlphaMLStrategy(BaseStrategy):
         symbol: str,
         data: pl.DataFrame,
     ) -> None:
-        """Update historical data buffer."""
+        """Update historical data buffer.
+        
+        CRITICAL: Buffer must be large enough to support:
+        1. Lookback period for features
+        2. Minimum training samples for auto-training
+        3. Walk-forward window for retraining
+        """
         if symbol not in self._historical_data:
             self._historical_data[symbol] = data
         else:
-            # Append new data (assuming last row is newest)
             if len(self._historical_data[symbol]) == 0:
                 self._historical_data[symbol] = data
             else:
-                # Keep only recent data to manage memory
-                max_bars = self.config.lookback_bars * 3
+                min_for_features = self.config.lookback_bars * 3
+                min_for_training = self.config.min_training_samples + 1000
+                min_for_walk_forward = self.config.walk_forward_window
+                max_bars = max(min_for_features, min_for_training, min_for_walk_forward)
                 self._historical_data[symbol] = data.tail(max_bars)
     
-    def _generate_features(
-        self,
-        symbol: str,
-    ) -> NDArray | None:
+    def _generate_features_for_prediction(self, data: pl.DataFrame) -> NDArray[np.float64] | None:
         """Generate features for prediction."""
         try:
-            data = self._historical_data.get(symbol)
-            if data is None or len(data) < self.config.lookback_bars:
-                return None
-            
-            # Generate all features
             df_features = self._feature_pipeline.generate(data)
             
-            # Get feature names
-            self._feature_names = self._feature_pipeline.feature_names
+            # ================================================================
+            # CRITICAL FIX: Filter to only numeric features (exclude 'regime' etc.)
+            # ================================================================
+            if self._feature_names:
+                # Use the same features that were used during training
+                valid_features = [f for f in self._feature_names if f in df_features.columns]
+                if valid_features:
+                    X = df_features.select(valid_features).to_numpy().astype(np.float64)
+                else:
+                    return None
+            else:
+                # Fallback: filter numeric columns manually
+                exclude_cols = {"timestamp", "symbol", "target", "open", "high", "low", "close", "volume"}
+                numeric_types = [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8,
+                                pl.UInt64, pl.UInt32, pl.UInt16, pl.UInt8]
+                
+                feature_cols = []
+                for col in df_features.columns:
+                    if col not in exclude_cols:
+                        col_dtype = df_features[col].dtype
+                        if col_dtype in numeric_types:
+                            feature_cols.append(col)
+                        elif col_dtype not in [pl.Utf8, pl.String, pl.Categorical]:
+                            if "float" in str(col_dtype).lower() or "int" in str(col_dtype).lower():
+                                feature_cols.append(col)
+                
+                if not feature_cols:
+                    return None
+                    
+                X = df_features.select(feature_cols).to_numpy().astype(np.float64)
             
-            # Extract feature matrix (last row)
-            feature_cols = self._feature_names
+            # Handle NaN/Inf
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
             
-            if not feature_cols:
-                return None
-            
-            # Get available columns
-            available_cols = [c for c in feature_cols if c in df_features.columns]
-            
-            if not available_cols:
-                return None
-            
-            # Extract last row as feature vector
-            features = df_features.select(available_cols).tail(1).to_numpy()
-            
-            # Handle NaN values
-            features = np.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
-            
-            # Cache features
-            self._feature_cache[symbol] = features
-            
-            return features
+            # Return last row for prediction
+            return X[-1:] if len(X) > 0 else None
             
         except Exception as e:
-            logger.error(f"Feature generation error for {symbol}: {e}")
+            logger.error(f"Feature generation error for prediction: {e}")
             return None
     
     def _detect_regime(
@@ -975,13 +1019,45 @@ class AlphaMLStrategy(BaseStrategy):
                 horizon=self.config.prediction_horizon,
             )
             
-            # Prepare train/test
-            X_train, X_test, y_train, y_test, feature_names = self._feature_pipeline.prepare_train_test(
-                df_features,
-                test_size=0.2,
-            )
+            # ================================================================
+            # CRITICAL FIX: Filter out non-numeric columns before training
+            # ================================================================
+            exclude_cols = {"timestamp", "symbol", "target", "open", "high", "low", "close", "volume"}
+            numeric_types = [pl.Float64, pl.Float32, pl.Int64, pl.Int32, pl.Int16, pl.Int8,
+                            pl.UInt64, pl.UInt32, pl.UInt16, pl.UInt8]
             
-            self._feature_names = feature_names
+            feature_cols = []
+            for col in df_features.columns:
+                if col not in exclude_cols:
+                    col_dtype = df_features[col].dtype
+                    if col_dtype in numeric_types:
+                        feature_cols.append(col)
+                    elif "float" in str(col_dtype).lower() or "int" in str(col_dtype).lower():
+                        if col_dtype not in [pl.Utf8, pl.String, pl.Categorical]:
+                            feature_cols.append(col)
+            
+            logger.info(f"Filtered to {len(feature_cols)} numeric features")
+            
+            # Drop rows with null target and features
+            df_clean = df_features.drop_nulls(subset=["target"])
+            df_clean = df_clean.drop_nulls(subset=feature_cols)
+            
+            # Extract features and target as numpy arrays
+            X = df_clean.select(feature_cols).to_numpy().astype(np.float64)
+            y = df_clean["target"].to_numpy().astype(np.int64)
+            
+            # Handle NaN/Inf values
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            # Time-based train/test split
+            split_idx = int(len(X) * 0.8)
+            X_train, X_test = X[:split_idx], X[split_idx:]
+            y_train, y_test = y[:split_idx], y[split_idx:]
+            
+            self._feature_names = feature_cols
+            
+            logger.info(f"Train/test split: {len(X_train)} train, {len(X_test)} test samples")
+            # ================================================================
             
             # Configure training
             config = TrainingConfig(
@@ -1002,7 +1078,7 @@ class AlphaMLStrategy(BaseStrategy):
                     "lightgbm",
                     X_train, y_train,
                     X_test, y_test,
-                    feature_names=feature_names,
+                    feature_names=feature_cols,
                 )
                 self._models["lightgbm"] = lgb_model
                 lgb_model.save(self.config.models_dir / "alpha_lgb.pkl")
@@ -1014,7 +1090,7 @@ class AlphaMLStrategy(BaseStrategy):
                     "xgboost",
                     X_train, y_train,
                     X_test, y_test,
-                    feature_names=feature_names,
+                    feature_names=feature_cols,
                 )
                 self._models["xgboost"] = xgb_model
                 xgb_model.save(self.config.models_dir / "alpha_xgb.pkl")
@@ -1026,6 +1102,8 @@ class AlphaMLStrategy(BaseStrategy):
             
         except Exception as e:
             logger.error(f"Model training failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     # =========================================================================
     # UTILITIES

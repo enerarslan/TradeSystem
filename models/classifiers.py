@@ -10,8 +10,9 @@ Models:
 - XGBoostClassifier: Gradient boosting (accurate)
 - CatBoostClassifier: Handles categoricals natively
 - RandomForestClassifier: Bagging ensemble
-- GradientBoostingClassifier: scikit-learn implementation
 - ExtraTreesClassifier: Extremely randomized trees
+- StackingClassifier: Stacked ensemble
+- VotingClassifier: Voting ensemble
 
 Features:
 - Hyperparameter optimization ready
@@ -19,6 +20,7 @@ Features:
 - Early stopping with validation
 - Feature importance extraction
 - Calibrated probabilities
+- XGBoost 2.0+ compatibility
 
 Author: Algo Trading Platform
 License: MIT
@@ -245,6 +247,9 @@ class XGBoostClassifier(BaseModel[XGBoostClassifierConfig]):
     - Competition-winning performance
     - GPU acceleration
     
+    Note: XGBoost 2.0+ compatibility - early_stopping_rounds
+    is now set in the constructor, not in fit().
+    
     Example:
         config = XGBoostClassifierConfig(
             max_depth=7,
@@ -287,6 +292,13 @@ class XGBoostClassifier(BaseModel[XGBoostClassifierConfig]):
         if "multi" in self.config.objective:
             params["num_class"] = self.config.num_class
         
+        # =====================================================================
+        # CRITICAL FIX: XGBoost 2.0+ compatibility
+        # early_stopping_rounds must be in constructor, NOT in fit()
+        # =====================================================================
+        if self.config.early_stopping:
+            params["early_stopping_rounds"] = self.config.early_stopping_rounds
+        
         return xgb.XGBClassifier(**params)
     
     def _fit_impl(
@@ -303,9 +315,13 @@ class XGBoostClassifier(BaseModel[XGBoostClassifierConfig]):
             "verbose": False,
         }
         
-        if self.config.early_stopping and X_val is not None:
+        # =====================================================================
+        # CRITICAL FIX: XGBoost 2.0+ compatibility
+        # Do NOT pass early_stopping_rounds here - it's set in _build_model()
+        # Only pass eval_set for validation
+        # =====================================================================
+        if self.config.early_stopping and X_val is not None and y_val is not None:
             fit_params["eval_set"] = [(X_val, y_val)]
-            fit_params["early_stopping_rounds"] = self.config.early_stopping_rounds
         
         self._model.fit(X, y, **fit_params)
         
@@ -423,7 +439,7 @@ class CatBoostClassifier(BaseModel[CatBoostClassifierConfig]):
         """Train CatBoost classifier."""
         fit_params = {"sample_weight": sample_weight}
         
-        if self.config.early_stopping and X_val is not None:
+        if self.config.early_stopping and X_val is not None and y_val is not None:
             fit_params["eval_set"] = (X_val, y_val)
             fit_params["early_stopping_rounds"] = self.config.early_stopping_rounds
         
@@ -443,7 +459,6 @@ class CatBoostClassifier(BaseModel[CatBoostClassifierConfig]):
             "l2_leaf_reg": ("float", 1.0, 10.0),
             "bagging_temperature": ("float", 0.0, 2.0),
             "subsample": ("float", 0.5, 1.0),
-            "border_count": ("int", 32, 255),
         }
 
 
@@ -457,12 +472,15 @@ class RandomForestClassifierConfig(ModelConfig):
     name: str = "RandomForestClassifier"
     model_type: ModelType = ModelType.CLASSIFIER
     
-    # Tree parameters
+    # Core parameters
     n_estimators: int = 500
+    criterion: str = "gini"  # gini, entropy, log_loss
+    
+    # Tree parameters
     max_depth: int | None = 10
     min_samples_split: int = 5
     min_samples_leaf: int = 2
-    max_features: str | int | float = "sqrt"
+    max_features: str | float = "sqrt"  # sqrt, log2, or float
     max_leaf_nodes: int | None = None
     
     # Sampling
@@ -472,9 +490,6 @@ class RandomForestClassifierConfig(ModelConfig):
     
     # Class imbalance
     class_weight: str | dict | None = "balanced"
-    
-    # Criterion
-    criterion: str = "gini"  # gini, entropy, log_loss
 
 
 class RandomForestClassifier(BaseModel[RandomForestClassifierConfig]):
@@ -562,21 +577,23 @@ class ExtraTreesClassifierConfig(ModelConfig):
     name: str = "ExtraTreesClassifier"
     model_type: ModelType = ModelType.CLASSIFIER
     
-    # Tree parameters
+    # Core parameters
     n_estimators: int = 500
+    criterion: str = "gini"
+    
+    # Tree parameters
     max_depth: int | None = 10
     min_samples_split: int = 5
     min_samples_leaf: int = 2
-    max_features: str | int | float = "sqrt"
+    max_features: str | float = "sqrt"
+    max_leaf_nodes: int | None = None
     
     # Sampling
     bootstrap: bool = False
+    oob_score: bool = False
     
     # Class imbalance
     class_weight: str | dict | None = "balanced"
-    
-    # Criterion
-    criterion: str = "gini"
 
 
 class ExtraTreesClassifier(BaseModel[ExtraTreesClassifierConfig]):
@@ -584,13 +601,14 @@ class ExtraTreesClassifier(BaseModel[ExtraTreesClassifierConfig]):
     Extra Trees Classifier for trading signal prediction.
     
     Optimal for:
-    - Fast training (extremely randomized)
-    - Reduced variance
-    - Feature importance
+    - High variance reduction
+    - Faster training than RF
+    - Better for noisy features
     
     Example:
         config = ExtraTreesClassifierConfig(
             n_estimators=500,
+            max_depth=12,
         )
         model = ExtraTreesClassifier(config)
         model.fit(X_train, y_train)
@@ -609,7 +627,9 @@ class ExtraTreesClassifier(BaseModel[ExtraTreesClassifierConfig]):
             min_samples_split=self.config.min_samples_split,
             min_samples_leaf=self.config.min_samples_leaf,
             max_features=self.config.max_features,
+            max_leaf_nodes=self.config.max_leaf_nodes,
             bootstrap=self.config.bootstrap,
+            oob_score=self.config.oob_score if self.config.bootstrap else False,
             class_weight=self.config.class_weight,
             criterion=self.config.criterion,
             random_state=self.config.random_state,
@@ -631,6 +651,16 @@ class ExtraTreesClassifier(BaseModel[ExtraTreesClassifierConfig]):
     def _predict_impl(self, X: NDArray[np.float64]) -> NDArray[np.float64]:
         """Predict with Extra Trees."""
         return self._model.predict(X)
+    
+    def get_params_space(self) -> dict[str, Any]:
+        """Get Optuna parameter space."""
+        return {
+            "n_estimators": ("int", 100, 1000),
+            "max_depth": ("int", 3, 15),
+            "min_samples_split": ("int", 2, 20),
+            "min_samples_leaf": ("int", 1, 10),
+            "max_features": ("categorical", ["sqrt", "log2", 0.3, 0.5]),
+        }
 
 
 # =============================================================================
@@ -704,6 +734,7 @@ class StackingClassifier(BaseModel[StackingClassifierConfig]):
         
         if self.config.use_xgboost:
             import xgboost as xgb
+            # XGBoost 2.0+ compatible
             estimators.append((
                 "xgb",
                 xgb.XGBClassifier(
@@ -850,6 +881,7 @@ class VotingClassifier(BaseModel[VotingClassifierConfig]):
         
         if self.config.use_xgboost:
             import xgboost as xgb
+            # XGBoost 2.0+ compatible
             estimators.append((
                 "xgb",
                 xgb.XGBClassifier(
@@ -935,7 +967,8 @@ def create_classifier(
     model_type = model_type.lower()
     
     if model_type not in model_map:
-        raise ValueError(f"Unknown classifier type: {model_type}. Available: {list(model_map.keys())}")
+        raise ValueError(f"Unknown classifier type: {model_type}. "
+                        f"Available: {list(model_map.keys())}")
     
     model_class, config_class = model_map[model_type]
     config = config_class(**kwargs)

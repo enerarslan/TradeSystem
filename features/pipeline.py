@@ -88,6 +88,7 @@ class FeatureConfig:
     custom_features: dict[str, Callable[[pl.DataFrame], pl.DataFrame]] = field(default_factory=dict)
     drop_na: bool = False
     fill_method: str | None = "forward"
+    normalize: bool = False
     max_lookback: int = 252
     cache_features: bool = True
     feature_prefix: str = ""
