@@ -30,6 +30,12 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar, Union
 from uuid import UUID, uuid4
+from backtesting.institutional_extensions import (
+    get_regime_adjusted_params,
+    AdvancedPortfolioOptimizer,
+    execute_institutional_trade,
+    generate_html_report,
+)
 
 import numpy as np
 import polars as pl
@@ -182,6 +188,10 @@ class RegimeDetector:
     - Volatility level (low/high)
     - Market structure (trending/mean-reverting)
     """
+    
+
+
+
     
     def __init__(
         self,
