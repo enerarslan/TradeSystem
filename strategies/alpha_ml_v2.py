@@ -88,6 +88,17 @@ class PredictionMode(str, Enum):
     META_LABEL = "meta_label"  # Meta-labeling with bet sizing
 
 
+class SignalStrengthLevel(str, Enum):
+    """Signal strength classification."""
+    STRONG_BUY = "strong_buy"
+    BUY = "buy"
+    WEAK_BUY = "weak_buy"
+    NEUTRAL = "neutral"
+    WEAK_SELL = "weak_sell"
+    SELL = "sell"
+    STRONG_SELL = "strong_sell"
+
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -1139,6 +1150,7 @@ __all__ = [
     "MarketRegime",
     "ModelType",
     "PredictionMode",
+    "SignalStrengthLevel",
     # Config
     "AlphaMLConfigV2",
     # Strategy

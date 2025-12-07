@@ -95,29 +95,15 @@ from strategies.ml_strategy import (
 )
 
 # =============================================================================
-# ALPHA ML V1 (ORIGINAL - DEPRECATED)
-# =============================================================================
-
-from strategies.alpha_ml import (
-    # Enums
-    MarketRegime,
-    ModelType,
-    SignalStrengthLevel,
-    # Config
-    AlphaMLConfig,
-    # Strategy
-    AlphaMLStrategy,
-    # Factory
-    create_alpha_ml_strategy,
-)
-
-# =============================================================================
-# ALPHA ML V2 (NEW - RECOMMENDED)
+# ALPHA ML V2 (PRODUCTION)
 # =============================================================================
 
 from strategies.alpha_ml_v2 import (
-    # Enums (reuses MarketRegime, ModelType from v1)
+    # Enums
+    MarketRegime,
+    ModelType,
     PredictionMode,
+    SignalStrengthLevel,
     # Config
     AlphaMLConfigV2,
     # Strategy
@@ -125,6 +111,11 @@ from strategies.alpha_ml_v2 import (
     # Factory
     create_alpha_ml_strategy_v2,
 )
+
+# Aliases for backward compatibility
+AlphaMLConfig = AlphaMLConfigV2
+AlphaMLStrategy = AlphaMLStrategyV2
+create_alpha_ml_strategy = create_alpha_ml_strategy_v2
 
 
 logger = get_logger(__name__)
@@ -151,7 +142,6 @@ class StrategyCategory(str, Enum):
     ML_REGRESSOR = "ml_regressor"
     ML_ENSEMBLE = "ml_ensemble"
     ML_NEURAL = "ml_neural"
-    ML_ALPHA = "ml_alpha"
     ML_ALPHA_V2 = "ml_alpha_v2"
     CUSTOM = "custom"
 
@@ -289,18 +279,18 @@ class StrategyRegistry:
             min_history=200,
         )
         
-        # Alpha ML V1 (deprecated but still available)
+        # Alpha ML V2 (production)
         cls._register_builtin(
             key="alpha_ml",
-            name="Alpha ML (V1)",
-            description="Production ML strategy (deprecated - use V2)",
-            category=StrategyCategory.ML_ALPHA,
-            config_class=AlphaMLConfig,
-            strategy_class=AlphaMLStrategy,
+            name="Alpha ML",
+            description="JPMorgan-level ML strategy with Triple Barrier",
+            category=StrategyCategory.ML_ALPHA_V2,
+            config_class=AlphaMLConfigV2,
+            strategy_class=AlphaMLStrategyV2,
             min_history=200,
         )
         
-        # Alpha ML V2 (recommended)
+        # Alias for alpha_ml_v2
         cls._register_builtin(
             key="alpha_ml_v2",
             name="Alpha ML V2",
@@ -409,7 +399,6 @@ class StrategyRegistry:
             StrategyCategory.ML_REGRESSOR,
             StrategyCategory.ML_ENSEMBLE,
             StrategyCategory.ML_NEURAL,
-            StrategyCategory.ML_ALPHA,
             StrategyCategory.ML_ALPHA_V2,
         }
         return [
@@ -514,18 +503,16 @@ __all__ = [
     # === ML Strategy (Basic) - Factory ===
     "create_ml_strategy",
     
-    # === Alpha ML V1 (Deprecated) ===
+    # === Alpha ML (V2 - Production) ===
     "MarketRegime",
     "ModelType",
+    "PredictionMode",
     "SignalStrengthLevel",
     "AlphaMLConfig",
-    "AlphaMLStrategy",
-    "create_alpha_ml_strategy",
-    
-    # === Alpha ML V2 (Recommended) ===
-    "PredictionMode",
     "AlphaMLConfigV2",
+    "AlphaMLStrategy",
     "AlphaMLStrategyV2",
+    "create_alpha_ml_strategy",
     "create_alpha_ml_strategy_v2",
     
     # === Registry ===
