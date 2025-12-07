@@ -1,14 +1,14 @@
 """
-Backtesting Engine Module (FIXED - COMPLETE)
-=============================================
+Backtesting Engine Module (FIXED)
+=================================
 
-Event-driven backtesting engine with CORRECT timestamp handling.
+Event-driven backtesting engine with CORRECT strategy interface.
 
 CRITICAL FIXES:
-1. All Position methods now receive simulated market timestamp
-2. Trade creation uses simulated timestamp, not datetime.now()
-3. Portfolio price updates include timestamps
-4. periods_per_year auto-detection from data frequency
+1. Uses strategy.on_bar(event, portfolio) instead of generate_signal()
+2. Properly creates MarketEvent for strategy consumption
+3. Passes PortfolioState to strategy
+4. Correct timestamp handling throughout
 
 Author: Algo Trading Platform
 License: MIT
@@ -28,14 +28,14 @@ import numpy as np
 import polars as pl
 from numpy.typing import NDArray
 
-from config.settings import get_logger, get_settings, TradingMode, TradingConstants
+from config.settings import get_logger, get_settings, TradingMode
 from core.types import (
     Order, OrderStatus, Trade, Position, PortfolioState,
     Signal, SignalStrength, OHLCV, PerformanceMetrics,
     ExecutionError, BacktestError,
 )
 from core.events import (
-    Event, EventType, EventBus,
+    Event, EventType, EventBus, EventPriority,
     MarketEvent, SignalEvent, OrderEvent, FillEvent, PortfolioEvent,
 )
 from core.interfaces import Strategy, DataProvider
@@ -102,8 +102,9 @@ class BacktestConfig:
     warmup_bars: int = 50
     benchmark_symbol: str | None = None
     
-    # Data
+    # Data frequency (for correct annualization)
     timeframe: str = "15min"
+    periods_per_year: int = 15794  # 15-min bars with extended hours
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -121,19 +122,20 @@ class BacktestConfig:
             "warmup_bars": self.warmup_bars,
             "benchmark_symbol": self.benchmark_symbol,
             "timeframe": self.timeframe,
+            "periods_per_year": self.periods_per_year,
         }
 
 
 # =============================================================================
-# PORTFOLIO TRACKER (FIXED!)
+# PORTFOLIO TRACKER
 # =============================================================================
 
 class PortfolioTracker:
     """
     Tracks portfolio state during backtesting.
     
-    CRITICAL FIX: All methods that update positions now require
-    an explicit timestamp parameter (the simulated market time).
+    All methods that update positions require an explicit timestamp
+    parameter (the simulated market time, NOT datetime.now()).
     """
     
     def __init__(
@@ -180,11 +182,7 @@ class PortfolioTracker:
         prices: dict[str, float],
         timestamp: datetime,
     ) -> None:
-        """
-        Update current prices for all positions.
-        
-        CRITICAL: timestamp must be the simulated market time!
-        """
+        """Update current prices for all positions."""
         self._current_prices.update(prices)
         
         for symbol, pos in self.positions.items():
@@ -205,11 +203,7 @@ class PortfolioTracker:
         fill: FillResult,
         timestamp: datetime,
     ) -> Trade | None:
-        """
-        Process an order fill.
-        
-        CRITICAL: timestamp MUST be the simulated market time!
-        """
+        """Process an order fill."""
         if not fill.filled:
             return None
         
@@ -225,6 +219,7 @@ class PortfolioTracker:
             cost = fill.fill_quantity * fill.fill_price + fill.commission
             
             if pos.quantity < 0:
+                # Closing short
                 trade = self._close_position_partial(
                     pos, fill.fill_quantity, fill.fill_price,
                     fill.commission, timestamp
@@ -232,10 +227,12 @@ class PortfolioTracker:
                 self.cash += fill.fill_quantity * fill.fill_price - fill.commission
                 return trade
             else:
+                # Opening or adding to long
                 pos.add(fill.fill_quantity, fill.fill_price, timestamp)
                 self.cash -= cost
-        else:
+        else:  # sell
             if pos.quantity > 0:
+                # Closing long
                 trade = self._close_position_partial(
                     pos, fill.fill_quantity, fill.fill_price,
                     fill.commission, timestamp
@@ -243,6 +240,7 @@ class PortfolioTracker:
                 self.cash += fill.fill_quantity * fill.fill_price - fill.commission
                 return trade
             else:
+                # Opening or adding to short
                 if not self.allow_shorting:
                     logger.warning(f"Short selling not allowed for {symbol}")
                     return None
@@ -259,7 +257,7 @@ class PortfolioTracker:
         commission: float,
         timestamp: datetime,
     ) -> Trade | None:
-        """Close or reduce a position with CORRECT timestamps."""
+        """Close or reduce a position with correct timestamps."""
         if quantity >= abs(pos.quantity):
             # Full close
             trade = Trade.create(
@@ -267,7 +265,7 @@ class PortfolioTracker:
                 side="long" if pos.quantity > 0 else "short",
                 entry_price=pos.avg_price,
                 quantity=abs(pos.quantity),
-                entry_time=pos.opened_at,
+                entry_time=pos.opened_at or timestamp,
             )
             trade.close(price, timestamp, commission)
             
@@ -287,7 +285,7 @@ class PortfolioTracker:
                 side="long" if pos.quantity > 0 else "short",
                 entry_price=pos.avg_price,
                 quantity=quantity,
-                entry_time=pos.opened_at,
+                entry_time=pos.opened_at or timestamp,
             )
             trade.pnl = realized - commission
             trade.exit_price = price
@@ -344,8 +342,8 @@ class BacktestEngine:
     """
     Event-driven backtesting engine.
     
-    CRITICAL FIX: Properly passes simulated timestamps through
-    all portfolio and position operations.
+    CRITICAL FIX: Now uses strategy.on_bar(event, portfolio) 
+    instead of the non-existent generate_signal() method.
     """
     
     def __init__(self, config: BacktestConfig | None = None):
@@ -366,7 +364,7 @@ class BacktestEngine:
         self.event_bus = EventBus()
         
         self._data: dict[str, pl.DataFrame] = {}
-        self._strategies: list[Strategy] = []
+        self._strategies: list[Any] = []  # Use Any to avoid import issues
         self._benchmark_data: pl.DataFrame | None = None
         
         self._current_bar_idx: int = 0
@@ -393,7 +391,7 @@ class BacktestEngine:
         self._data[symbol] = data.sort("timestamp")
         logger.debug(f"Added {len(data)} bars for {symbol}")
     
-    def add_strategy(self, strategy: Strategy) -> None:
+    def add_strategy(self, strategy: Any) -> None:
         """Add a strategy to the engine."""
         self._strategies.append(strategy)
     
@@ -423,6 +421,7 @@ class BacktestEngine:
         if len(timestamps) == 0:
             raise BacktestError("No data in specified date range")
         
+        # Initialize strategies
         symbols = list(self._data.keys())
         for strategy in self._strategies:
             strategy.initialize(symbols, timestamps[0], timestamps[-1])
@@ -437,22 +436,29 @@ class BacktestEngine:
             self._current_bar_idx = i
             self._current_timestamp = timestamp
             
+            # Skip warmup period
             if i < self.config.warmup_bars:
                 self._update_portfolio_prices(timestamp)
                 self.portfolio.record_equity(timestamp)
                 continue
             
+            # Process bar
             self._process_bar(timestamp)
+            
+            # Update equity
             self.portfolio.record_equity(timestamp)
             
-            if show_progress and (i + 1) % 1000 == 0:
-                logger.debug(f"Processed {i + 1}/{n_bars} bars")
+            # Progress logging
+            if show_progress and (i + 1) % 5000 == 0:
+                logger.info(f"Processed {i + 1}/{n_bars} bars ({100*(i+1)/n_bars:.1f}%)")
         
         self._is_running = False
         
+        # Shutdown strategies
         for strategy in self._strategies:
             strategy.shutdown()
         
+        # Generate report
         report = self._generate_report()
         
         logger.info(f"Backtest complete. Total return: {report.total_return_pct:.2%}")
@@ -498,41 +504,68 @@ class BacktestEngine:
         return sorted_ts
     
     def _process_bar(self, timestamp: datetime) -> None:
-        """Process a single bar."""
+        """
+        Process a single bar.
+        
+        CRITICAL FIX: Uses strategy.on_bar(event, portfolio) with proper
+        MarketEvent and PortfolioState objects.
+        """
         bar_data = self._get_bar_data(timestamp)
         
         if not bar_data:
             return
         
+        # Update portfolio prices FIRST
         self._update_portfolio_prices(timestamp)
         
+        # Process pending orders if using current bar fill
         if self.config.fill_mode == OrderFillMode.CURRENT_BAR:
             self._process_pending_orders(bar_data, timestamp)
         
+        # Get current portfolio state for strategies
+        portfolio_state = self.portfolio.get_state(timestamp)
+        
+        # Process each strategy
         for strategy in self._strategies:
             for symbol, data in bar_data.items():
+                # Get historical data up to current timestamp
                 hist_data = self._data.get(symbol)
                 if hist_data is None:
                     continue
                 
                 hist_to_now = hist_data.filter(pl.col("timestamp") <= timestamp)
                 
-                signal = strategy.generate_signal(symbol, hist_to_now, timestamp)
-                
-                if signal:
-                    signal_event = SignalEvent(
-                        id=signal.id,
+                # Create MarketEvent for the strategy
+                market_event = MarketEvent(
+                    timestamp=timestamp,
+                    symbol=symbol,
+                    data=hist_to_now,
+                    ohlcv=OHLCV(
                         timestamp=timestamp,
-                        symbol=signal.symbol,
-                        signal_type=signal.signal_type,
-                        direction=signal.direction,
-                        strength=signal.strength,
-                        price=data.get("close", 0),
-                        strategy_name=signal.strategy_name,
-                    )
-                    self._signals.append(signal_event)
-                    self.event_bus.publish(signal_event)
+                        open=data.get("open", 0),
+                        high=data.get("high", 0),
+                        low=data.get("low", 0),
+                        close=data.get("close", 0),
+                        volume=data.get("volume", 0),
+                        symbol=symbol,
+                    ),
+                )
+                
+                # CRITICAL FIX: Call on_bar() with correct signature!
+                try:
+                    signals = strategy.on_bar(market_event, portfolio_state)
+                    
+                    # Process returned signals
+                    if signals:
+                        for signal in signals:
+                            self._signals.append(signal)
+                            self.event_bus.publish(signal)
+                            
+                except Exception as e:
+                    logger.error(f"Strategy error on {symbol}: {e}")
+                    continue
         
+        # Process pending orders after signals
         if self.config.fill_mode in [OrderFillMode.NEXT_BAR_OPEN, OrderFillMode.NEXT_BAR_CLOSE]:
             self._process_pending_orders(bar_data, timestamp)
     
@@ -576,21 +609,24 @@ class BacktestEngine:
     
     def _validate_signal(self, signal: SignalEvent) -> bool:
         """Validate if signal can be executed."""
+        # Check if it's an entry signal
         if signal.is_entry:
             pos = self.portfolio.get_position(signal.symbol)
             if pos and pos.is_open:
-                return False
+                return False  # Already have position
             
             if self.portfolio.num_positions >= self.config.max_positions:
-                return False
+                return False  # Max positions reached
         
+        # Check shorting restriction
         if signal.is_short and not self.config.allow_shorting:
             return False
         
         return True
     
     def _create_order_from_signal(self, signal: SignalEvent) -> Order | None:
-        """Create order from signal with CORRECT timestamp."""
+        """Create order from signal."""
+        # Calculate position size
         position_value = self.portfolio.equity * self.config.risk_per_trade
         quantity = position_value / signal.price if signal.price > 0 else 0
         
@@ -600,9 +636,11 @@ class BacktestEngine:
         if quantity <= 0:
             return None
         
+        # Determine order side
         if signal.is_entry:
             side = "buy" if signal.is_long else "sell"
         else:
+            # Exit signal
             pos = self.portfolio.get_position(signal.symbol)
             if pos:
                 side = "sell" if pos.quantity > 0 else "buy"
@@ -615,7 +653,7 @@ class BacktestEngine:
             side=side,
             quantity=quantity,
             timestamp=signal.timestamp,
-            signal_id=signal.id,
+            signal_id=signal.id if hasattr(signal, 'id') else None,
         )
     
     def _process_pending_orders(
@@ -630,6 +668,7 @@ class BacktestEngine:
             
             bar = bar_data[order.symbol]
             
+            # Determine fill price
             if self.config.fill_mode == OrderFillMode.CURRENT_BAR:
                 fill_price = bar.get("close", 0)
             elif self.config.fill_mode == OrderFillMode.NEXT_BAR_OPEN:
@@ -637,6 +676,7 @@ class BacktestEngine:
             else:
                 fill_price = bar.get("close", 0)
             
+            # Execute order
             fill = self.execution.execute(
                 order=order,
                 price=fill_price,
@@ -648,6 +688,7 @@ class BacktestEngine:
             fill.metadata["symbol"] = order.symbol
             fill.metadata["side"] = order.side
             
+            # Process fill
             trade = self.portfolio.process_fill(fill, timestamp)
             
             if fill.filled:
@@ -664,27 +705,26 @@ class BacktestEngine:
         pass
     
     def _generate_report(self) -> PerformanceReport:
-        """Generate performance report with CORRECT periods_per_year."""
+        """Generate performance report."""
         equity_curve = self.portfolio.get_equity_curve()
         timestamps = self.portfolio.get_timestamps()
-        trades = self.portfolio.get_trade_list()
+        trades = self.portfolio.trades
         
+        # Get benchmark returns if available
         benchmark_returns = None
         if self._benchmark_data is not None:
             bench_close = self._benchmark_data["close"].to_numpy()
             benchmark_returns = np.diff(bench_close) / bench_close[:-1]
         
-        # CRITICAL FIX: Use correct periods_per_year for 15-min data!
-        periods_per_year = TradingConstants.DEFAULT_PERIODS_PER_YEAR  # 15794
-        
+        # Use correct periods_per_year from config
         calculator = MetricsCalculator(
             equity_curve=equity_curve,
             timestamps=timestamps,
-            trades=self.portfolio.trades,
+            trades=trades,
             initial_capital=self.config.initial_capital,
             benchmark_returns=benchmark_returns,
             strategy_name=self._strategies[0].name if self._strategies else "Backtest",
-            periods_per_year=periods_per_year,
+            periods_per_year=self.config.periods_per_year,
         )
         
         return calculator.calculate_all()
@@ -730,12 +770,7 @@ class WalkForwardResult:
 
 
 class WalkForwardAnalyzer:
-    """
-    Walk-forward analysis for strategy validation.
-    
-    Implements rolling window optimization and testing
-    to assess strategy robustness.
-    """
+    """Walk-forward analysis for strategy validation."""
     
     def __init__(
         self,
@@ -753,7 +788,7 @@ class WalkForwardAnalyzer:
     
     def run(
         self,
-        strategy_factory: Callable[..., Strategy],
+        strategy_factory: Callable[..., Any],
         data: dict[str, pl.DataFrame],
         param_grid: dict[str, list[Any]] | None = None,
         optimize_metric: str = "sharpe_ratio",
@@ -789,6 +824,7 @@ class WalkForwardAnalyzer:
             
             logger.info(f"Fold {fold + 1}: Train {train_start} to {train_end}, Test {test_start} to {test_end}")
             
+            # Optimize parameters
             best_params = {}
             if param_grid:
                 best_params = self._optimize_parameters(
@@ -796,8 +832,10 @@ class WalkForwardAnalyzer:
                     train_start, train_end, optimize_metric
                 )
             
+            # Create strategy
             strategy = strategy_factory(**best_params) if best_params else strategy_factory()
             
+            # Run on training period
             self.engine.portfolio.reset()
             for symbol, df in data.items():
                 self.engine.add_data(symbol, df)
@@ -805,12 +843,14 @@ class WalkForwardAnalyzer:
             
             train_report = self.engine.run(train_start, train_end, show_progress=False)
             
+            # Run on test period
             self.engine.portfolio.reset()
             test_strategy = strategy_factory(**best_params) if best_params else strategy_factory()
             self.engine._strategies = [test_strategy]
             
             test_report = self.engine.run(test_start, test_end, show_progress=False)
             
+            # Store result
             result = WalkForwardResult(
                 fold=fold + 1,
                 train_start=train_start,
@@ -842,7 +882,7 @@ class WalkForwardAnalyzer:
     
     def _optimize_parameters(
         self,
-        strategy_factory: Callable[..., Strategy],
+        strategy_factory: Callable[..., Any],
         data: dict[str, pl.DataFrame],
         param_grid: dict[str, list[Any]],
         start_date: datetime,
@@ -984,7 +1024,7 @@ class ReportGenerator:
 # =============================================================================
 
 def run_backtest(
-    strategy: Strategy,
+    strategy: Any,
     data: dict[str, pl.DataFrame],
     config: BacktestConfig | None = None,
     start_date: datetime | None = None,
@@ -1002,7 +1042,7 @@ def run_backtest(
 
 
 def quick_backtest(
-    strategy: Strategy,
+    strategy: Any,
     symbol: str,
     data: pl.DataFrame,
     initial_capital: float = 100_000,
