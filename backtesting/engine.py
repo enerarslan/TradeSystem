@@ -98,6 +98,10 @@ class BacktestConfig:
     position_sizing: str = "fixed"
     risk_per_trade: float = 0.02
     
+    # CRITICAL: Position size limits (prevents unrealistic compounding)
+    max_position_value: float = 100_000.0  # Absolute max per position
+    max_position_pct: float = 0.10  # Max 10% of equity per position
+    
     # Other
     warmup_bars: int = 50
     benchmark_symbol: str | None = None
@@ -119,6 +123,8 @@ class BacktestConfig:
             "max_positions": self.max_positions,
             "position_sizing": self.position_sizing,
             "risk_per_trade": self.risk_per_trade,
+            "max_position_value": self.max_position_value,
+            "max_position_pct": self.max_position_pct,
             "warmup_bars": self.warmup_bars,
             "benchmark_symbol": self.benchmark_symbol,
             "timeframe": self.timeframe,
@@ -619,9 +625,20 @@ class BacktestEngine:
         return True
     
     def _create_order_from_signal(self, signal: SignalEvent) -> Order | None:
-        """Create order from signal."""
-        # Calculate position size
-        position_value = self.portfolio.equity * self.config.risk_per_trade
+        """Create order from signal with REALISTIC position sizing."""
+        # CRITICAL FIX: Apply position size caps to prevent unrealistic compounding!
+        
+        # Calculate base position size (risk_per_trade % of equity)
+        raw_position_value = self.portfolio.equity * self.config.risk_per_trade
+        
+        # Apply caps from config
+        position_value = min(
+            raw_position_value,
+            self.config.max_position_value,  # Absolute cap (e.g., $100k)
+            self.portfolio.equity * self.config.max_position_pct,  # Percentage cap (e.g., 10%)
+        )
+        
+        # Calculate quantity
         quantity = position_value / signal.price if signal.price > 0 else 0
         
         if not self.config.fractional_shares:
