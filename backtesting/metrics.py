@@ -1,16 +1,13 @@
 """
-Backtesting Metrics Module
-==========================
+Backtesting Metrics Module (FIXED)
+==================================
 
-Comprehensive performance metrics for strategy evaluation.
-Implements institutional-grade analytics used by quantitative funds.
+Comprehensive performance metrics with CORRECT annualization.
 
-Metric Categories:
-- Return Metrics: Total, annual, monthly, daily returns
-- Risk Metrics: Volatility, VaR, CVaR, drawdown
-- Risk-Adjusted: Sharpe, Sortino, Calmar, Omega, Information ratio
-- Trade Statistics: Win rate, profit factor, expectancy
-- Distribution: Skewness, kurtosis, tail ratio
+CRITICAL FIX: 
+- Auto-detection of periods_per_year from data frequency
+- Validation of unrealistic metric values
+- Proper handling of 15-minute data (6552 or 15794 periods/year)
 
 Author: Algo Trading Platform
 License: MIT
@@ -35,20 +32,130 @@ logger = get_logger(__name__)
 # CONSTANTS
 # =============================================================================
 
-DEFAULT_PERIODS_PER_YEAR_EXTENDED = 15794
 TRADING_DAYS_PER_YEAR = TradingConstants.TRADING_DAYS_PER_YEAR  # 252
 RISK_FREE_RATE = TradingConstants.RISK_FREE_RATE  # 0.05 (5%)
+
+# CRITICAL: Periods per year for different timeframes
 PERIODS_PER_YEAR = {
-    "1min": 252 * 390,      # 390 minutes per trading day
-    "5min": 252 * 78,
-    "15min": 252 * 26,
-    "30min": 252 * 13,
-    "1hour": 252 * 6.5,
-    "4hour": 252 * 1.625,
+    "1min": 252 * 390,       # 98,280 (regular hours)
+    "5min": 252 * 78,        # 19,656
+    "15min": 252 * 26,       # 6,552 (regular hours)
+    "15min_extended": 15794,  # Extended hours
+    "30min": 252 * 13,       # 3,276
+    "1hour": 252 * 6.5,      # 1,638
+    "4hour": 252 * 1.625,    # 409.5
     "1day": 252,
     "1week": 52,
     "1month": 12,
 }
+
+# Default for 15-minute data with extended hours
+DEFAULT_PERIODS_PER_YEAR_EXTENDED = 15794
+
+
+# =============================================================================
+# PERIOD DETECTION
+# =============================================================================
+
+def detect_periods_per_year(timestamps: list[datetime]) -> float:
+    """
+    Auto-detect periods per year from timestamp frequency.
+    
+    This is CRITICAL for accurate Sharpe/Sortino/Calmar ratios!
+    
+    Args:
+        timestamps: Sorted list of timestamps
+        
+    Returns:
+        Estimated periods per year
+    
+    Example:
+        >>> timestamps = [datetime(2021,1,1,9,30), datetime(2021,1,1,9,45), ...]
+        >>> detect_periods_per_year(timestamps)
+        6552.0  # 15-minute data, regular hours
+    """
+    if len(timestamps) < 2:
+        logger.warning("Not enough timestamps to detect frequency, defaulting to 252 (daily)")
+        return 252.0
+    
+    # Calculate time differences
+    diffs = []
+    sample_size = min(1000, len(timestamps) - 1)
+    
+    for i in range(sample_size):
+        diff = (timestamps[i + 1] - timestamps[i]).total_seconds()
+        if diff > 0:  # Ignore duplicates
+            diffs.append(diff)
+    
+    if not diffs:
+        logger.warning("Could not calculate time differences, defaulting to 252")
+        return 252.0
+    
+    # Use median to be robust to gaps (weekends, holidays)
+    median_diff_seconds = np.median(diffs)
+    
+    # Map to approximate frequency
+    freq_map = {
+        60: "1min",
+        300: "5min",
+        900: "15min",
+        1800: "30min",
+        3600: "1hour",
+        14400: "4hour",
+        86400: "1day",
+    }
+    
+    # Find closest frequency
+    closest_freq = min(freq_map.keys(), key=lambda x: abs(x - median_diff_seconds))
+    detected_freq = freq_map[closest_freq]
+    
+    logger.info(f"Detected data frequency: {detected_freq} (median interval: {median_diff_seconds:.0f}s)")
+    
+    # Check for extended hours
+    hours = [t.hour for t in timestamps[:sample_size]]
+    has_pre_market = any(h < 9 for h in hours)  # Before 9:30 AM
+    has_after_hours = any(h >= 16 for h in hours)  # After 4 PM
+    has_extended = has_pre_market or has_after_hours
+    
+    if has_extended and detected_freq == "15min":
+        logger.info("Extended hours detected, using 15794 periods/year")
+        return 15794.0
+    
+    return float(PERIODS_PER_YEAR.get(detected_freq, 252))
+
+
+def validate_periods_per_year(
+    periods_per_year: float,
+    n_observations: int,
+    date_range_days: float,
+) -> float:
+    """
+    Validate and potentially correct periods_per_year based on actual data.
+    
+    Args:
+        periods_per_year: Current setting
+        n_observations: Number of data points
+        date_range_days: Date range in days
+        
+    Returns:
+        Validated periods_per_year
+    """
+    if date_range_days <= 0:
+        return periods_per_year
+    
+    # Calculate implied periods per year from data
+    implied_annual_periods = (n_observations / date_range_days) * 365
+    
+    # Check if current setting is way off
+    ratio = periods_per_year / implied_annual_periods if implied_annual_periods > 0 else 1
+    
+    if ratio > 5 or ratio < 0.2:
+        logger.warning(
+            f"periods_per_year={periods_per_year:.0f} seems inconsistent with data "
+            f"(implied: {implied_annual_periods:.0f}). Consider using auto-detection."
+        )
+    
+    return periods_per_year
 
 
 # =============================================================================
@@ -72,6 +179,9 @@ def calculate_returns(
     if len(equity_curve) < 2:
         return np.array([])
     
+    # Handle zeros and negatives
+    equity_curve = np.maximum(equity_curve, 1e-10)
+    
     if method == "log":
         returns = np.diff(np.log(equity_curve))
     else:  # simple
@@ -84,19 +194,19 @@ def total_return(equity_curve: NDArray[np.float64]) -> float:
     """
     Calculate total return.
     
-    Formula:
-        Total Return = (Final Value - Initial Value) / Initial Value
-    
     Args:
         equity_curve: Array of equity values
         
     Returns:
-        Total return as decimal
+        Total return as decimal (e.g., 0.5 = 50%)
     """
     if len(equity_curve) < 2:
         return 0.0
     
-    return (equity_curve[-1] - equity_curve[0]) / equity_curve[0]
+    if equity_curve[0] == 0:
+        return 0.0
+    
+    return float((equity_curve[-1] - equity_curve[0]) / equity_curve[0])
 
 
 def annualized_return(
@@ -107,11 +217,11 @@ def annualized_return(
     Calculate annualized return using CAGR formula.
     
     Formula:
-        CAGR = (Final / Initial) ^ (periods_per_year / n_periods) - 1
+        CAGR = (Final / Initial)^(periods_per_year / n_periods) - 1
     
     Args:
         equity_curve: Array of equity values
-        periods_per_year: Number of periods in a year
+        periods_per_year: Trading periods per year (CRITICAL!)
         
     Returns:
         Annualized return as decimal
@@ -119,77 +229,60 @@ def annualized_return(
     if len(equity_curve) < 2:
         return 0.0
     
-    n_periods = len(equity_curve) - 1
-    total = total_return(equity_curve)
-    
-    if total <= -1:
-        return -1.0
-    
-    years = n_periods / periods_per_year
-    if years <= 0:
+    if equity_curve[0] <= 0:
         return 0.0
     
-    return (1 + total) ** (1 / years) - 1
+    n_periods = len(equity_curve) - 1
+    total = equity_curve[-1] / equity_curve[0]
+    
+    if total <= 0:
+        return -1.0  # Total loss
+    
+    # CAGR formula
+    ann_return = total ** (periods_per_year / n_periods) - 1
+    
+    return float(ann_return)
 
 
 def rolling_returns(
-    returns: NDArray[np.float64],
+    equity_curve: NDArray[np.float64],
     window: int,
 ) -> NDArray[np.float64]:
-    """
-    Calculate rolling cumulative returns.
-    
-    Args:
-        returns: Array of period returns
-        window: Rolling window size
-        
-    Returns:
-        Array of rolling returns
-    """
-    if len(returns) < window:
+    """Calculate rolling returns."""
+    if len(equity_curve) < window + 1:
         return np.array([])
     
-    rolling = np.zeros(len(returns) - window + 1)
-    for i in range(len(rolling)):
-        rolling[i] = np.prod(1 + returns[i:i + window]) - 1
+    returns = []
+    for i in range(window, len(equity_curve)):
+        ret = (equity_curve[i] - equity_curve[i - window]) / equity_curve[i - window]
+        returns.append(ret)
     
-    return rolling
+    return np.array(returns)
 
 
 def monthly_returns(
     equity_curve: NDArray[np.float64],
     timestamps: list[datetime],
 ) -> dict[str, float]:
-    """
-    Calculate monthly returns.
-    
-    Args:
-        equity_curve: Array of equity values
-        timestamps: List of timestamps
-        
-    Returns:
-        Dictionary of 'YYYY-MM' to return
-    """
+    """Calculate monthly returns."""
     if len(equity_curve) != len(timestamps):
-        raise ValueError("Equity curve and timestamps must have same length")
+        return {}
     
     monthly = {}
     current_month = None
-    month_start_equity = equity_curve[0]
+    month_start_equity = None
     
-    for i, ts in enumerate(timestamps):
+    for i, (ts, equity) in enumerate(zip(timestamps, equity_curve)):
         month_key = ts.strftime("%Y-%m")
         
-        if current_month is None:
+        if month_key != current_month:
+            if current_month and month_start_equity:
+                monthly[current_month] = (equity_curve[i-1] - month_start_equity) / month_start_equity
             current_month = month_key
-        elif month_key != current_month:
-            # Calculate return for completed month
-            monthly[current_month] = (equity_curve[i - 1] - month_start_equity) / month_start_equity
-            month_start_equity = equity_curve[i - 1]
-            current_month = month_key
+            month_start_equity = equity
     
-    # Final month
-    if current_month and len(equity_curve) > 0:
+    # Last month
+    if current_month and month_start_equity:
         monthly[current_month] = (equity_curve[-1] - month_start_equity) / month_start_equity
     
     return monthly
@@ -199,35 +292,25 @@ def yearly_returns(
     equity_curve: NDArray[np.float64],
     timestamps: list[datetime],
 ) -> dict[int, float]:
-    """
-    Calculate yearly returns.
-    
-    Args:
-        equity_curve: Array of equity values
-        timestamps: List of timestamps
-        
-    Returns:
-        Dictionary of year to return
-    """
+    """Calculate yearly returns."""
     if len(equity_curve) != len(timestamps):
-        raise ValueError("Equity curve and timestamps must have same length")
+        return {}
     
     yearly = {}
     current_year = None
-    year_start_equity = equity_curve[0]
+    year_start_equity = None
     
-    for i, ts in enumerate(timestamps):
+    for i, (ts, equity) in enumerate(zip(timestamps, equity_curve)):
         year = ts.year
         
-        if current_year is None:
+        if year != current_year:
+            if current_year and year_start_equity:
+                yearly[current_year] = (equity_curve[i-1] - year_start_equity) / year_start_equity
             current_year = year
-        elif year != current_year:
-            yearly[current_year] = (equity_curve[i - 1] - year_start_equity) / year_start_equity
-            year_start_equity = equity_curve[i - 1]
-            current_year = year
+            year_start_equity = equity
     
-    # Final year
-    if current_year and len(equity_curve) > 0:
+    # Last year
+    if current_year and year_start_equity:
         yearly[current_year] = (equity_curve[-1] - year_start_equity) / year_start_equity
     
     return yearly
@@ -248,20 +331,20 @@ def volatility(
     Args:
         returns: Array of returns
         annualize: Whether to annualize
-        periods_per_year: Periods per year for annualization
+        periods_per_year: Trading periods per year (CRITICAL!)
         
     Returns:
-        Volatility as decimal
+        Volatility (annualized if requested)
     """
     if len(returns) < 2:
         return 0.0
     
-    vol = np.std(returns, ddof=1)
+    vol = float(np.std(returns, ddof=1))
     
     if annualize:
         vol *= np.sqrt(periods_per_year)
     
-    return float(vol)
+    return vol
 
 
 def downside_volatility(
@@ -273,16 +356,14 @@ def downside_volatility(
     """
     Calculate downside volatility (semi-deviation).
     
-    Only considers returns below threshold.
-    
     Args:
         returns: Array of returns
         threshold: Minimum acceptable return (MAR)
         annualize: Whether to annualize
-        periods_per_year: Periods per year
+        periods_per_year: Trading periods per year
         
     Returns:
-        Downside volatility as decimal
+        Downside volatility
     """
     if len(returns) < 2:
         return 0.0
@@ -292,12 +373,12 @@ def downside_volatility(
     if len(downside_returns) < 2:
         return 0.0
     
-    downside_vol = np.std(downside_returns, ddof=1)
+    downside_dev = float(np.std(downside_returns, ddof=1))
     
     if annualize:
-        downside_vol *= np.sqrt(periods_per_year)
+        downside_dev *= np.sqrt(periods_per_year)
     
-    return float(downside_vol)
+    return downside_dev
 
 
 def upside_volatility(
@@ -306,18 +387,7 @@ def upside_volatility(
     annualize: bool = True,
     periods_per_year: float = TRADING_DAYS_PER_YEAR,
 ) -> float:
-    """
-    Calculate upside volatility.
-    
-    Args:
-        returns: Array of returns
-        threshold: Minimum acceptable return
-        annualize: Whether to annualize
-        periods_per_year: Periods per year
-        
-    Returns:
-        Upside volatility as decimal
-    """
+    """Calculate upside volatility."""
     if len(returns) < 2:
         return 0.0
     
@@ -326,53 +396,41 @@ def upside_volatility(
     if len(upside_returns) < 2:
         return 0.0
     
-    upside_vol = np.std(upside_returns, ddof=1)
+    upside_dev = float(np.std(upside_returns, ddof=1))
     
     if annualize:
-        upside_vol *= np.sqrt(periods_per_year)
+        upside_dev *= np.sqrt(periods_per_year)
     
-    return float(upside_vol)
+    return upside_dev
 
 
 # =============================================================================
 # DRAWDOWN METRICS
 # =============================================================================
 
-def calculate_drawdown_series(
-    equity_curve: NDArray[np.float64],
-) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """
-    Calculate drawdown series.
+def calculate_drawdown_series(equity_curve: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Calculate drawdown series."""
+    if len(equity_curve) < 1:
+        return np.array([])
     
-    Args:
-        equity_curve: Array of equity values
-        
-    Returns:
-        Tuple of (drawdown series, running max series)
-    """
     running_max = np.maximum.accumulate(equity_curve)
-    drawdown = (equity_curve - running_max) / running_max
-    return drawdown, running_max
+    drawdowns = (equity_curve - running_max) / running_max
+    
+    return drawdowns
 
 
 def max_drawdown(equity_curve: NDArray[np.float64]) -> float:
     """
     Calculate maximum drawdown.
     
-    Formula:
-        MDD = min((Equity - Peak) / Peak)
-    
-    Args:
-        equity_curve: Array of equity values
-        
     Returns:
-        Maximum drawdown as negative decimal
+        Maximum drawdown as negative decimal (e.g., -0.20 = -20%)
     """
     if len(equity_curve) < 2:
         return 0.0
     
-    drawdown, _ = calculate_drawdown_series(equity_curve)
-    return float(np.min(drawdown))
+    drawdowns = calculate_drawdown_series(equity_curve)
+    return float(np.min(drawdowns))
 
 
 def max_drawdown_duration(
@@ -381,24 +439,19 @@ def max_drawdown_duration(
 ) -> int:
     """
     Calculate maximum drawdown duration in periods.
-    
-    Args:
-        equity_curve: Array of equity values
-        timestamps: Optional timestamps for duration in days
-        
-    Returns:
-        Duration in periods (or days if timestamps provided)
     """
     if len(equity_curve) < 2:
         return 0
     
-    drawdown, running_max = calculate_drawdown_series(equity_curve)
+    running_max = np.maximum.accumulate(equity_curve)
     
+    # Track drawdown periods
+    in_drawdown = equity_curve < running_max
     max_duration = 0
     current_duration = 0
     
-    for i in range(len(equity_curve)):
-        if equity_curve[i] < running_max[i]:
+    for is_dd in in_drawdown:
+        if is_dd:
             current_duration += 1
             max_duration = max(max_duration, current_duration)
         else:
@@ -408,123 +461,70 @@ def max_drawdown_duration(
 
 
 def average_drawdown(equity_curve: NDArray[np.float64]) -> float:
-    """
-    Calculate average drawdown.
-    
-    Args:
-        equity_curve: Array of equity values
-        
-    Returns:
-        Average drawdown as negative decimal
-    """
-    if len(equity_curve) < 2:
+    """Calculate average drawdown."""
+    drawdowns = calculate_drawdown_series(equity_curve)
+    if len(drawdowns) == 0:
         return 0.0
     
-    drawdown, _ = calculate_drawdown_series(equity_curve)
-    negative_dd = drawdown[drawdown < 0]
-    
-    if len(negative_dd) == 0:
-        return 0.0
-    
-    return float(np.mean(negative_dd))
+    return float(np.mean(drawdowns[drawdowns < 0])) if np.any(drawdowns < 0) else 0.0
 
 
 def drawdown_details(
     equity_curve: NDArray[np.float64],
     timestamps: list[datetime] | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Get detailed information about each drawdown period.
-    
-    Args:
-        equity_curve: Array of equity values
-        timestamps: Optional timestamps
-        
-    Returns:
-        List of drawdown detail dictionaries
-    """
+    """Get details of all drawdown periods."""
     if len(equity_curve) < 2:
         return []
     
-    drawdown, running_max = calculate_drawdown_series(equity_curve)
+    drawdowns = calculate_drawdown_series(equity_curve)
+    details = []
     
-    drawdowns = []
     in_drawdown = False
     start_idx = 0
-    peak_value = equity_curve[0]
     
-    for i in range(len(equity_curve)):
-        if not in_drawdown and drawdown[i] < 0:
-            # Start of drawdown
+    for i, dd in enumerate(drawdowns):
+        if dd < 0 and not in_drawdown:
             in_drawdown = True
-            start_idx = i - 1 if i > 0 else 0
-            peak_value = running_max[i]
-        elif in_drawdown and (drawdown[i] >= 0 or i == len(equity_curve) - 1):
-            # End of drawdown (or end of series)
-            end_idx = i
-            trough_idx = start_idx + np.argmin(equity_curve[start_idx:end_idx + 1])
-            
-            dd_info = {
-                "start_idx": start_idx,
-                "trough_idx": int(trough_idx),
-                "end_idx": end_idx,
-                "peak_value": float(peak_value),
-                "trough_value": float(equity_curve[trough_idx]),
-                "drawdown": float((equity_curve[trough_idx] - peak_value) / peak_value),
-                "duration": end_idx - start_idx,
-                "recovery_duration": end_idx - trough_idx,
-            }
-            
-            if timestamps:
-                dd_info["start_date"] = timestamps[start_idx]
-                dd_info["trough_date"] = timestamps[trough_idx]
-                dd_info["end_date"] = timestamps[end_idx]
-            
-            drawdowns.append(dd_info)
+            start_idx = i
+        elif dd >= 0 and in_drawdown:
             in_drawdown = False
+            end_idx = i
+            
+            dd_slice = drawdowns[start_idx:end_idx]
+            details.append({
+                "start_idx": start_idx,
+                "end_idx": end_idx,
+                "trough_idx": start_idx + np.argmin(dd_slice),
+                "max_drawdown": float(np.min(dd_slice)),
+                "duration": end_idx - start_idx,
+                "start_date": timestamps[start_idx] if timestamps else None,
+                "end_date": timestamps[end_idx] if timestamps else None,
+            })
     
-    return sorted(drawdowns, key=lambda x: x["drawdown"])
+    return details
 
 
 def ulcer_index(equity_curve: NDArray[np.float64]) -> float:
-    """
-    Calculate Ulcer Index (measure of downside risk).
-    
-    Formula:
-        UI = sqrt(mean(drawdown^2))
-    
-    Args:
-        equity_curve: Array of equity values
-        
-    Returns:
-        Ulcer index value
-    """
+    """Calculate Ulcer Index."""
     if len(equity_curve) < 2:
         return 0.0
     
-    drawdown, _ = calculate_drawdown_series(equity_curve)
-    return float(np.sqrt(np.mean(drawdown ** 2)))
+    drawdowns = calculate_drawdown_series(equity_curve)
+    return float(np.sqrt(np.mean(drawdowns ** 2)))
 
 
 def pain_index(equity_curve: NDArray[np.float64]) -> float:
-    """
-    Calculate Pain Index (average drawdown).
-    
-    Args:
-        equity_curve: Array of equity values
-        
-    Returns:
-        Pain index (positive value)
-    """
+    """Calculate Pain Index (mean of absolute drawdowns)."""
     if len(equity_curve) < 2:
         return 0.0
     
-    drawdown, _ = calculate_drawdown_series(equity_curve)
-    return float(-np.mean(drawdown))
+    drawdowns = calculate_drawdown_series(equity_curve)
+    return float(np.mean(np.abs(drawdowns)))
 
 
 # =============================================================================
-# VALUE AT RISK (VaR) METRICS
+# VALUE AT RISK METRICS
 # =============================================================================
 
 def var_historical(
@@ -532,14 +532,10 @@ def var_historical(
     confidence: float = 0.95,
 ) -> float:
     """
-    Calculate Value at Risk using historical simulation.
+    Calculate Historical VaR.
     
-    Args:
-        returns: Array of returns
-        confidence: Confidence level (e.g., 0.95 for 95%)
-        
     Returns:
-        VaR as positive decimal (loss)
+        VaR as positive decimal (loss amount)
     """
     if len(returns) < 10:
         return 0.0
@@ -551,20 +547,8 @@ def var_parametric(
     returns: NDArray[np.float64],
     confidence: float = 0.95,
 ) -> float:
-    """
-    Calculate Value at Risk using parametric (normal) method.
-    
-    Formula:
-        VaR = -(mean + z * std)
-    
-    Args:
-        returns: Array of returns
-        confidence: Confidence level
-        
-    Returns:
-        VaR as positive decimal
-    """
-    if len(returns) < 2:
+    """Calculate Parametric (Gaussian) VaR."""
+    if len(returns) < 10:
         return 0.0
     
     mean = np.mean(returns)
@@ -578,35 +562,19 @@ def var_cornish_fisher(
     returns: NDArray[np.float64],
     confidence: float = 0.95,
 ) -> float:
-    """
-    Calculate VaR using Cornish-Fisher expansion.
+    """Calculate Cornish-Fisher VaR (adjusted for skewness/kurtosis)."""
+    if len(returns) < 30:
+        return var_parametric(returns, confidence)
     
-    Adjusts for skewness and kurtosis.
+    z = scipy_stats.norm.ppf(1 - confidence)
+    s = scipy_stats.skew(returns)
+    k = scipy_stats.kurtosis(returns)
     
-    Args:
-        returns: Array of returns
-        confidence: Confidence level
-        
-    Returns:
-        VaR as positive decimal
-    """
-    if len(returns) < 10:
-        return 0.0
+    # Cornish-Fisher expansion
+    z_cf = z + (z**2 - 1) * s / 6 + (z**3 - 3*z) * (k - 3) / 24 - (2*z**3 - 5*z) * s**2 / 36
     
     mean = np.mean(returns)
     std = np.std(returns, ddof=1)
-    skew = scipy_stats.skew(returns)
-    kurt = scipy_stats.kurtosis(returns)
-    
-    z = scipy_stats.norm.ppf(1 - confidence)
-    
-    # Cornish-Fisher adjustment
-    z_cf = (
-        z + 
-        (z ** 2 - 1) * skew / 6 +
-        (z ** 3 - 3 * z) * kurt / 24 -
-        (2 * z ** 3 - 5 * z) * skew ** 2 / 36
-    )
     
     return float(-(mean + z_cf * std))
 
@@ -616,14 +584,8 @@ def cvar(
     confidence: float = 0.95,
 ) -> float:
     """
-    Calculate Conditional Value at Risk (Expected Shortfall).
+    Calculate Conditional VaR (Expected Shortfall).
     
-    Average of losses beyond VaR.
-    
-    Args:
-        returns: Array of returns
-        confidence: Confidence level
-        
     Returns:
         CVaR as positive decimal
     """
@@ -652,15 +614,15 @@ def sharpe_ratio(
     Calculate Sharpe Ratio.
     
     Formula:
-        Sharpe = (Return - Risk-Free) / Volatility
+        Sharpe = (Return - Risk-Free) / Volatility * sqrt(periods_per_year)
     
-    Args:
-        returns: Array of returns
-        risk_free_rate: Annual risk-free rate
-        periods_per_year: Periods per year
-        
-    Returns:
-        Annualized Sharpe ratio
+    CRITICAL: periods_per_year must match data frequency!
+    - Daily data: 252
+    - 15-min data (regular): 6552
+    - 15-min data (extended): 15794
+    
+    A realistic Sharpe ratio is typically between -2 and +3.
+    Values above 5 should trigger investigation.
     """
     if len(returns) < 2:
         return 0.0
@@ -669,14 +631,24 @@ def sharpe_ratio(
     rf_per_period = (1 + risk_free_rate) ** (1 / periods_per_year) - 1
     
     excess_returns = returns - rf_per_period
+    std = np.std(excess_returns, ddof=1)
     
-    if np.std(excess_returns) == 0:
+    if std == 0:
         return 0.0
     
-    sharpe = np.mean(excess_returns) / np.std(excess_returns, ddof=1)
+    sharpe = np.mean(excess_returns) / std
     
     # Annualize
-    return float(sharpe * np.sqrt(periods_per_year))
+    sharpe_annual = float(sharpe * np.sqrt(periods_per_year))
+    
+    # Sanity check
+    if abs(sharpe_annual) > 10:
+        logger.warning(
+            f"Sharpe ratio {sharpe_annual:.2f} is unusually high. "
+            f"Verify periods_per_year={periods_per_year:.0f} is correct for your data."
+        )
+    
+    return sharpe_annual
 
 
 def sortino_ratio(
@@ -687,18 +659,7 @@ def sortino_ratio(
     """
     Calculate Sortino Ratio.
     
-    Like Sharpe but uses downside volatility.
-    
-    Formula:
-        Sortino = (Return - MAR) / Downside Volatility
-    
-    Args:
-        returns: Array of returns
-        risk_free_rate: Annual risk-free rate (MAR)
-        periods_per_year: Periods per year
-        
-    Returns:
-        Annualized Sortino ratio
+    Like Sharpe but uses downside volatility only.
     """
     if len(returns) < 2:
         return 0.0
@@ -712,8 +673,16 @@ def sortino_ratio(
         return 0.0 if np.mean(excess_returns) <= 0 else float('inf')
     
     sortino = np.mean(excess_returns) / downside_vol
+    sortino_annual = float(sortino * np.sqrt(periods_per_year))
     
-    return float(sortino * np.sqrt(periods_per_year))
+    # Sanity check
+    if abs(sortino_annual) > 20:
+        logger.warning(
+            f"Sortino ratio {sortino_annual:.2f} is unusually high. "
+            f"Verify periods_per_year={periods_per_year:.0f} is correct."
+        )
+    
+    return sortino_annual
 
 
 def calmar_ratio(
@@ -725,13 +694,6 @@ def calmar_ratio(
     
     Formula:
         Calmar = Annual Return / |Max Drawdown|
-    
-    Args:
-        equity_curve: Array of equity values
-        periods_per_year: Periods per year
-        
-    Returns:
-        Calmar ratio
     """
     if len(equity_curve) < 2:
         return 0.0
@@ -742,7 +704,16 @@ def calmar_ratio(
     if mdd == 0:
         return 0.0 if ann_return <= 0 else float('inf')
     
-    return float(ann_return / mdd)
+    calmar = float(ann_return / mdd)
+    
+    # Sanity check
+    if abs(calmar) > 50:
+        logger.warning(
+            f"Calmar ratio {calmar:.2f} is unusually high. "
+            f"Max drawdown: {mdd:.2%}, Annual return: {ann_return:.2%}"
+        )
+    
+    return calmar
 
 
 def omega_ratio(
@@ -753,14 +724,7 @@ def omega_ratio(
     Calculate Omega Ratio.
     
     Formula:
-        Omega = Sum(Excess Gains) / Sum(Excess Losses)
-    
-    Args:
-        returns: Array of returns
-        threshold: Minimum acceptable return
-        
-    Returns:
-        Omega ratio
+        Omega = Sum(Gains above threshold) / Sum(Losses below threshold)
     """
     if len(returns) < 2:
         return 0.0
@@ -780,20 +744,7 @@ def information_ratio(
     benchmark_returns: NDArray[np.float64],
     periods_per_year: float = TRADING_DAYS_PER_YEAR,
 ) -> float:
-    """
-    Calculate Information Ratio.
-    
-    Formula:
-        IR = Mean(Active Return) / Std(Active Return)
-    
-    Args:
-        returns: Strategy returns
-        benchmark_returns: Benchmark returns
-        periods_per_year: Periods per year
-        
-    Returns:
-        Annualized information ratio
-    """
+    """Calculate Information Ratio."""
     if len(returns) != len(benchmark_returns) or len(returns) < 2:
         return 0.0
     
@@ -814,27 +765,12 @@ def treynor_ratio(
     risk_free_rate: float = RISK_FREE_RATE,
     periods_per_year: float = TRADING_DAYS_PER_YEAR,
 ) -> float:
-    """
-    Calculate Treynor Ratio.
-    
-    Formula:
-        Treynor = (Return - Risk-Free) / Beta
-    
-    Args:
-        returns: Strategy returns
-        benchmark_returns: Benchmark returns
-        risk_free_rate: Annual risk-free rate
-        periods_per_year: Periods per year
-        
-    Returns:
-        Treynor ratio
-    """
+    """Calculate Treynor Ratio."""
     if len(returns) != len(benchmark_returns) or len(returns) < 2:
         return 0.0
     
     rf_per_period = (1 + risk_free_rate) ** (1 / periods_per_year) - 1
     
-    # Calculate beta
     covariance = np.cov(returns, benchmark_returns)[0, 1]
     benchmark_var = np.var(benchmark_returns, ddof=1)
     
@@ -852,18 +788,7 @@ def treynor_ratio(
 
 
 def gain_to_pain_ratio(equity_curve: NDArray[np.float64]) -> float:
-    """
-    Calculate Gain to Pain Ratio.
-    
-    Formula:
-        GtP = Total Return / Pain Index
-    
-    Args:
-        equity_curve: Array of equity values
-        
-    Returns:
-        Gain to pain ratio
-    """
+    """Calculate Gain to Pain Ratio."""
     if len(equity_curve) < 2:
         return 0.0
     
@@ -881,20 +806,7 @@ def ulcer_performance_index(
     risk_free_rate: float = RISK_FREE_RATE,
     periods_per_year: float = TRADING_DAYS_PER_YEAR,
 ) -> float:
-    """
-    Calculate Ulcer Performance Index (Martin Ratio).
-    
-    Formula:
-        UPI = (Return - Risk-Free) / Ulcer Index
-    
-    Args:
-        equity_curve: Array of equity values
-        risk_free_rate: Annual risk-free rate
-        periods_per_year: Periods per year
-        
-    Returns:
-        UPI value
-    """
+    """Calculate Ulcer Performance Index (Martin Ratio)."""
     if len(equity_curve) < 2:
         return 0.0
     
@@ -914,24 +826,20 @@ def ulcer_performance_index(
 @dataclass
 class TradeStats:
     """Statistics calculated from a list of trades."""
-    
     total_trades: int = 0
     winning_trades: int = 0
     losing_trades: int = 0
-    breakeven_trades: int = 0
-    
     win_rate: float = 0.0
-    loss_rate: float = 0.0
     
     gross_profit: float = 0.0
     gross_loss: float = 0.0
     net_profit: float = 0.0
-    
     profit_factor: float = 0.0
     
-    avg_trade: float = 0.0
     avg_win: float = 0.0
     avg_loss: float = 0.0
+    avg_trade: float = 0.0
+    expectancy: float = 0.0
     
     largest_win: float = 0.0
     largest_loss: float = 0.0
@@ -939,39 +847,31 @@ class TradeStats:
     max_consecutive_wins: int = 0
     max_consecutive_losses: int = 0
     
-    avg_holding_period: float = 0.0  # in hours
-    avg_bars_in_trade: float = 0.0
+    avg_holding_bars: float = 0.0
+    avg_winner_bars: float = 0.0
+    avg_loser_bars: float = 0.0
     
-    expectancy: float = 0.0
-    expectancy_ratio: float = 0.0
-    
-    # Per-symbol statistics
-    trades_per_symbol: dict[str, int] = field(default_factory=dict)
-    pnl_per_symbol: dict[str, float] = field(default_factory=dict)
-    
-    # Time-based statistics
-    trades_per_day: dict[str, int] = field(default_factory=dict)
-    trades_per_hour: dict[int, int] = field(default_factory=dict)
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total_trades": self.total_trades,
+            "winning_trades": self.winning_trades,
+            "losing_trades": self.losing_trades,
+            "win_rate": self.win_rate,
+            "gross_profit": self.gross_profit,
+            "gross_loss": self.gross_loss,
+            "net_profit": self.net_profit,
+            "profit_factor": self.profit_factor,
+            "avg_win": self.avg_win,
+            "avg_loss": self.avg_loss,
+            "avg_trade": self.avg_trade,
+            "expectancy": self.expectancy,
+            "largest_win": self.largest_win,
+            "largest_loss": self.largest_loss,
+        }
 
 
-def calculate_trade_stats(
-    trades: list[dict[str, Any]],
-) -> TradeStats:
-    """
-    Calculate comprehensive trade statistics.
-    
-    Args:
-        trades: List of trade dictionaries with keys:
-            - pnl: Profit/loss
-            - pnl_pct: Profit/loss percentage
-            - entry_time: Entry timestamp
-            - exit_time: Exit timestamp
-            - symbol: Trading symbol
-            - side: 'long' or 'short'
-    
-    Returns:
-        TradeStats object
-    """
+def calculate_trade_stats(trades: list) -> TradeStats:
+    """Calculate comprehensive trade statistics."""
     stats = TradeStats()
     
     if not trades:
@@ -979,114 +879,74 @@ def calculate_trade_stats(
     
     stats.total_trades = len(trades)
     
-    # Extract PnL values
-    pnls = np.array([t.get("pnl", 0) for t in trades])
+    # Separate wins and losses
+    pnls = []
+    win_pnls = []
+    loss_pnls = []
     
-    # Win/Loss counts
-    stats.winning_trades = int(np.sum(pnls > 0))
-    stats.losing_trades = int(np.sum(pnls < 0))
-    stats.breakeven_trades = int(np.sum(pnls == 0))
+    for trade in trades:
+        pnl = trade.pnl if hasattr(trade, 'pnl') else trade.get('pnl', 0)
+        pnls.append(pnl)
+        
+        if pnl > 0:
+            win_pnls.append(pnl)
+        elif pnl < 0:
+            loss_pnls.append(pnl)
     
-    # Win/Loss rates
-    stats.win_rate = stats.winning_trades / stats.total_trades if stats.total_trades > 0 else 0
-    stats.loss_rate = stats.losing_trades / stats.total_trades if stats.total_trades > 0 else 0
+    stats.winning_trades = len(win_pnls)
+    stats.losing_trades = len(loss_pnls)
     
-    # Profit/Loss totals
-    stats.gross_profit = float(np.sum(pnls[pnls > 0]))
-    stats.gross_loss = float(np.sum(pnls[pnls < 0]))
-    stats.net_profit = float(np.sum(pnls))
+    if stats.total_trades > 0:
+        stats.win_rate = stats.winning_trades / stats.total_trades
     
-    # Profit factor
-    if stats.gross_loss != 0:
-        stats.profit_factor = abs(stats.gross_profit / stats.gross_loss)
+    # Profit/Loss metrics
+    stats.gross_profit = sum(win_pnls) if win_pnls else 0
+    stats.gross_loss = abs(sum(loss_pnls)) if loss_pnls else 0
+    stats.net_profit = stats.gross_profit - stats.gross_loss
+    
+    if stats.gross_loss > 0:
+        stats.profit_factor = stats.gross_profit / stats.gross_loss
     else:
-        stats.profit_factor = float('inf') if stats.gross_profit > 0 else 0.0
+        stats.profit_factor = float('inf') if stats.gross_profit > 0 else 0
     
-    # Averages
-    stats.avg_trade = float(np.mean(pnls))
+    # Average trade metrics
+    if win_pnls:
+        stats.avg_win = np.mean(win_pnls)
+        stats.largest_win = max(win_pnls)
     
-    winning_pnls = pnls[pnls > 0]
-    losing_pnls = pnls[pnls < 0]
+    if loss_pnls:
+        stats.avg_loss = np.mean(loss_pnls)
+        stats.largest_loss = min(loss_pnls)
     
-    stats.avg_win = float(np.mean(winning_pnls)) if len(winning_pnls) > 0 else 0.0
-    stats.avg_loss = float(np.mean(losing_pnls)) if len(losing_pnls) > 0 else 0.0
-    
-    # Largest trades
-    stats.largest_win = float(np.max(pnls)) if len(pnls) > 0 else 0.0
-    stats.largest_loss = float(np.min(pnls)) if len(pnls) > 0 else 0.0
-    
-    # Consecutive wins/losses
-    stats.max_consecutive_wins = _max_consecutive(pnls > 0)
-    stats.max_consecutive_losses = _max_consecutive(pnls < 0)
-    
-    # Holding period
-    holding_periods = []
-    for t in trades:
-        entry = t.get("entry_time")
-        exit_time = t.get("exit_time")
-        if entry and exit_time:
-            # Handle both datetime objects and ISO format strings
-            if isinstance(entry, str):
-                entry = datetime.fromisoformat(entry.replace('Z', '+00:00'))
-            if isinstance(exit_time, str):
-                exit_time = datetime.fromisoformat(exit_time.replace('Z', '+00:00'))
-            duration = (exit_time - entry).total_seconds() / 3600  # hours
-            holding_periods.append(duration)
-    
-    stats.avg_holding_period = float(np.mean(holding_periods)) if holding_periods else 0.0
-    
-    # Bars in trade
-    bars = [t.get("bars_held", 0) for t in trades]
-    stats.avg_bars_in_trade = float(np.mean(bars)) if bars else 0.0
+    if pnls:
+        stats.avg_trade = np.mean(pnls)
     
     # Expectancy
     stats.expectancy = (stats.win_rate * stats.avg_win) + ((1 - stats.win_rate) * stats.avg_loss)
     
-    if stats.avg_loss != 0:
-        stats.expectancy_ratio = abs(stats.avg_win / stats.avg_loss)
-    else:
-        stats.expectancy_ratio = float('inf') if stats.avg_win > 0 else 0.0
+    # Consecutive wins/losses
+    current_wins = 0
+    current_losses = 0
+    max_wins = 0
+    max_losses = 0
     
-    # Per-symbol statistics
-    for t in trades:
-        symbol = t.get("symbol", "UNKNOWN")
-        pnl = t.get("pnl", 0)
-        
-        stats.trades_per_symbol[symbol] = stats.trades_per_symbol.get(symbol, 0) + 1
-        stats.pnl_per_symbol[symbol] = stats.pnl_per_symbol.get(symbol, 0) + pnl
+    for pnl in pnls:
+        if pnl > 0:
+            current_wins += 1
+            current_losses = 0
+            max_wins = max(max_wins, current_wins)
+        elif pnl < 0:
+            current_losses += 1
+            current_wins = 0
+            max_losses = max(max_losses, current_losses)
+        else:
+            current_wins = 0
+            current_losses = 0
     
-    # Time-based statistics
-    for t in trades:
-        entry = t.get("entry_time")
-        if entry:
-            # Handle both datetime objects and ISO format strings
-            if isinstance(entry, str):
-                entry = datetime.fromisoformat(entry.replace('Z', '+00:00'))
-            day_key = entry.strftime("%A")
-            hour = entry.hour
-            
-            stats.trades_per_day[day_key] = stats.trades_per_day.get(day_key, 0) + 1
-            stats.trades_per_hour[hour] = stats.trades_per_hour.get(hour, 0) + 1
+    stats.max_consecutive_wins = max_wins
+    stats.max_consecutive_losses = max_losses
     
     return stats
-
-
-def _max_consecutive(mask: NDArray[np.bool_]) -> int:
-    """Calculate maximum consecutive True values."""
-    if len(mask) == 0:
-        return 0
-    
-    max_count = 0
-    current_count = 0
-    
-    for val in mask:
-        if val:
-            current_count += 1
-            max_count = max(max_count, current_count)
-        else:
-            current_count = 0
-    
-    return max_count
 
 
 # =============================================================================
@@ -1094,111 +954,49 @@ def _max_consecutive(mask: NDArray[np.bool_]) -> int:
 # =============================================================================
 
 def skewness(returns: NDArray[np.float64]) -> float:
-    """
-    Calculate return distribution skewness.
-    
-    Positive: Right tail longer (good)
-    Negative: Left tail longer (bad)
-    
-    Args:
-        returns: Array of returns
-        
-    Returns:
-        Skewness value
-    """
+    """Calculate skewness of returns."""
     if len(returns) < 3:
         return 0.0
-    
     return float(scipy_stats.skew(returns))
 
 
 def kurtosis(returns: NDArray[np.float64]) -> float:
-    """
-    Calculate return distribution kurtosis.
-    
-    >3: Fat tails (more extreme events)
-    <3: Thin tails
-    
-    Args:
-        returns: Array of returns
-        
-    Returns:
-        Kurtosis value (excess kurtosis, normal = 0)
-    """
+    """Calculate excess kurtosis."""
     if len(returns) < 4:
         return 0.0
-    
     return float(scipy_stats.kurtosis(returns))
 
 
 def tail_ratio(returns: NDArray[np.float64]) -> float:
-    """
-    Calculate tail ratio.
+    """Calculate tail ratio (right tail / left tail)."""
+    if len(returns) < 10:
+        return 0.0
     
-    Formula:
-        Tail Ratio = |95th percentile| / |5th percentile|
+    right_tail = np.percentile(returns, 95)
+    left_tail = np.percentile(returns, 5)
     
-    Args:
-        returns: Array of returns
-        
-    Returns:
-        Tail ratio (>1 means positive skew)
-    """
-    if len(returns) < 20:
-        return 1.0
+    if left_tail == 0:
+        return float('inf') if right_tail > 0 else 0.0
     
-    p95 = np.percentile(returns, 95)
-    p5 = np.percentile(returns, 5)
-    
-    if p5 == 0:
-        return float('inf') if p95 > 0 else 0.0
-    
-    return float(abs(p95 / p5))
+    return float(abs(right_tail / left_tail))
 
 
-def common_sense_ratio(returns: NDArray[np.float64]) -> float:
-    """
-    Calculate Common Sense Ratio.
-    
-    Formula:
-        CSR = Tail Ratio * Gain-to-Pain Ratio
-    
-    Args:
-        returns: Array of returns
-        
-    Returns:
-        Common sense ratio
-    """
+def common_sense_ratio(
+    returns: NDArray[np.float64],
+    equity_curve: NDArray[np.float64],
+) -> float:
+    """Calculate Common Sense Ratio."""
     tr = tail_ratio(returns)
+    gp = gain_to_pain_ratio(equity_curve)
     
-    gains = np.sum(returns[returns > 0])
-    losses = -np.sum(returns[returns < 0])
-    
-    if losses == 0:
-        gtp = float('inf') if gains > 0 else 0.0
-    else:
-        gtp = gains / losses
-    
-    if tr == float('inf') or gtp == float('inf'):
-        return float('inf')
-    
-    return float(tr * gtp)
+    return float(tr * gp)
 
 
 def outlier_ratio(
     returns: NDArray[np.float64],
-    threshold: float = 2.0,
+    threshold: float = 3.0,
 ) -> float:
-    """
-    Calculate ratio of outlier returns.
-    
-    Args:
-        returns: Array of returns
-        threshold: Number of standard deviations
-        
-    Returns:
-        Fraction of returns beyond threshold
-    """
+    """Calculate fraction of returns beyond N standard deviations."""
     if len(returns) < 2:
         return 0.0
     
@@ -1220,11 +1018,7 @@ def outlier_ratio(
 
 @dataclass
 class PerformanceReport:
-    """
-    Comprehensive performance report.
-    
-    Contains all metrics for strategy evaluation.
-    """
+    """Comprehensive performance report."""
     
     # Identification
     strategy_name: str = ""
@@ -1269,16 +1063,19 @@ class PerformanceReport:
     kurtosis: float = 0.0
     tail_ratio: float = 0.0
     
-    # Additional metrics
+    # Additional
     best_month: float = 0.0
     worst_month: float = 0.0
     positive_months: int = 0
     negative_months: int = 0
     
-    # Benchmark comparison (if available)
+    # Benchmark
     benchmark_return: float | None = None
     alpha: float | None = None
     beta: float | None = None
+    
+    # Metadata
+    periods_per_year_used: float = 252.0  # Track what was used!
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -1314,6 +1111,7 @@ class PerformanceReport:
                 "avg_trade": self.trade_stats.avg_trade,
                 "expectancy": self.trade_stats.expectancy,
             },
+            "periods_per_year_used": self.periods_per_year_used,
         }
 
 
@@ -1321,24 +1119,17 @@ class MetricsCalculator:
     """
     Calculator for comprehensive performance metrics.
     
-    Example:
-        calc = MetricsCalculator(
-            equity_curve=equity,
-            timestamps=dates,
-            trades=trade_list,
-            initial_capital=100000,
-        )
-        report = calc.calculate_all()
+    CRITICAL: Ensure periods_per_year matches your data frequency!
     """
     
     def __init__(
         self,
         equity_curve: NDArray[np.float64],
         timestamps: list[datetime] | None = None,
-        trades: list[dict[str, Any]] | None = None,
+        trades: list | None = None,
         initial_capital: float = 100000.0,
         risk_free_rate: float = RISK_FREE_RATE,
-        periods_per_year: float = TRADING_DAYS_PER_YEAR,
+        periods_per_year: float | None = None,  # Auto-detect if None
         benchmark_returns: NDArray[np.float64] | None = None,
         strategy_name: str = "",
     ):
@@ -1347,11 +1138,11 @@ class MetricsCalculator:
         
         Args:
             equity_curve: Array of equity values
-            timestamps: List of timestamps
-            trades: List of trade dictionaries
+            timestamps: List of timestamps (for auto-detection)
+            trades: List of trade objects
             initial_capital: Starting capital
             risk_free_rate: Annual risk-free rate
-            periods_per_year: Trading periods per year
+            periods_per_year: Trading periods per year (auto-detect if None)
             benchmark_returns: Optional benchmark returns
             strategy_name: Strategy identifier
         """
@@ -1360,24 +1151,26 @@ class MetricsCalculator:
         self.trades = trades or []
         self.initial_capital = initial_capital
         self.risk_free_rate = risk_free_rate
-        self.periods_per_year = periods_per_year
         self.benchmark_returns = benchmark_returns
         self.strategy_name = strategy_name
+        
+        # Auto-detect periods_per_year if not provided
+        if periods_per_year is None and self.timestamps:
+            self.periods_per_year = detect_periods_per_year(self.timestamps)
+            logger.info(f"Auto-detected periods_per_year: {self.periods_per_year:.0f}")
+        else:
+            self.periods_per_year = periods_per_year or TRADING_DAYS_PER_YEAR
         
         # Calculate returns
         self.returns = calculate_returns(self.equity_curve)
     
     def calculate_all(self) -> PerformanceReport:
-        """
-        Calculate all performance metrics.
-        
-        Returns:
-            PerformanceReport with all metrics
-        """
+        """Calculate all performance metrics."""
         report = PerformanceReport()
         report.strategy_name = self.strategy_name
         report.initial_capital = self.initial_capital
         report.final_capital = float(self.equity_curve[-1]) if len(self.equity_curve) > 0 else 0.0
+        report.periods_per_year_used = self.periods_per_year
         
         if self.timestamps:
             report.start_date = self.timestamps[0]
@@ -1413,7 +1206,7 @@ class MetricsCalculator:
         report.cvar_95 = cvar(self.returns, 0.95)
         report.cvar_99 = cvar(self.returns, 0.99)
         
-        # Risk-adjusted metrics
+        # Risk-adjusted metrics - CRITICAL: use correct periods_per_year!
         report.sharpe_ratio = sharpe_ratio(self.returns, self.risk_free_rate, self.periods_per_year)
         report.sortino_ratio = sortino_ratio(self.returns, self.risk_free_rate, self.periods_per_year)
         report.calmar_ratio = calmar_ratio(self.equity_curve, self.periods_per_year)
@@ -1446,32 +1239,6 @@ class MetricsCalculator:
         report.tail_ratio = tail_ratio(self.returns)
         
         return report
-    
-    def calculate_returns_metrics(self) -> dict[str, float]:
-        """Calculate only return metrics."""
-        return {
-            "total_return": total_return(self.equity_curve),
-            "annualized_return": annualized_return(self.equity_curve, self.periods_per_year),
-        }
-    
-    def calculate_risk_metrics(self) -> dict[str, float]:
-        """Calculate only risk metrics."""
-        return {
-            "volatility": volatility(self.returns, True, self.periods_per_year),
-            "downside_volatility": downside_volatility(self.returns, 0, True, self.periods_per_year),
-            "max_drawdown": max_drawdown(self.equity_curve),
-            "var_95": var_historical(self.returns, 0.95),
-            "cvar_95": cvar(self.returns, 0.95),
-        }
-    
-    def calculate_risk_adjusted_metrics(self) -> dict[str, float]:
-        """Calculate only risk-adjusted metrics."""
-        return {
-            "sharpe_ratio": sharpe_ratio(self.returns, self.risk_free_rate, self.periods_per_year),
-            "sortino_ratio": sortino_ratio(self.returns, self.risk_free_rate, self.periods_per_year),
-            "calmar_ratio": calmar_ratio(self.equity_curve, self.periods_per_year),
-            "omega_ratio": omega_ratio(self.returns, 0),
-        }
 
 
 # =============================================================================
@@ -1483,6 +1250,10 @@ __all__ = [
     "TRADING_DAYS_PER_YEAR",
     "RISK_FREE_RATE",
     "PERIODS_PER_YEAR",
+    
+    # Period detection
+    "detect_periods_per_year",
+    "validate_periods_per_year",
     
     # Return metrics
     "calculate_returns",

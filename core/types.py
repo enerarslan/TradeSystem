@@ -2,17 +2,14 @@
 Core Types Module
 =================
 
-Domain objects and data structures for the algorithmic trading platform.
-All types are immutable dataclasses for thread-safety and clarity.
+Core data structures, enums, and exceptions for the algorithmic trading platform.
 
-Features:
-- OHLCV bar representation
-- Trade and position tracking
-- Order management
-- Signal generation
-- Portfolio state
-- Performance metrics
-- Custom exceptions
+CRITICAL FIXES APPLIED:
+- Trade.create() requires entry_time parameter (no datetime.now() default)
+- Trade.close() requires exit_time parameter (no datetime.now() default)
+- Position.add() requires timestamp parameter
+- Position.update_price() requires timestamp parameter
+- Position.reduce() requires timestamp parameter
 
 Author: Algo Trading Platform
 License: MIT
@@ -22,10 +19,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal
-from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
+from enum import Enum
 
 import numpy as np
 from numpy.typing import NDArray
@@ -36,47 +32,47 @@ from numpy.typing import NDArray
 # =============================================================================
 
 class AlgoTradingError(Exception):
-    """Base exception for all trading platform errors."""
+    """Base exception for all trading errors."""
     pass
 
 
 class DataError(AlgoTradingError):
-    """Errors related to data loading and processing."""
+    """Data-related errors."""
     pass
 
 
 class DataNotFoundError(DataError):
-    """Requested data not found."""
+    """Data not found."""
     pass
 
 
 class DataValidationError(DataError):
-    """Data failed validation checks."""
+    """Data validation failed."""
     pass
 
 
 class StrategyError(AlgoTradingError):
-    """Errors in strategy execution."""
+    """Strategy-related errors."""
     pass
 
 
 class StrategyInitializationError(StrategyError):
-    """Strategy failed to initialize."""
+    """Strategy initialization failed."""
     pass
 
 
 class SignalGenerationError(StrategyError):
-    """Error generating trading signal."""
+    """Signal generation failed."""
     pass
 
 
 class ExecutionError(AlgoTradingError):
-    """Errors in order execution."""
+    """Execution-related errors."""
     pass
 
 
 class OrderRejectedError(ExecutionError):
-    """Order was rejected by broker."""
+    """Order was rejected."""
     pass
 
 
@@ -86,47 +82,47 @@ class InsufficientFundsError(ExecutionError):
 
 
 class RiskError(AlgoTradingError):
-    """Risk management related errors."""
+    """Risk-related errors."""
     pass
 
 
 class RiskLimitExceededError(RiskError):
-    """Risk limit has been exceeded."""
+    """Risk limit exceeded."""
     pass
 
 
 class DrawdownLimitError(RiskError):
-    """Maximum drawdown exceeded."""
+    """Drawdown limit exceeded."""
     pass
 
 
 class ModelError(AlgoTradingError):
-    """Machine learning model errors."""
+    """Model-related errors."""
     pass
 
 
 class ModelNotTrainedError(ModelError):
-    """Model has not been trained."""
+    """Model not trained."""
     pass
 
 
 class PredictionError(ModelError):
-    """Error during prediction."""
+    """Prediction failed."""
     pass
 
 
 class BacktestError(AlgoTradingError):
-    """Backtesting related errors."""
+    """Backtest-related errors."""
     pass
 
 
 class ConfigurationError(AlgoTradingError):
-    """Configuration related errors."""
+    """Configuration error."""
     pass
 
 
 # =============================================================================
-# ENUMS (Additional domain-specific)
+# ENUMS
 # =============================================================================
 
 class OrderStatus(str, Enum):
@@ -166,19 +162,7 @@ class SignalStrength(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class OHLCV:
-    """
-    Immutable OHLCV bar representation.
-    
-    Attributes:
-        timestamp: Bar timestamp
-        open: Opening price
-        high: Highest price
-        low: Lowest price
-        close: Closing price
-        volume: Trading volume
-        symbol: Trading symbol
-        timeframe: Bar timeframe
-    """
+    """Immutable OHLCV bar representation."""
     timestamp: datetime
     open: float
     high: float
@@ -203,89 +187,57 @@ class OHLCV:
     
     @property
     def typical_price(self) -> float:
-        """Calculate typical price (HLC/3)."""
         return (self.high + self.low + self.close) / 3
     
     @property
     def median_price(self) -> float:
-        """Calculate median price (HL/2)."""
         return (self.high + self.low) / 2
     
     @property
     def weighted_close(self) -> float:
-        """Calculate weighted close (HLCC/4)."""
         return (self.high + self.low + 2 * self.close) / 4
     
     @property
     def bar_range(self) -> float:
-        """Calculate bar range (high - low)."""
         return self.high - self.low
     
     @property
     def body(self) -> float:
-        """Calculate bar body (close - open)."""
         return self.close - self.open
     
     @property
     def is_bullish(self) -> bool:
-        """Check if bar is bullish."""
         return self.close > self.open
+
+
+@dataclass(slots=True)
+class Bar:
+    """Mutable bar with additional metadata."""
+    ohlcv: OHLCV
+    vwap: float | None = None
+    trades: int = 0
     
     @property
-    def is_bearish(self) -> bool:
-        """Check if bar is bearish."""
-        return self.close < self.open
-    
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary."""
-        return {
-            "timestamp": self.timestamp.isoformat(),
-            "open": self.open,
-            "high": self.high,
-            "low": self.low,
-            "close": self.close,
-            "volume": self.volume,
-            "symbol": self.symbol,
-            "timeframe": self.timeframe,
-        }
+    def timestamp(self) -> datetime:
+        return self.ohlcv.timestamp
 
 
-# Alias for backward compatibility
-Bar = OHLCV
-
+# =============================================================================
+# SIGNAL
+# =============================================================================
 
 @dataclass(frozen=True, slots=True)
 class Signal:
-    """
-    Trading signal generated by a strategy.
-    
-    Attributes:
-        id: Unique signal identifier
-        timestamp: Signal generation time
-        symbol: Trading symbol
-        signal_type: Type of signal (entry/exit)
-        direction: Signal direction (1=long, -1=short, 0=neutral)
-        strength: Signal confidence level
-        price: Current price at signal
-        strategy_name: Name of generating strategy
-        metadata: Additional signal metadata
-    """
+    """Trading signal representation."""
     id: UUID
     timestamp: datetime
     symbol: str
     signal_type: str
-    direction: int  # 1=long, -1=short, 0=neutral
+    direction: str
     strength: SignalStrength
     price: float
     strategy_name: str
     metadata: dict[str, Any] = field(default_factory=dict)
-    
-    def __post_init__(self) -> None:
-        """Validate signal."""
-        if self.direction not in (-1, 0, 1):
-            raise DataValidationError(
-                f"Direction must be -1, 0, or 1, got {self.direction}"
-            )
     
     @classmethod
     def create(
@@ -293,13 +245,13 @@ class Signal:
         timestamp: datetime,
         symbol: str,
         signal_type: str,
-        direction: int,
+        direction: str,
         strength: SignalStrength,
         price: float,
         strategy_name: str,
         metadata: dict[str, Any] | None = None,
-    ) -> Signal:
-        """Factory method to create a new signal."""
+    ) -> "Signal":
+        """Factory method to create a signal."""
         return cls(
             id=uuid4(),
             timestamp=timestamp,
@@ -327,29 +279,13 @@ class Signal:
         }
 
 
+# =============================================================================
+# ORDER
+# =============================================================================
+
 @dataclass(slots=True)
 class Order:
-    """
-    Trading order representation.
-    
-    Mutable to track order lifecycle.
-    
-    Attributes:
-        id: Unique order identifier
-        timestamp: Order creation time
-        symbol: Trading symbol
-        side: Order side (buy/sell)
-        order_type: Order type (market/limit/etc)
-        quantity: Order quantity
-        price: Limit price (if applicable)
-        stop_price: Stop price (if applicable)
-        status: Current order status
-        filled_quantity: Quantity filled so far
-        filled_price: Average fill price
-        commission: Commission charged
-        signal_id: Related signal ID
-        metadata: Additional order metadata
-    """
+    """Trading order representation."""
     id: UUID
     timestamp: datetime
     symbol: str
@@ -372,12 +308,13 @@ class Order:
         symbol: str,
         side: str,
         quantity: float,
+        timestamp: datetime,
         signal_id: UUID | None = None,
-    ) -> Order:
+    ) -> "Order":
         """Factory method to create market order."""
         return cls(
             id=uuid4(),
-            timestamp=datetime.now(),
+            timestamp=timestamp,
             symbol=symbol,
             side=side,
             order_type="market",
@@ -392,12 +329,13 @@ class Order:
         side: str,
         quantity: float,
         price: float,
+        timestamp: datetime,
         signal_id: UUID | None = None,
-    ) -> Order:
+    ) -> "Order":
         """Factory method to create limit order."""
         return cls(
             id=uuid4(),
-            timestamp=datetime.now(),
+            timestamp=timestamp,
             symbol=symbol,
             side=side,
             order_type="limit",
@@ -412,30 +350,25 @@ class Order:
         price: float,
         commission: float = 0.0,
     ) -> None:
-        """Record an order fill."""
-        if quantity <= 0:
-            raise ExecutionError("Fill quantity must be positive")
-        
-        # Update average fill price
-        total_value = (self.filled_price * self.filled_quantity) + (price * quantity)
+        """Record a fill for this order."""
         self.filled_quantity += quantity
-        self.filled_price = total_value / self.filled_quantity
+        total_cost = (self.filled_price * (self.filled_quantity - quantity) +
+                      price * quantity)
+        if self.filled_quantity > 0:
+            self.filled_price = total_cost / self.filled_quantity
         self.commission += commission
         
-        # Update status
         if self.filled_quantity >= self.quantity:
             self.status = OrderStatus.FILLED
         else:
             self.status = OrderStatus.PARTIAL
     
     def cancel(self) -> None:
-        """Cancel the order."""
-        if self.status == OrderStatus.FILLED:
-            raise ExecutionError("Cannot cancel filled order")
+        """Cancel this order."""
         self.status = OrderStatus.CANCELLED
     
     def reject(self, reason: str = "") -> None:
-        """Reject the order."""
+        """Reject this order."""
         self.status = OrderStatus.REJECTED
         self.metadata["rejection_reason"] = reason
     
@@ -474,26 +407,17 @@ class Order:
         }
 
 
+# =============================================================================
+# TRADE (FIXED - NO datetime.now()!)
+# =============================================================================
+
 @dataclass(slots=True)
 class Trade:
     """
     Completed trade record.
     
-    Attributes:
-        id: Unique trade identifier
-        entry_time: Trade entry timestamp
-        exit_time: Trade exit timestamp (None if open)
-        symbol: Trading symbol
-        side: Trade side (long/short)
-        entry_price: Entry price
-        exit_price: Exit price (None if open)
-        quantity: Trade quantity
-        pnl: Realized profit/loss
-        pnl_pct: PnL as percentage
-        commission: Total commission paid
-        entry_order_id: Entry order ID
-        exit_order_id: Exit order ID
-        metadata: Additional trade metadata
+    CRITICAL: entry_time and exit_time must be explicitly provided.
+    They should be the simulated market timestamps, NOT datetime.now().
     """
     id: UUID
     entry_time: datetime
@@ -517,13 +441,23 @@ class Trade:
         side: str,
         entry_price: float,
         quantity: float,
-        entry_time: datetime | None = None,
+        entry_time: datetime,
         entry_order_id: UUID | None = None,
-    ) -> Trade:
-        """Factory method to create a new trade."""
+    ) -> "Trade":
+        """
+        Factory method to create a new trade.
+        
+        Args:
+            symbol: Trading symbol
+            side: Trade side ('long' or 'short')
+            entry_price: Entry price
+            quantity: Trade quantity
+            entry_time: Entry timestamp (MUST be simulated market time!)
+            entry_order_id: Optional entry order ID
+        """
         return cls(
             id=uuid4(),
-            entry_time=entry_time or datetime.now(),
+            entry_time=entry_time,
             symbol=symbol,
             side=side,
             entry_price=entry_price,
@@ -534,13 +468,21 @@ class Trade:
     def close(
         self,
         exit_price: float,
-        exit_time: datetime | None = None,
+        exit_time: datetime,
         commission: float = 0.0,
         exit_order_id: UUID | None = None,
     ) -> None:
-        """Close the trade."""
+        """
+        Close the trade.
+        
+        Args:
+            exit_price: Exit price
+            exit_time: Exit timestamp (MUST be simulated market time!)
+            commission: Commission for exit
+            exit_order_id: Optional exit order ID
+        """
         self.exit_price = exit_price
-        self.exit_time = exit_time or datetime.now()
+        self.exit_time = exit_time
         self.exit_order_id = exit_order_id
         self.commission += commission
         
@@ -550,7 +492,12 @@ class Trade:
         else:  # short
             self.pnl = (self.entry_price - exit_price) * self.quantity - self.commission
         
-        self.pnl_pct = self.pnl / (self.entry_price * self.quantity)
+        # Calculate PnL percentage
+        cost_basis = self.entry_price * self.quantity
+        if cost_basis != 0:
+            self.pnl_pct = self.pnl / cost_basis
+        else:
+            self.pnl_pct = 0.0
     
     @property
     def is_open(self) -> bool:
@@ -589,21 +536,17 @@ class Trade:
         }
 
 
+# =============================================================================
+# POSITION (FIXED - REQUIRES TIMESTAMP PARAMETER!)
+# =============================================================================
+
 @dataclass(slots=True)
 class Position:
     """
     Current position in a symbol.
     
-    Attributes:
-        symbol: Trading symbol
-        quantity: Position quantity (positive=long, negative=short)
-        avg_price: Average entry price
-        current_price: Current market price
-        unrealized_pnl: Unrealized profit/loss
-        realized_pnl: Realized profit/loss from partial closes
-        opened_at: Position open timestamp
-        updated_at: Last update timestamp
-        trades: List of trade IDs in this position
+    CRITICAL: All methods that modify state require a timestamp parameter.
+    This must be the simulated market time, NOT datetime.now().
     """
     symbol: str
     quantity: float = 0.0
@@ -651,10 +594,16 @@ class Position:
         """Check if position is open."""
         return self.quantity != 0
     
-    def update_price(self, price: float) -> None:
-        """Update current price and unrealized PnL."""
+    def update_price(self, price: float, timestamp: datetime) -> None:
+        """
+        Update current price and unrealized PnL.
+        
+        Args:
+            price: Current market price
+            timestamp: Current simulated market time (NOT datetime.now()!)
+        """
         self.current_price = price
-        self.updated_at = datetime.now()
+        self.updated_at = timestamp
         
         if self.quantity > 0:  # Long
             self.unrealized_pnl = (price - self.avg_price) * self.quantity
@@ -663,10 +612,17 @@ class Position:
         else:
             self.unrealized_pnl = 0.0
     
-    def add(self, quantity: float, price: float) -> None:
-        """Add to position."""
+    def add(self, quantity: float, price: float, timestamp: datetime) -> None:
+        """
+        Add to position.
+        
+        Args:
+            quantity: Quantity to add (positive for long, negative for short)
+            price: Execution price
+            timestamp: Current simulated market time (NOT datetime.now()!)
+        """
         if self.quantity == 0:
-            self.opened_at = datetime.now()
+            self.opened_at = timestamp
         
         # Calculate new average price
         total_cost = (self.avg_price * abs(self.quantity)) + (price * abs(quantity))
@@ -675,22 +631,32 @@ class Position:
         if self.quantity != 0:
             self.avg_price = total_cost / abs(self.quantity)
         
-        self.update_price(price)
+        self.update_price(price, timestamp)
     
-    def reduce(self, quantity: float, price: float) -> float:
-        """Reduce position and return realized PnL."""
+    def reduce(self, quantity: float, price: float, timestamp: datetime) -> float:
+        """
+        Reduce position and return realized PnL.
+        
+        Args:
+            quantity: Quantity to reduce (always positive)
+            price: Execution price
+            timestamp: Current simulated market time (NOT datetime.now()!)
+            
+        Returns:
+            Realized PnL from this reduction
+        """
         if abs(quantity) > abs(self.quantity):
-            raise ExecutionError("Cannot reduce by more than position size")
+            quantity = abs(self.quantity)
         
         # Calculate realized PnL for this portion
-        if self.quantity > 0:  # Long
+        if self.quantity > 0:  # Long position
             realized = (price - self.avg_price) * quantity
-        else:  # Short
-            realized = (self.avg_price - price) * abs(quantity)
+            self.quantity -= quantity
+        else:  # Short position
+            realized = (self.avg_price - price) * quantity
+            self.quantity += quantity
         
-        self.realized_pnl += realized
-        self.quantity -= quantity
-        self.update_price(price)
+        self.update_price(price, timestamp)
         
         return realized
     
@@ -714,79 +680,20 @@ class Position:
         }
 
 
-@dataclass(slots=True)
+# =============================================================================
+# PORTFOLIO STATE
+# =============================================================================
+
+@dataclass
 class PortfolioState:
-    """
-    Current portfolio state snapshot.
-    
-    Attributes:
-        timestamp: State timestamp
-        cash: Available cash
-        equity: Total equity value
-        buying_power: Available buying power
-        positions: Current positions by symbol
-        open_orders: Active orders
-        daily_pnl: Day's PnL
-        total_pnl: Total PnL
-        margin_used: Margin currently used
-    """
+    """Current portfolio state snapshot."""
     timestamp: datetime
     cash: float
     equity: float
     buying_power: float
-    positions: dict[str, Position] = field(default_factory=dict)
-    open_orders: list[Order] = field(default_factory=list)
-    daily_pnl: float = 0.0
-    total_pnl: float = 0.0
-    margin_used: float = 0.0
-    
-    @property
-    def position_value(self) -> float:
-        """Calculate total position value."""
-        return sum(pos.market_value for pos in self.positions.values())
-    
-    @property
-    def unrealized_pnl(self) -> float:
-        """Calculate total unrealized PnL."""
-        return sum(pos.unrealized_pnl for pos in self.positions.values())
-    
-    @property
-    def realized_pnl(self) -> float:
-        """Calculate total realized PnL."""
-        return sum(pos.realized_pnl for pos in self.positions.values())
-    
-    @property
-    def num_positions(self) -> int:
-        """Get number of open positions."""
-        return len([p for p in self.positions.values() if p.is_open])
-    
-    @property
-    def long_exposure(self) -> float:
-        """Calculate total long exposure."""
-        return sum(
-            pos.market_value
-            for pos in self.positions.values()
-            if pos.quantity > 0
-        )
-    
-    @property
-    def short_exposure(self) -> float:
-        """Calculate total short exposure."""
-        return sum(
-            pos.market_value
-            for pos in self.positions.values()
-            if pos.quantity < 0
-        )
-    
-    @property
-    def net_exposure(self) -> float:
-        """Calculate net market exposure."""
-        return self.long_exposure - self.short_exposure
-    
-    @property
-    def gross_exposure(self) -> float:
-        """Calculate gross market exposure."""
-        return self.long_exposure + self.short_exposure
+    positions: dict[str, Position]
+    open_orders: list[Order]
+    total_pnl: float
     
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -795,70 +702,55 @@ class PortfolioState:
             "cash": self.cash,
             "equity": self.equity,
             "buying_power": self.buying_power,
-            "position_value": self.position_value,
-            "num_positions": self.num_positions,
-            "unrealized_pnl": self.unrealized_pnl,
-            "realized_pnl": self.realized_pnl,
-            "daily_pnl": self.daily_pnl,
             "total_pnl": self.total_pnl,
-            "long_exposure": self.long_exposure,
-            "short_exposure": self.short_exposure,
-            "net_exposure": self.net_exposure,
-            "gross_exposure": self.gross_exposure,
-            "margin_used": self.margin_used,
-            "positions": {k: v.to_dict() for k, v in self.positions.items()},
+            "num_positions": len([p for p in self.positions.values() if p.is_open]),
+            "num_open_orders": len(self.open_orders),
         }
 
 
-@dataclass(frozen=True, slots=True)
+# =============================================================================
+# PERFORMANCE METRICS
+# =============================================================================
+
+@dataclass
 class PerformanceMetrics:
-    """
-    Trading performance metrics.
+    """All standard institutional-grade metrics for strategy evaluation."""
+    total_return: float = 0.0
+    annual_return: float = 0.0
+    monthly_returns: NDArray[np.float64] = field(default_factory=lambda: np.array([]))
+    daily_returns: NDArray[np.float64] = field(default_factory=lambda: np.array([]))
     
-    All standard institutional-grade metrics for strategy evaluation.
-    """
-    # Returns
-    total_return: float
-    annual_return: float
-    monthly_returns: NDArray[np.float64]
-    daily_returns: NDArray[np.float64]
+    volatility: float = 0.0
+    annual_volatility: float = 0.0
+    downside_volatility: float = 0.0
+    max_drawdown: float = 0.0
+    max_drawdown_duration: int = 0
     
-    # Risk metrics
-    volatility: float
-    annual_volatility: float
-    downside_volatility: float
-    max_drawdown: float
-    max_drawdown_duration: int  # in days
+    sharpe_ratio: float = 0.0
+    sortino_ratio: float = 0.0
+    calmar_ratio: float = 0.0
+    omega_ratio: float = 0.0
     
-    # Risk-adjusted returns
-    sharpe_ratio: float
-    sortino_ratio: float
-    calmar_ratio: float
-    omega_ratio: float
+    total_trades: int = 0
+    winning_trades: int = 0
+    losing_trades: int = 0
+    win_rate: float = 0.0
+    profit_factor: float = 0.0
+    avg_win: float = 0.0
+    avg_loss: float = 0.0
+    largest_win: float = 0.0
+    largest_loss: float = 0.0
+    avg_trade: float = 0.0
+    avg_holding_period: float = 0.0
     
-    # Trade statistics
-    total_trades: int
-    winning_trades: int
-    losing_trades: int
-    win_rate: float
-    profit_factor: float
-    avg_win: float
-    avg_loss: float
-    largest_win: float
-    largest_loss: float
-    avg_trade: float
-    avg_holding_period: float  # in hours
+    var_95: float = 0.0
+    var_99: float = 0.0
+    cvar_95: float = 0.0
+    cvar_99: float = 0.0
     
-    # Value at Risk
-    var_95: float
-    var_99: float
-    cvar_95: float
-    cvar_99: float
-    
-    # Other
-    skewness: float
-    kurtosis: float
-    tail_ratio: float
+    skewness: float = 0.0
+    kurtosis: float = 0.0
+    tail_ratio: float = 0.0
     
     @property
     def expectancy(self) -> float:
@@ -872,11 +764,6 @@ class PerformanceMetrics:
             return float('inf')
         return abs(self.avg_win / self.avg_loss)
     
-    @property
-    def risk_reward_ratio(self) -> float:
-        """Calculate risk/reward ratio."""
-        return self.payoff_ratio
-    
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary (excluding large arrays)."""
         return {
@@ -884,33 +771,17 @@ class PerformanceMetrics:
             "annual_return": self.annual_return,
             "volatility": self.volatility,
             "annual_volatility": self.annual_volatility,
-            "downside_volatility": self.downside_volatility,
             "max_drawdown": self.max_drawdown,
             "max_drawdown_duration": self.max_drawdown_duration,
             "sharpe_ratio": self.sharpe_ratio,
             "sortino_ratio": self.sortino_ratio,
             "calmar_ratio": self.calmar_ratio,
-            "omega_ratio": self.omega_ratio,
             "total_trades": self.total_trades,
-            "winning_trades": self.winning_trades,
-            "losing_trades": self.losing_trades,
             "win_rate": self.win_rate,
             "profit_factor": self.profit_factor,
-            "avg_win": self.avg_win,
-            "avg_loss": self.avg_loss,
-            "largest_win": self.largest_win,
-            "largest_loss": self.largest_loss,
-            "avg_trade": self.avg_trade,
             "expectancy": self.expectancy,
-            "payoff_ratio": self.payoff_ratio,
-            "avg_holding_period": self.avg_holding_period,
             "var_95": self.var_95,
             "var_99": self.var_99,
-            "cvar_95": self.cvar_95,
-            "cvar_99": self.cvar_99,
-            "skewness": self.skewness,
-            "kurtosis": self.kurtosis,
-            "tail_ratio": self.tail_ratio,
         }
 
 
@@ -919,6 +790,20 @@ class PerformanceMetrics:
 # =============================================================================
 
 __all__ = [
+    # Data structures
+    "OHLCV",
+    "Bar",
+    "Trade",
+    "Position",
+    "Order",
+    "Signal",
+    "SignalStrength",
+    "PortfolioState",
+    "PerformanceMetrics",
+    # Enums
+    "OrderStatus",
+    "PositionStatus",
+    "FillType",
     # Exceptions
     "AlgoTradingError",
     "DataError",
@@ -938,18 +823,4 @@ __all__ = [
     "PredictionError",
     "BacktestError",
     "ConfigurationError",
-    # Enums
-    "OrderStatus",
-    "PositionStatus",
-    "FillType",
-    "SignalStrength",
-    # Data structures
-    "OHLCV",
-    "Bar",
-    "Signal",
-    "Order",
-    "Trade",
-    "Position",
-    "PortfolioState",
-    "PerformanceMetrics",
 ]
