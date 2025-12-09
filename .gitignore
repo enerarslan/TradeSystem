@@ -1,24 +1,417 @@
-# Python gereksiz dosyaları
+# =============================================================================
+# ALPHATRADE PLATFORM - COMPREHENSIVE .GITIGNORE
+# =============================================================================
+# JPMorgan-Level Trading System
+# Version: 3.0.0
+# =============================================================================
+
+# =============================================================================
+# PYTHON
+# =============================================================================
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*$py.class
 
-# Sanal ortam
-venv/
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# =============================================================================
+# ENVIRONMENT & SECRETS (CRITICAL - NEVER COMMIT!)
+# =============================================================================
 .env
+.env.local
+.env.development
+.env.staging
+.env.production
+.env.*.local
+*.env
 
-# Veritabanı dosyaları
-*.sqlite3
-*.log
+# API Keys and Credentials
+secrets/
+credentials/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
 
-# IDE ayarları
+# AWS
+.aws/
+aws_credentials
+
+# GCP
+service-account*.json
+*-credentials.json
+
+# =============================================================================
+# IDE & EDITORS
+# =============================================================================
+# Visual Studio Code
 .vscode/
-# Veri Deposu (Büyük CSV dosyaları yüklenmesin)
+*.code-workspace
+.history/
+
+# JetBrains (PyCharm, IntelliJ)
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*.swn
+*~
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =============================================================================
+# OPERATING SYSTEM
+# =============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# DATA FILES (Large files - Don't commit to git)
+# =============================================================================
+# Pickle files (anywhere in project)
+*.pkl
+*.pickle
+
+# JSON data files (large/generated)
+*.json
+!package.json
+!tsconfig.json
+!.prettierrc.json
+!.eslintrc.json
+!config/*.json
+!schemas/*.json
+
+# Market Data
 data/storage/*.csv
 data/storage/*.xlsx
-*.pkl
-*.json
+data/storage/*.parquet
+data/storage/*.feather
+data/processed/*.csv
+data/processed/*.parquet
+data/cache/*
 
+# Keep directory structure
+!data/storage/.gitkeep
+!data/processed/.gitkeep
+!data/cache/.gitkeep
 
-# Veritabanı dosyaları (Geçmiş işlemleri yükleme)
+# Historical Data
+historical_data/
+market_data/
+tick_data/
+
+# =============================================================================
+# MODEL ARTIFACTS (Large binary files)
+# =============================================================================
+# All model files (anywhere)
+*.joblib
+*.h5
+*.pt
+*.pth
+*.onnx
+*.pb
+*.bin
+*.model
+*.keras
+*.tf
+
+# Specific paths
+models/artifacts/
+models/checkpoints/
+models/saved/
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# TensorBoard
+runs/
+logs/tensorboard/
+
+# Keep directory structure
+!models/artifacts/.gitkeep
+
+# =============================================================================
+# LOGS & TEMPORARY FILES
+# =============================================================================
+logs/
+*.log
+*.log.*
+log_*.txt
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# =============================================================================
+# DATABASE FILES
+# =============================================================================
 *.db
+*.sqlite
 *.sqlite3
+*.sql.gz
+*.dump
+
+# Redis
+dump.rdb
+appendonly.aof
+
+# PostgreSQL
+*.pgdata
+
+# =============================================================================
+# DOCKER
+# =============================================================================
+# Docker volumes (if mounted locally)
+docker/data/
+docker/logs/
+docker/volumes/
+
+# Docker Compose overrides (local)
+docker-compose.override.yml
+docker-compose.local.yml
+
+# =============================================================================
+# BACKTESTING REPORTS (Generated files)
+# =============================================================================
+backtesting/reports/*.html
+backtesting/reports/*.pdf
+backtesting/reports/*.png
+backtesting/reports/*.json
+
+# Keep directory structure
+!backtesting/reports/.gitkeep
+
+# =============================================================================
+# VIRTUAL ENVIRONMENTS
+# =============================================================================
+venv/
+.venv/
+ENV/
+env/
+.env/
+env.bak/
+venv.bak/
+pythonenv*/
+.conda/
+conda-env/
+
+# =============================================================================
+# PROFILING & BENCHMARKS
+# =============================================================================
+*.prof
+*.lprof
+*.pstats
+profile_output/
+benchmark_results/
+
+# =============================================================================
+# SECURITY SCAN RESULTS
+# =============================================================================
+bandit_results/
+safety_results/
+security_reports/
+
+# =============================================================================
+# MISC
+# =============================================================================
+# Scratch files
+scratch/
+scratch.*
+test_scratch.*
+playground/
+
+# Local configuration
+local_config.py
+local_settings.py
+
+# Node modules (if any JS tools)
+node_modules/
+
+# Coverage reports
+.coverage
+htmlcov/
+
+# Pytest
+.pytest_cache/
+
+# Build outputs
+*.exe
+*.dll
+*.dylib
+
+# =============================================================================
+# EXCEPTIONS - Files to include even if matched above
+# =============================================================================
+# Include example/template files
+!.env.example
+!docker/.env.example
+!config/settings.example.py
+
+# Include gitkeep files
+!**/.gitkeep
+
+# Include important JSON configs
+!config/*.json
+!.prettierrc.json
+!.eslintrc.json

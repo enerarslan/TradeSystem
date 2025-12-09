@@ -1,33 +1,137 @@
 # =============================================================================
-# ALGO TRADING PLATFORM - DEVELOPMENT DEPENDENCIES
+# ALPHATRADE PLATFORM - COMPLETE DEPENDENCIES
 # =============================================================================
-# Install with: pip install -r requirements-dev.txt
-# Note: Install main requirements first: pip install -r requirements.txt
+# JPMorgan-Level Trading System
+# Version: 3.0.0
+#
+# Install: pip install -r requirements.txt
 # =============================================================================
 
 # =============================================================================
-# Testing
+# CORE DATA PROCESSING
 # =============================================================================
-pytest>=7.4.0
-pytest-asyncio>=0.23.0
-pytest-cov>=4.1.0
+numpy>=1.26.0                 # Numerical computing
+pandas>=2.1.0                 # Data manipulation
+polars>=0.20.0                # Fast DataFrame library
+scipy>=1.11.0                 # Scientific computing
+
+# =============================================================================
+# MACHINE LEARNING
+# =============================================================================
+scikit-learn>=1.3.0           # ML algorithms
+lightgbm>=4.2.0               # Gradient boosting
+xgboost>=2.0.0                # Gradient boosting
+optuna>=3.5.0                 # Hyperparameter optimization
+
+# Deep Learning (Optional - uncomment if needed)
+# tensorflow>=2.15.0
+# torch>=2.1.0
+# stable-baselines3>=2.2.0    # Reinforcement learning
+
+# =============================================================================
+# MLOPS & MODEL MANAGEMENT
+# =============================================================================
+mlflow>=2.9.0                 # Experiment tracking and model registry
+joblib>=1.3.0                 # Model serialization
+
+# =============================================================================
+# TECHNICAL ANALYSIS
+# =============================================================================
+ta>=0.11.0                    # Technical analysis library
+ta-lib>=0.4.28                # TA-Lib wrapper (requires system TA-Lib)
+
+# =============================================================================
+# MESSAGE BUS & STATE STORE
+# =============================================================================
+redis>=5.0.0                  # Redis client
+hiredis>=2.3.0                # Fast Redis parser
+pyzmq>=25.1.0                 # ZeroMQ bindings
+msgpack>=1.0.7                # Fast binary serialization
+
+# =============================================================================
+# DATABASE
+# =============================================================================
+asyncpg>=0.29.0               # Async PostgreSQL for TimescaleDB
+psycopg2-binary>=2.9.9        # PostgreSQL adapter
+sqlalchemy>=2.0.23            # SQL toolkit
+alembic>=1.13.0               # Database migrations
+
+# =============================================================================
+# API & WEB FRAMEWORK
+# =============================================================================
+fastapi>=0.108.0              # Modern async web framework
+uvicorn[standard]>=0.25.0     # ASGI server
+starlette>=0.32.0             # ASGI framework
+websockets>=12.0              # WebSocket support
+pydantic>=2.5.0               # Data validation
+pydantic-settings>=2.1.0      # Settings management
+
+# =============================================================================
+# HTTP CLIENTS
+# =============================================================================
+httpx>=0.26.0                 # Async HTTP client
+aiohttp>=3.9.0                # Async HTTP client/server
+requests>=2.31.0              # Sync HTTP client
+
+# =============================================================================
+# BROKER INTEGRATION
+# =============================================================================
+alpaca-py>=0.15.0             # Alpaca Markets API
+
+# =============================================================================
+# MONITORING & LOGGING
+# =============================================================================
+prometheus-client>=0.19.0     # Prometheus metrics
+opentelemetry-api>=1.22.0     # Distributed tracing
+opentelemetry-sdk>=1.22.0
+structlog>=23.3.0             # Structured logging
+rich>=13.7.0                  # Rich terminal output
+tqdm>=4.66.0                  # Progress bars
+
+# =============================================================================
+# CONFIGURATION & UTILITIES
+# =============================================================================
+python-dotenv>=1.0.0          # Environment variables
+PyYAML>=6.0.1                 # YAML parsing
+python-dateutil>=2.8.2        # Date utilities
+pytz>=2023.3                  # Timezone support
+croniter>=2.0.0               # Cron schedule parsing
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+cryptography>=41.0.7          # Encryption utilities
+
+# =============================================================================
+# DOCKER SDK
+# =============================================================================
+docker>=7.0.0                 # Docker SDK for Python
+
+# =============================================================================
+# TESTING
+# =============================================================================
+pytest>=7.4.0                 # Testing framework
+pytest-asyncio>=0.23.0        # Async test support
+pytest-cov>=4.1.0             # Coverage reporting
 pytest-xdist>=3.5.0           # Parallel test execution
 pytest-timeout>=2.2.0         # Test timeouts
 pytest-mock>=3.12.0           # Mocking utilities
+pytest-benchmark>=4.0.0       # Performance benchmarks
 hypothesis>=6.92.0            # Property-based testing
 freezegun>=1.2.0              # Time mocking
 faker>=22.0.0                 # Fake data generation
-xgboost>=2.0.0
-lightgbm>=4.0.0
 
 # =============================================================================
-# Code Quality
+# CODE QUALITY
 # =============================================================================
 ruff>=0.1.9                   # Fast Python linter
 black>=23.12.0                # Code formatter
 isort>=5.13.0                 # Import sorter
 mypy>=1.8.0                   # Static type checker
 pylint>=3.0.0                 # Additional linting
+bandit>=1.7.0                 # Security linter
+safety>=2.3.0                 # Dependency security check
+pre-commit>=3.6.0             # Git hooks
 
 # Type stubs
 types-requests>=2.31.0
@@ -35,120 +139,51 @@ types-python-dateutil>=2.8.0
 pandas-stubs>=2.1.0
 
 # =============================================================================
-# Documentation
+# DOCUMENTATION
 # =============================================================================
 mkdocs>=1.5.0                 # Documentation generator
 mkdocs-material>=9.5.0        # Material theme
 mkdocstrings>=0.24.0          # Auto-generate docs from docstrings
-mkdocstrings-python>=1.7.0    # Python handler for mkdocstrings
+mkdocstrings-python>=1.7.0    # Python handler
+sphinx>=7.2.0                 # Alternative docs
+sphinx-rtd-theme>=1.3.0       # ReadTheDocs theme
 
 # =============================================================================
-# Development Tools
+# DEVELOPMENT TOOLS
 # =============================================================================
-pre-commit>=3.6.0             # Git hooks
 ipython>=8.19.0               # Enhanced Python shell
 ipdb>=0.13.13                 # IPython debugger
-rich>=13.7.0                  # Rich terminal output
 
-# =============================================================================
-# Profiling & Debugging
-# =============================================================================
+# Profiling
 line-profiler>=4.1.0          # Line-by-line profiling
 memory-profiler>=0.61.0       # Memory profiling
 py-spy>=0.3.14                # Sampling profiler
 snakeviz>=2.2.0               # Profile visualization
 
 # =============================================================================
-# Jupyter/Notebooks
+# JUPYTER / NOTEBOOKS
 # =============================================================================
 jupyter>=1.0.0
 jupyterlab>=4.0.0
 ipywidgets>=8.1.0
 nbformat>=5.9.0
 nbconvert>=7.14.0
+notebook>=7.0.0
 
 # =============================================================================
-# Security
+# DATA VALIDATION
 # =============================================================================
-bandit>=1.7.0                 # Security linter
-safety>=2.3.0                 # Dependency security check
+jsonschema>=4.19.0            # JSON schema validation
 
 # =============================================================================
-# Build & Packaging
+# PERFORMANCE TESTING
+# =============================================================================
+locust>=2.16.0                # Load testing
+
+# =============================================================================
+# BUILD & PACKAGING
 # =============================================================================
 build>=1.0.0
 twine>=4.0.0
 wheel>=0.42.0
 setuptools>=69.0.0
-
-# Testing
-pytest>=7.4.0
-pytest-cov>=4.1.0
-pytest-asyncio>=0.21.0
-pytest-xdist>=3.3.0
-pytest-mock>=3.11.0
-pytest-benchmark>=4.0.0
-hypothesis>=6.82.0
-
-# Code Quality
-ruff>=0.1.0
-black>=23.9.0
-isort>=5.12.0
-mypy>=1.5.0
-pylint>=3.0.0
-
-# Type Stubs
-pandas-stubs>=2.0.0
-types-requests>=2.31.0
-types-python-dateutil>=2.8.0
-
-# Documentation
-sphinx>=7.2.0
-sphinx-rtd-theme>=1.3.0
-sphinx-autodoc-typehints>=1.24.0
-myst-parser>=2.0.0
-mkdocs>=1.5.0
-mkdocs-material>=9.4.0
-
-# Notebooks
-jupyter>=1.0.0
-jupyterlab>=4.0.0
-notebook>=7.0.0
-nbformat>=5.9.0
-ipywidgets>=8.1.0
-
-# Profiling & Debugging
-memory-profiler>=0.61.0
-line-profiler>=4.1.0
-py-spy>=0.3.14
-snakeviz>=2.2.0
-
-# Security
-bandit>=1.7.5
-safety>=2.3.5
-
-# Pre-commit
-pre-commit>=3.4.0
-
-# Build Tools
-build>=1.0.0
-twine>=4.0.0
-wheel>=0.41.0
-
-# Additional Development Tools
-ipython>=8.15.0
-rich>=13.5.0
-tqdm>=4.66.0
-python-dotenv>=1.0.0
-
-# API Testing
-httpx>=0.25.0
-requests>=2.31.0
-aiohttp>=3.8.0
-
-# Data Validation
-pydantic>=2.4.0
-jsonschema>=4.19.0
-
-# Performance Testing
-locust>=2.16.0
