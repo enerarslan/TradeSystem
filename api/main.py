@@ -1,18 +1,27 @@
 """
-FastAPI Application
-===================
+FastAPI Application - API Gateway
+=================================
 
-REST API for the algorithmic trading platform.
+REST API gateway for the distributed algorithmic trading platform.
 
 Provides endpoints for:
+- System health and service status
+- Live trading control
 - Backtesting
-- Model training and inference
+- Model training and inference (via MLflow)
 - Strategy management
-- Data access
+- Data access (via TimescaleDB)
 - Portfolio monitoring
 - Real-time WebSocket updates
 
-Author: Algo Trading Platform
+Architecture:
+- Connects to Redis message bus for service communication
+- Queries TimescaleDB for market data
+- Integrates with MLflow for model management
+- WebSocket for real-time updates
+
+Author: AlphaTrade Platform
+Version: 3.0.0
 License: MIT
 """
 
@@ -149,26 +158,71 @@ class DataRequest(BaseModel):
 # =============================================================================
 
 class AppState:
-    """Application state manager."""
-    
+    """Application state manager with distributed system integration."""
+
     def __init__(self):
         self.tasks: dict[str, dict[str, Any]] = {}
         self.models: dict[str, Any] = {}
         self.websockets: list[WebSocket] = []
         self.is_initialized: bool = False
-    
+
+        # Distributed system components
+        self.message_bus = None
+        self.state_store = None
+        self.service_registry = None
+        self.pool_manager = None
+
     async def initialize(self):
-        """Initialize application resources."""
+        """Initialize application resources and distributed connections."""
+        import os
+
         if not self.is_initialized:
             # Create necessary directories
             Path("models/artifacts").mkdir(parents=True, exist_ok=True)
             Path("data/storage").mkdir(parents=True, exist_ok=True)
             Path("backtesting/reports").mkdir(parents=True, exist_ok=True)
-            
+
+            # Connect to distributed infrastructure
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+            db_dsn = os.getenv("DATABASE_URL", "postgresql://alphatrade:alphatrade@localhost:5432/market_data")
+
+            try:
+                from infrastructure.message_bus import RedisMessageBus
+                self.message_bus = RedisMessageBus(redis_url)
+                await self.message_bus.connect()
+            except Exception as e:
+                print(f"Warning: Could not connect to message bus: {e}")
+
+            try:
+                from infrastructure.state_store import RedisStateStore
+                self.state_store = RedisStateStore(redis_url)
+                await self.state_store.connect()
+            except Exception as e:
+                print(f"Warning: Could not connect to state store: {e}")
+
+            try:
+                from infrastructure.service_registry import ServiceRegistry
+                self.service_registry = ServiceRegistry(redis_url)
+                await self.service_registry.connect()
+            except Exception as e:
+                print(f"Warning: Could not connect to service registry: {e}")
+
+            try:
+                from infrastructure.async_pool import PoolManager, PoolConfig
+                pool_config = PoolConfig(min_size=2, max_size=10)
+                self.pool_manager = PoolManager(
+                    redis_url=redis_url,
+                    database_dsn=db_dsn,
+                    pool_config=pool_config,
+                )
+                await self.pool_manager.initialize()
+            except Exception as e:
+                print(f"Warning: Could not initialize connection pools: {e}")
+
             self.is_initialized = True
-    
+
     async def shutdown(self):
-        """Cleanup resources."""
+        """Cleanup resources and close distributed connections."""
         # Close all websocket connections
         for ws in self.websockets:
             try:
@@ -176,6 +230,16 @@ class AppState:
             except Exception:
                 pass
         self.websockets.clear()
+
+        # Close distributed connections
+        if self.pool_manager:
+            await self.pool_manager.close()
+        if self.service_registry:
+            await self.service_registry.disconnect()
+        if self.state_store:
+            await self.state_store.disconnect()
+        if self.message_bus:
+            await self.message_bus.disconnect()
 
 
 state = AppState()
@@ -245,13 +309,135 @@ async def health_check():
 @app.get("/status", tags=["Health"])
 async def system_status():
     """Get system status."""
-    return {
+    status = {
         "status": "operational",
         "initialized": state.is_initialized,
         "active_tasks": len([t for t in state.tasks.values() if t["status"] == "running"]),
         "loaded_models": len(state.models),
         "websocket_connections": len(state.websockets),
+        "infrastructure": {
+            "message_bus": state.message_bus is not None and state.message_bus.is_connected,
+            "state_store": state.state_store is not None and state.state_store.is_connected,
+            "service_registry": state.service_registry is not None and state.service_registry.is_connected,
+            "pool_manager": state.pool_manager is not None and state.pool_manager.is_initialized,
+        },
     }
+    return status
+
+
+# =============================================================================
+# DISTRIBUTED SYSTEM ENDPOINTS
+# =============================================================================
+
+@app.get("/services", tags=["System"])
+async def list_services():
+    """List all registered services."""
+    if not state.service_registry:
+        return {"services": [], "error": "Service registry not connected"}
+
+    try:
+        services = await state.service_registry.discover()
+        return {
+            "services": [
+                {
+                    "name": s.name,
+                    "type": s.service_type.value,
+                    "status": s.status.value,
+                    "host": s.host,
+                    "port": s.port,
+                    "version": s.version,
+                    "healthy": s.is_healthy,
+                    "last_heartbeat": s.last_heartbeat,
+                }
+                for s in services
+            ]
+        }
+    except Exception as e:
+        return {"services": [], "error": str(e)}
+
+
+@app.get("/services/{service_name}", tags=["System"])
+async def get_service(service_name: str):
+    """Get service details."""
+    if not state.service_registry:
+        raise HTTPException(status_code=503, detail="Service registry not connected")
+
+    service = await state.service_registry.get_service(service_name)
+    if not service:
+        raise HTTPException(status_code=404, detail="Service not found")
+
+    return {
+        "name": service.name,
+        "type": service.service_type.value,
+        "status": service.status.value,
+        "host": service.host,
+        "port": service.port,
+        "version": service.version,
+        "healthy": service.is_healthy,
+        "alive": service.is_alive,
+        "last_heartbeat": service.last_heartbeat,
+        "registered_at": service.registered_at,
+        "metadata": service.metadata,
+    }
+
+
+@app.get("/positions", tags=["Trading"])
+async def get_positions():
+    """Get current positions from state store."""
+    if not state.state_store:
+        return {"positions": {}, "error": "State store not connected"}
+
+    try:
+        positions = await state.state_store.get_all_positions()
+        return {"positions": positions}
+    except Exception as e:
+        return {"positions": {}, "error": str(e)}
+
+
+@app.get("/risk", tags=["Trading"])
+async def get_risk_state():
+    """Get current risk state."""
+    if not state.state_store:
+        return {"risk": None, "error": "State store not connected"}
+
+    try:
+        risk = await state.state_store.get_risk_state()
+        return {"risk": risk.__dict__ if risk else None}
+    except Exception as e:
+        return {"risk": None, "error": str(e)}
+
+
+@app.post("/killswitch", tags=["Trading"])
+async def trigger_killswitch():
+    """Trigger emergency kill switch."""
+    if not state.message_bus:
+        raise HTTPException(status_code=503, detail="Message bus not connected")
+
+    try:
+        from infrastructure.message_bus import Message, MessageType, Channel
+
+        kill_message = Message(
+            type=MessageType.KILL_SWITCH,
+            data={"reason": "API manual trigger", "triggered_by": "api"},
+        )
+        await state.message_bus.publish(Channel.SYSTEM, kill_message)
+        return {"status": "kill_switch_triggered", "message": "Emergency shutdown initiated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/pools", tags=["System"])
+async def get_pool_metrics():
+    """Get connection pool metrics."""
+    if not state.pool_manager:
+        return {"metrics": None, "error": "Pool manager not initialized"}
+
+    try:
+        metrics = state.pool_manager.get_metrics()
+        health = await state.pool_manager.health_check()
+        return {"metrics": metrics, "health": health}
+    except Exception as e:
+        return {"metrics": None, "error": str(e)}
 
 
 # =============================================================================
