@@ -124,7 +124,7 @@ cython_debug/
 .env.production
 .env.*.local
 *.env
-
+.venv-1 
 # API Keys and Credentials
 secrets/
 credentials/
