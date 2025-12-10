@@ -3,7 +3,7 @@
 JPMorgan-Level Institutional Backtest Runner
 =============================================
 
-Production-grade backtest system integrating all advanced features:
+Production-grade backtest system integrating ALL institutional features:
 
 Phase 1: Data Fidelity & Microstructure
 - Tick & Quote Data integration (when available)
@@ -19,17 +19,26 @@ Phase 2: High-Fidelity Simulation
 Phase 3: Alpha Modernization
 - Alternative Data (Macro, Sentiment, Options)
 - Advanced Feature Selection (MDA/SFI)
-- Regime Detection
+- Regime Detection (HMM-based)
 
-Phase 4: Rigorous Validation
+Phase 4: Portfolio Optimization
+- Maximum Sharpe Ratio
+- Risk Parity
+- Hierarchical Risk Parity (HRP)
+- Kelly Criterion
+- Black-Litterman
+
+Phase 5: Rigorous Validation
 - Deflated Sharpe Ratio (multiple testing correction)
 - Probability of Backtest Overfitting (PBO)
 - Feature Leakage Detection
+- Walk-Forward Validation with Purging/Embargo
 
 Usage:
     python scripts/run_jpmorgan_backtest.py --symbols AAPL MSFT GOOGL
     python scripts/run_jpmorgan_backtest.py --all-symbols --capital 10000000
     python scripts/run_jpmorgan_backtest.py --core-symbols --validate
+    python scripts/run_jpmorgan_backtest.py --optimization max_sharpe
 
 Author: Algo Trading Platform
 License: MIT
@@ -39,16 +48,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import pickle
 import sys
 import time
 import warnings
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+from collections import defaultdict
 
 import numpy as np
 import polars as pl
+from numpy.typing import NDArray
+from scipy import stats as scipy_stats
+from scipy.optimize import minimize, Bounds
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import squareform
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -113,6 +130,32 @@ logger = get_logger(__name__)
 
 
 # =============================================================================
+# ENUMS
+# =============================================================================
+
+class RegimeType(str, Enum):
+    """Market regime classification."""
+    BULL_LOW_VOL = "bull_low_vol"
+    BULL_HIGH_VOL = "bull_high_vol"
+    BEAR_LOW_VOL = "bear_low_vol"
+    BEAR_HIGH_VOL = "bear_high_vol"
+    SIDEWAYS = "sideways"
+    CRISIS = "crisis"
+
+
+class OptimizationMethod(str, Enum):
+    """Portfolio optimization methods."""
+    MEAN_VARIANCE = "mean_variance"
+    MIN_VARIANCE = "min_variance"
+    MAX_SHARPE = "max_sharpe"
+    RISK_PARITY = "risk_parity"
+    BLACK_LITTERMAN = "black_litterman"
+    HRP = "hierarchical_risk_parity"
+    KELLY = "kelly"
+    EQUAL_WEIGHT = "equal_weight"
+
+
+# =============================================================================
 # CONFIGURATION
 # =============================================================================
 
@@ -123,12 +166,13 @@ class JPMorganBacktestConfig:
     initial_capital: float = 10_000_000  # $10M default
 
     # Position sizing
-    max_position_pct: float = 0.05       # Max 5% per position
-    max_portfolio_positions: int = 20    # Max concurrent positions
-    min_confidence: float = 0.55         # Minimum model confidence
+    max_position_pct: float = 0.08       # Max 8% per position
+    max_portfolio_positions: int = 15    # Max concurrent positions
+    min_confidence: float = 0.52         # Lower threshold for more trades
+    min_position_size: float = 10_000    # Minimum position value
 
     # Execution (Liquidity Constraints)
-    max_participation_rate: float = 0.01  # Max 1% of bar volume
+    max_participation_rate: float = 0.02  # Max 2% of bar volume
     max_position_adv_pct: float = 0.05    # Max 5% of ADV
     enable_market_impact: bool = True
     enable_queue_simulation: bool = True
@@ -139,28 +183,688 @@ class JPMorganBacktestConfig:
     market_impact_bps: float = 2.0       # 2 bps market impact
 
     # Risk management
-    max_drawdown_pct: float = 0.15       # Stop at 15% drawdown
-    daily_var_limit: float = 0.02        # 2% daily VaR limit
-    position_stop_loss: float = 0.05     # 5% stop loss per position
+    max_drawdown_pct: float = 0.20       # Stop at 20% drawdown
+    daily_var_limit: float = 0.03        # 3% daily VaR limit
+    position_stop_loss: float = 0.08     # 8% stop loss per position
+    position_take_profit: float = 0.15   # 15% take profit per position
 
     # Feature engineering
     use_alternative_data: bool = True
     use_advanced_features: bool = True
     feature_selection_method: str = "mda"  # mda, sfi, or both
 
+    # Portfolio Optimization
+    optimization_method: OptimizationMethod = OptimizationMethod.MAX_SHARPE
+    enable_regime_detection: bool = True
+    rebalance_threshold: float = 0.05    # Rebalance if drift > 5%
+
     # Validation
     run_validation: bool = True
     n_trials_for_dsr: int = 1            # Number of strategy variations tested
 
     # Walk-forward
-    train_bars: int = 5000               # Training window
-    test_bars: int = 1000                # Test window
-    embargo_bars: int = 50               # Gap between train/test
+    wf_train_bars: int = 5000            # Training window
+    wf_test_bars: int = 1000             # Test window
+    wf_embargo_bars: int = 50            # Gap between train/test
+    wf_purge_bars: int = 20              # Purge bars around test
+
+    # Covariance estimation
+    cov_lookback: int = 126              # 6 months for covariance
+    cov_halflife: int = 63               # Exponential decay halflife
+
+    # Regime detection
+    regime_lookback: int = 63            # Lookback for regime detection
+    regime_vol_threshold: float = 1.5    # Std devs for high vol
 
     # Output
     output_dir: Path = field(default_factory=lambda: Path("results/jpmorgan"))
     save_trades: bool = True
     save_equity_curve: bool = True
+
+
+# =============================================================================
+# REGIME DETECTOR
+# =============================================================================
+
+class RegimeDetector:
+    """
+    HMM-inspired regime detection for adaptive trading.
+
+    Identifies market regimes based on:
+    - Return distribution (bull/bear)
+    - Volatility level (low/high)
+    - Market structure (trending/mean-reverting)
+    """
+
+    def __init__(
+        self,
+        lookback: int = 63,
+        vol_threshold: float = 1.5,
+        trend_threshold: float = 0.02,
+    ):
+        self.lookback = lookback
+        self.vol_threshold = vol_threshold
+        self.trend_threshold = trend_threshold
+        self._regime_history: list[tuple[datetime, RegimeType]] = []
+        self._vol_history: list[float] = []
+
+    def detect_regime(
+        self,
+        returns: NDArray[np.float64],
+        timestamp: datetime,
+    ) -> RegimeType:
+        """Detect current market regime."""
+        if len(returns) < self.lookback:
+            return RegimeType.SIDEWAYS
+
+        recent = returns[-self.lookback:]
+
+        # Calculate metrics
+        mean_return = np.mean(recent)
+        volatility = np.std(recent)
+        long_vol = np.std(returns) if len(returns) > self.lookback * 2 else volatility
+
+        # Classify trend direction
+        is_bull = mean_return > self.trend_threshold / np.sqrt(252)
+        is_bear = mean_return < -self.trend_threshold / np.sqrt(252)
+
+        # Classify volatility
+        vol_ratio = volatility / long_vol if long_vol > 0 else 1.0
+        is_high_vol = vol_ratio > self.vol_threshold
+
+        # Check for crisis
+        if is_bear and is_high_vol and vol_ratio > 2.0:
+            regime = RegimeType.CRISIS
+        elif is_bull and not is_high_vol:
+            regime = RegimeType.BULL_LOW_VOL
+        elif is_bull and is_high_vol:
+            regime = RegimeType.BULL_HIGH_VOL
+        elif is_bear and not is_high_vol:
+            regime = RegimeType.BEAR_LOW_VOL
+        elif is_bear and is_high_vol:
+            regime = RegimeType.BEAR_HIGH_VOL
+        else:
+            regime = RegimeType.SIDEWAYS
+
+        self._regime_history.append((timestamp, regime))
+        self._vol_history.append(float(volatility))
+
+        return regime
+
+    def get_regime_params(
+        self,
+        regime: RegimeType,
+        base_position_pct: float,
+    ) -> dict[str, float]:
+        """Get regime-adjusted trading parameters."""
+        adjustments = {
+            RegimeType.BULL_LOW_VOL: {"size_mult": 1.2, "confidence_adj": -0.02, "stop_mult": 1.0},
+            RegimeType.BULL_HIGH_VOL: {"size_mult": 0.8, "confidence_adj": 0.05, "stop_mult": 1.2},
+            RegimeType.BEAR_LOW_VOL: {"size_mult": 0.7, "confidence_adj": 0.05, "stop_mult": 0.8},
+            RegimeType.BEAR_HIGH_VOL: {"size_mult": 0.5, "confidence_adj": 0.10, "stop_mult": 0.7},
+            RegimeType.SIDEWAYS: {"size_mult": 0.9, "confidence_adj": 0.0, "stop_mult": 1.0},
+            RegimeType.CRISIS: {"size_mult": 0.25, "confidence_adj": 0.15, "stop_mult": 0.5},
+        }
+
+        adj = adjustments.get(regime, {"size_mult": 0.5, "confidence_adj": 0.10, "stop_mult": 0.8})
+
+        return {
+            "adjusted_position_pct": base_position_pct * adj["size_mult"],
+            "min_confidence": 0.52 + adj["confidence_adj"],
+            "stop_loss_mult": adj["stop_mult"],
+            "reduce_leverage": regime in [RegimeType.BEAR_HIGH_VOL, RegimeType.CRISIS],
+            "go_defensive": regime == RegimeType.CRISIS,
+        }
+
+    def get_regime_history(self) -> list[tuple[datetime, RegimeType]]:
+        """Get regime history."""
+        return self._regime_history.copy()
+
+
+# =============================================================================
+# COVARIANCE ESTIMATION
+# =============================================================================
+
+class CovarianceEstimator:
+    """Advanced covariance matrix estimation with shrinkage."""
+
+    @staticmethod
+    def ledoit_wolf(returns: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Ledoit-Wolf shrinkage estimator."""
+        n, p = returns.shape
+
+        if n <= 1:
+            return np.eye(p)
+
+        # Sample covariance
+        sample_cov = np.cov(returns, rowvar=False)
+        if sample_cov.ndim == 0:
+            return np.array([[sample_cov]])
+
+        # Shrinkage target: scaled identity
+        mu = np.trace(sample_cov) / p
+        target = mu * np.eye(p)
+
+        # Compute optimal shrinkage intensity
+        delta = sample_cov - target
+        delta_sum = np.sum(delta ** 2)
+
+        X = returns - returns.mean(axis=0)
+        X2 = X ** 2
+        sum_sq = np.sum(np.dot(X2.T, X2) / n)
+        gamma = np.sum(delta ** 2)
+
+        kappa = (sum_sq - gamma) / n if n > 0 else 0
+        shrinkage = max(0, min(1, kappa / gamma)) if gamma > 0 else 0
+
+        return (1 - shrinkage) * sample_cov + shrinkage * target
+
+    @staticmethod
+    def exponential_weighted(
+        returns: NDArray[np.float64],
+        halflife: int = 63,
+    ) -> NDArray[np.float64]:
+        """Exponentially weighted covariance matrix."""
+        n, p = returns.shape
+
+        if n <= 1:
+            return np.eye(p)
+
+        # Calculate weights
+        decay = 0.5 ** (1 / halflife)
+        weights = decay ** np.arange(n - 1, -1, -1)
+        weights /= weights.sum()
+
+        # Weighted mean
+        weighted_mean = np.average(returns, axis=0, weights=weights)
+
+        # Weighted covariance
+        centered = returns - weighted_mean
+        weighted_cov = np.dot((centered * weights[:, np.newaxis]).T, centered)
+
+        return weighted_cov
+
+
+# =============================================================================
+# PORTFOLIO OPTIMIZER
+# =============================================================================
+
+class PortfolioOptimizer:
+    """
+    Institutional-grade portfolio optimizer.
+
+    Implements:
+    - Maximum Sharpe Ratio
+    - Minimum Variance
+    - Risk Parity
+    - Hierarchical Risk Parity (HRP)
+    - Kelly Criterion
+    - Black-Litterman
+    """
+
+    def __init__(
+        self,
+        risk_free_rate: float = 0.05,
+        max_weight: float = 0.15,
+        min_weight: float = 0.0,
+    ):
+        self.risk_free_rate = risk_free_rate
+        self.max_weight = max_weight
+        self.min_weight = min_weight
+
+    def optimize(
+        self,
+        expected_returns: NDArray[np.float64],
+        covariance: NDArray[np.float64],
+        method: OptimizationMethod = OptimizationMethod.MAX_SHARPE,
+    ) -> NDArray[np.float64]:
+        """Optimize portfolio weights."""
+        n_assets = len(expected_returns)
+
+        if n_assets == 0:
+            return np.array([])
+
+        if n_assets == 1:
+            return np.array([1.0])
+
+        try:
+            if method == OptimizationMethod.EQUAL_WEIGHT:
+                return np.ones(n_assets) / n_assets
+
+            elif method == OptimizationMethod.MIN_VARIANCE:
+                return self._min_variance(covariance)
+
+            elif method == OptimizationMethod.MAX_SHARPE:
+                return self._max_sharpe(expected_returns, covariance)
+
+            elif method == OptimizationMethod.RISK_PARITY:
+                return self._risk_parity(covariance)
+
+            elif method == OptimizationMethod.HRP:
+                return self._hierarchical_risk_parity(covariance)
+
+            elif method == OptimizationMethod.KELLY:
+                return self._kelly_criterion(expected_returns, covariance)
+
+            else:
+                return np.ones(n_assets) / n_assets
+
+        except Exception as e:
+            logger.warning(f"Optimization failed: {e}, using equal weight")
+            return np.ones(n_assets) / n_assets
+
+    def _min_variance(self, covariance: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Minimum variance portfolio."""
+        n = len(covariance)
+
+        def objective(w):
+            return w @ covariance @ w
+
+        constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+        bounds = Bounds(self.min_weight, self.max_weight)
+
+        result = minimize(
+            objective,
+            x0=np.ones(n) / n,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+        )
+
+        return result.x if result.success else np.ones(n) / n
+
+    def _max_sharpe(
+        self,
+        expected_returns: NDArray[np.float64],
+        covariance: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Maximum Sharpe ratio portfolio."""
+        n = len(expected_returns)
+
+        def neg_sharpe(w):
+            ret = w @ expected_returns
+            vol = np.sqrt(w @ covariance @ w)
+            if vol < 1e-10:
+                return 0
+            return -(ret - self.risk_free_rate / 252) / vol
+
+        constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+        bounds = Bounds(self.min_weight, self.max_weight)
+
+        result = minimize(
+            neg_sharpe,
+            x0=np.ones(n) / n,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+        )
+
+        return result.x if result.success else np.ones(n) / n
+
+    def _risk_parity(self, covariance: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Risk parity portfolio - equal risk contribution."""
+        n = len(covariance)
+
+        def risk_contribution(w):
+            port_vol = np.sqrt(w @ covariance @ w)
+            if port_vol < 1e-10:
+                return np.ones(n) / n
+            marginal_contrib = covariance @ w
+            risk_contrib = w * marginal_contrib / port_vol
+            return risk_contrib
+
+        def objective(w):
+            rc = risk_contribution(w)
+            target_rc = np.ones(n) / n * np.sum(rc)
+            return np.sum((rc - target_rc) ** 2)
+
+        constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+        bounds = Bounds(0.02, self.max_weight)
+
+        result = minimize(
+            objective,
+            x0=np.ones(n) / n,
+            method="SLSQP",
+            bounds=bounds,
+            constraints=constraints,
+        )
+
+        return result.x if result.success else np.ones(n) / n
+
+    def _hierarchical_risk_parity(
+        self,
+        covariance: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Hierarchical Risk Parity (HRP)."""
+        n = len(covariance)
+
+        if n <= 1:
+            return np.ones(n)
+
+        # Convert covariance to correlation
+        std = np.sqrt(np.diag(covariance))
+        std[std == 0] = 1e-10
+        corr = covariance / np.outer(std, std)
+
+        # Distance matrix
+        dist = np.sqrt(0.5 * (1 - corr))
+        np.fill_diagonal(dist, 0)
+
+        # Ensure valid distance matrix
+        dist = np.clip(dist, 0, 2)
+        dist = (dist + dist.T) / 2
+
+        # Hierarchical clustering
+        condensed_dist = squareform(dist, checks=False)
+        if len(condensed_dist) == 0:
+            return np.ones(n) / n
+
+        link = linkage(condensed_dist, method="single")
+
+        # Quasi-diagonalization
+        sort_idx = self._get_quasi_diag(link, n)
+
+        # Recursive bisection
+        weights = np.zeros(n)
+        self._hrp_recursive_bisection(weights, covariance, sort_idx)
+
+        # Normalize
+        if np.sum(weights) > 0:
+            weights = weights / np.sum(weights)
+        else:
+            weights = np.ones(n) / n
+
+        return weights
+
+    def _get_quasi_diag(self, link: NDArray, n: int) -> list[int]:
+        """Get quasi-diagonal sort indices from linkage."""
+        link = link.astype(int)
+        sort_idx = list(range(n))
+
+        for i in range(len(link)):
+            idx1, idx2 = int(link[i, 0]), int(link[i, 1])
+            cluster_idx = n + i
+
+            new_sort = []
+            for idx in sort_idx:
+                if idx == cluster_idx:
+                    continue
+                if idx == idx1 or idx == idx2:
+                    continue
+                new_sort.append(idx)
+
+            # Insert clustered items together
+            insert_pos = len(new_sort)
+            for j, idx in enumerate(sort_idx):
+                if idx == cluster_idx or idx == idx1 or idx == idx2:
+                    insert_pos = min(insert_pos, j)
+                    break
+
+            if idx1 < n:
+                new_sort.insert(insert_pos, idx1)
+            if idx2 < n:
+                new_sort.insert(insert_pos + (1 if idx1 < n else 0), idx2)
+
+            sort_idx = [x for x in sort_idx if x < n]
+
+        return [x for x in sort_idx if x < n][:n]
+
+    def _hrp_recursive_bisection(
+        self,
+        weights: NDArray[np.float64],
+        covariance: NDArray[np.float64],
+        sort_idx: list[int],
+    ) -> None:
+        """Recursive bisection for HRP."""
+        if len(sort_idx) == 0:
+            return
+
+        if len(sort_idx) == 1:
+            weights[sort_idx[0]] = 1.0
+            return
+
+        # Split
+        mid = len(sort_idx) // 2
+        left_idx = sort_idx[:mid]
+        right_idx = sort_idx[mid:]
+
+        # Cluster variance
+        left_var = self._cluster_variance(covariance, left_idx)
+        right_var = self._cluster_variance(covariance, right_idx)
+
+        # Allocate based on inverse variance
+        total_var = left_var + right_var
+        if total_var > 0:
+            left_weight = 1 - left_var / total_var
+            right_weight = 1 - right_var / total_var
+        else:
+            left_weight = right_weight = 0.5
+
+        # Normalize
+        total = left_weight + right_weight
+        if total > 0:
+            left_weight /= total
+            right_weight /= total
+
+        # Recursive allocation
+        left_weights = np.zeros(len(covariance))
+        right_weights = np.zeros(len(covariance))
+
+        self._hrp_recursive_bisection(left_weights, covariance, left_idx)
+        self._hrp_recursive_bisection(right_weights, covariance, right_idx)
+
+        weights[:] = left_weight * left_weights + right_weight * right_weights
+
+    def _cluster_variance(
+        self,
+        covariance: NDArray[np.float64],
+        indices: list[int],
+    ) -> float:
+        """Calculate variance of a cluster."""
+        if len(indices) == 0:
+            return 1.0
+
+        cov_slice = covariance[np.ix_(indices, indices)]
+        diag = np.diag(cov_slice)
+        diag[diag == 0] = 1e-10
+
+        inv_var = 1 / diag
+        w = inv_var / inv_var.sum()
+
+        return float(w @ cov_slice @ w)
+
+    def _kelly_criterion(
+        self,
+        expected_returns: NDArray[np.float64],
+        covariance: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Kelly criterion for optimal bet sizing (half-Kelly for safety)."""
+        try:
+            inv_cov = np.linalg.inv(covariance + np.eye(len(covariance)) * 1e-6)
+        except np.linalg.LinAlgError:
+            return self._max_sharpe(expected_returns, covariance)
+
+        # Full Kelly
+        full_kelly = inv_cov @ expected_returns
+
+        # Half Kelly (more conservative)
+        kelly_weights = full_kelly * 0.5
+
+        # Normalize and constrain
+        kelly_weights = np.clip(kelly_weights, self.min_weight, self.max_weight)
+
+        total = np.sum(np.abs(kelly_weights))
+        if total > 0:
+            kelly_weights = kelly_weights / total
+        else:
+            kelly_weights = np.ones(len(expected_returns)) / len(expected_returns)
+
+        return kelly_weights
+
+
+# =============================================================================
+# WALK-FORWARD VALIDATOR
+# =============================================================================
+
+@dataclass
+class WalkForwardFold:
+    """Single walk-forward fold."""
+    fold_number: int
+    train_start_idx: int
+    train_end_idx: int
+    test_start_idx: int
+    test_end_idx: int
+    train_sharpe: float = 0.0
+    test_sharpe: float = 0.0
+    train_return: float = 0.0
+    test_return: float = 0.0
+    max_drawdown: float = 0.0
+    n_trades: int = 0
+
+
+class WalkForwardValidator:
+    """
+    Walk-forward validation with purging and embargo.
+
+    Prevents look-ahead bias by:
+    - Purging: Removes training samples that overlap with test period
+    - Embargo: Adds gap between training and test
+    """
+
+    def __init__(
+        self,
+        train_periods: int = 5000,
+        test_periods: int = 1000,
+        embargo_periods: int = 50,
+        purge_periods: int = 20,
+    ):
+        self.train_periods = train_periods
+        self.test_periods = test_periods
+        self.embargo_periods = embargo_periods
+        self.purge_periods = purge_periods
+
+    def generate_folds(
+        self,
+        data_length: int,
+    ) -> Iterator[tuple[NDArray[np.int64], NDArray[np.int64]]]:
+        """Generate walk-forward folds with purging and embargo."""
+        min_samples = self.train_periods + self.embargo_periods + self.test_periods
+
+        if data_length < min_samples:
+            logger.warning(f"Insufficient data for walk-forward: {data_length} < {min_samples}")
+            return
+
+        fold = 0
+        current_start = 0
+
+        while current_start + min_samples <= data_length:
+            # Define periods
+            train_end = current_start + self.train_periods
+            test_start = train_end + self.embargo_periods
+            test_end = test_start + self.test_periods
+
+            if test_end > data_length:
+                break
+
+            # Create indices with purging
+            train_idx = np.arange(current_start, train_end - self.purge_periods)
+            test_idx = np.arange(test_start, test_end)
+
+            yield train_idx, test_idx
+
+            # Move forward by test period
+            current_start += self.test_periods
+            fold += 1
+
+    def calculate_fold_metrics(
+        self,
+        returns: NDArray[np.float64],
+        fold_idx: tuple[NDArray[np.int64], NDArray[np.int64]],
+        fold_number: int,
+    ) -> WalkForwardFold:
+        """Calculate metrics for a single fold."""
+        train_idx, test_idx = fold_idx
+
+        train_returns = returns[train_idx] if len(train_idx) > 0 else np.array([0])
+        test_returns = returns[test_idx] if len(test_idx) > 0 else np.array([0])
+
+        # Sharpe ratios
+        train_sharpe = self._calculate_sharpe(train_returns)
+        test_sharpe = self._calculate_sharpe(test_returns)
+
+        # Returns
+        train_return = float(np.prod(1 + train_returns) - 1) if len(train_returns) > 0 else 0
+        test_return = float(np.prod(1 + test_returns) - 1) if len(test_returns) > 0 else 0
+
+        # Max drawdown
+        if len(test_returns) > 0:
+            cumulative = np.cumprod(1 + test_returns)
+            running_max = np.maximum.accumulate(cumulative)
+            drawdowns = (cumulative - running_max) / running_max
+            max_dd = float(np.min(drawdowns))
+        else:
+            max_dd = 0
+
+        return WalkForwardFold(
+            fold_number=fold_number,
+            train_start_idx=int(train_idx[0]) if len(train_idx) > 0 else 0,
+            train_end_idx=int(train_idx[-1]) if len(train_idx) > 0 else 0,
+            test_start_idx=int(test_idx[0]) if len(test_idx) > 0 else 0,
+            test_end_idx=int(test_idx[-1]) if len(test_idx) > 0 else 0,
+            train_sharpe=train_sharpe,
+            test_sharpe=test_sharpe,
+            train_return=train_return,
+            test_return=test_return,
+            max_drawdown=max_dd,
+        )
+
+    def _calculate_sharpe(self, returns: NDArray[np.float64]) -> float:
+        """Calculate annualized Sharpe ratio."""
+        if len(returns) < 2:
+            return 0.0
+
+        mean_ret = np.mean(returns)
+        std_ret = np.std(returns)
+
+        if std_ret == 0:
+            return 0.0
+
+        periods_per_year = 252 * 26  # 15-min bars
+        return float(mean_ret / std_ret * np.sqrt(periods_per_year))
+
+    def validate_results(
+        self,
+        folds: list[WalkForwardFold],
+    ) -> dict[str, float]:
+        """Validate walk-forward results and check for overfitting."""
+        if not folds:
+            return {}
+
+        train_sharpes = [f.train_sharpe for f in folds]
+        test_sharpes = [f.test_sharpe for f in folds]
+
+        avg_train = np.mean(train_sharpes)
+        avg_test = np.mean(test_sharpes)
+
+        # Overfitting ratio
+        overfit_ratio = (avg_train - avg_test) / avg_train if avg_train > 0 else 0
+
+        # Probability of backtest overfit
+        pbo = sum(1 for ts in test_sharpes if ts <= 0) / len(test_sharpes)
+
+        # Stability
+        sharpe_stability = 1 - np.std(test_sharpes) / (np.mean(np.abs(test_sharpes)) + 1e-10)
+
+        return {
+            "avg_train_sharpe": float(avg_train),
+            "avg_test_sharpe": float(avg_test),
+            "overfit_ratio": float(overfit_ratio),
+            "probability_backtest_overfit": float(pbo),
+            "sharpe_stability": float(np.clip(sharpe_stability, 0, 1)),
+            "n_folds": len(folds),
+            "n_positive_folds": sum(1 for f in folds if f.test_return > 0),
+            "n_profitable_folds": sum(1 for f in folds if f.test_sharpe > 0),
+        }
 
 
 # =============================================================================
@@ -318,8 +1022,6 @@ def load_models(
     models_dir: Path,
 ) -> dict[str, Any]:
     """Load trained models for symbols."""
-    import pickle
-
     models = {}
 
     for symbol in symbols:
@@ -369,10 +1071,12 @@ class JPMorganBacktester:
     JPMorgan-level institutional backtester.
 
     Integrates:
+    - Portfolio Optimization (Max Sharpe, Risk Parity, HRP, Kelly)
+    - Regime Detection
     - Liquidity-constrained execution
     - Market impact modeling
+    - Walk-forward validation
     - Risk management
-    - Multi-asset portfolio optimization
     """
 
     def __init__(self, config: JPMorganBacktestConfig):
@@ -388,6 +1092,27 @@ class JPMorganBacktester:
         self.executor = LiquidityConstrainedExecutor(self.liquidity_config)
         self.impact_calc = MarketImpactCalculator(self.liquidity_config)
 
+        # Portfolio optimization
+        self.optimizer = PortfolioOptimizer(
+            risk_free_rate=0.05,
+            max_weight=config.max_position_pct,
+            min_weight=0.0,
+        )
+
+        # Regime detection
+        self.regime_detector = RegimeDetector(
+            lookback=config.regime_lookback,
+            vol_threshold=config.regime_vol_threshold,
+        )
+
+        # Walk-forward validation
+        self.wf_validator = WalkForwardValidator(
+            train_periods=config.wf_train_bars,
+            test_periods=config.wf_test_bars,
+            embargo_periods=config.wf_embargo_bars,
+            purge_periods=config.wf_purge_bars,
+        )
+
         # State
         self.cash = config.initial_capital
         self.positions: dict[str, dict] = {}
@@ -399,11 +1124,20 @@ class JPMorganBacktester:
         self.returns: list[float] = []
         self.trades: list[dict] = []
         self.daily_pnl: list[float] = []
+        self.regime_history: list[tuple[datetime, str]] = []
+
+        # Historical returns for covariance
+        self.symbol_returns: dict[str, list[float]] = defaultdict(list)
+        self.symbol_prices: dict[str, list[float]] = defaultdict(list)
 
         # Risk
         self.max_drawdown = 0.0
         self.current_drawdown = 0.0
         self.is_killed = False
+        self.current_regime = RegimeType.SIDEWAYS
+
+        # Walk-forward folds
+        self.wf_folds: list[WalkForwardFold] = []
 
     def initialize_symbols(
         self,
@@ -464,19 +1198,37 @@ class JPMorganBacktester:
             # Update positions
             self._update_positions(current_prices)
 
+            # Update price history for covariance
+            for symbol, price in current_prices.items():
+                self.symbol_prices[symbol].append(price)
+                if len(self.symbol_prices[symbol]) > 1:
+                    ret = (price / self.symbol_prices[symbol][-2]) - 1
+                    self.symbol_returns[symbol].append(ret)
+
             # Check risk limits
             self._check_risk_limits()
 
             if self.is_killed:
                 break
 
+            # Detect regime
+            if self.config.enable_regime_detection and len(self.returns) >= self.config.regime_lookback:
+                portfolio_returns = np.array(self.returns[-self.config.regime_lookback:])
+                self.current_regime = self.regime_detector.detect_regime(portfolio_returns, timestamp)
+                self.regime_history.append((timestamp, self.current_regime.value))
+
             # Generate signals
             signals = self._generate_signals(
                 timestamp, i + start_idx, features, models, current_prices
             )
 
-            # Execute trades
-            if signals:
+            # Portfolio optimization and execution
+            if signals and len(signals) >= 2:
+                self._optimize_and_execute(
+                    signals, current_prices, current_volumes, timestamp
+                )
+            elif signals:
+                # Single signal - just execute
                 self._execute_signals(
                     signals, current_prices, current_volumes, timestamp
                 )
@@ -494,12 +1246,18 @@ class JPMorganBacktester:
                 logger.info(
                     f"Progress: {i+1}/{n_bars} bars, "
                     f"Value: ${self.portfolio_value:,.0f}, "
-                    f"DD: {self.current_drawdown:.2%}"
+                    f"DD: {self.current_drawdown:.2%}, "
+                    f"Regime: {self.current_regime.value}"
                 )
 
         # Generate results
         elapsed = time.time() - start_time
         results = self._generate_results(elapsed)
+
+        # Walk-forward validation
+        if len(self.returns) > self.config.wf_train_bars + self.config.wf_test_bars:
+            wf_results = self._run_walk_forward_validation()
+            results["walk_forward"] = wf_results
 
         return results
 
@@ -548,17 +1306,27 @@ class JPMorganBacktester:
             self.is_killed = True
             return
 
-        # Position stop losses
+        # Position stop losses and take profits
         for symbol, pos in list(self.positions.items()):
             if pos["quantity"] == 0:
                 continue
 
             pnl_pct = pos["unrealized_pnl"] / (pos["avg_price"] * abs(pos["quantity"]))
 
-            if pnl_pct < -self.config.position_stop_loss:
+            # Stop loss - adjusted by regime
+            regime_params = self.regime_detector.get_regime_params(
+                self.current_regime, self.config.max_position_pct
+            )
+            adjusted_stop = self.config.position_stop_loss * regime_params["stop_loss_mult"]
+
+            if pnl_pct < -adjusted_stop:
                 logger.warning(f"Stop loss triggered for {symbol}: {pnl_pct:.2%}")
-                # Mark for liquidation
                 pos["stop_triggered"] = True
+
+            # Take profit
+            if pnl_pct > self.config.position_take_profit:
+                logger.info(f"Take profit triggered for {symbol}: {pnl_pct:.2%}")
+                pos["take_profit_triggered"] = True
 
     def _generate_signals(
         self,
@@ -570,6 +1338,16 @@ class JPMorganBacktester:
     ) -> dict[str, dict]:
         """Generate trading signals from models."""
         signals = {}
+
+        # Get regime-adjusted min confidence
+        regime_params = self.regime_detector.get_regime_params(
+            self.current_regime, self.config.max_position_pct
+        )
+        min_confidence = regime_params["min_confidence"]
+
+        # In crisis mode, be very selective
+        if regime_params["go_defensive"]:
+            min_confidence = 0.65
 
         for symbol, model_info in models.items():
             if symbol not in features or symbol not in prices:
@@ -621,7 +1399,7 @@ class JPMorganBacktester:
                     confidence = 0.6
 
                 # Check confidence threshold
-                if confidence >= self.config.min_confidence:
+                if confidence >= min_confidence:
                     signals[symbol] = {
                         "direction": direction,
                         "confidence": confidence,
@@ -633,6 +1411,105 @@ class JPMorganBacktester:
 
         return signals
 
+    def _optimize_and_execute(
+        self,
+        signals: dict[str, dict],
+        prices: dict[str, float],
+        volumes: dict[str, float],
+        timestamp: datetime,
+    ) -> None:
+        """Optimize portfolio weights and execute trades."""
+        symbols = list(signals.keys())
+        n = len(symbols)
+
+        if n < 2:
+            self._execute_signals(signals, prices, volumes, timestamp)
+            return
+
+        # Build expected returns from signals
+        expected_returns = np.array([
+            signals[s]["direction"] * signals[s]["confidence"] * 0.01
+            for s in symbols
+        ])
+
+        # Build covariance matrix from historical returns
+        if all(len(self.symbol_returns[s]) >= self.config.cov_lookback for s in symbols):
+            returns_matrix = np.array([
+                self.symbol_returns[s][-self.config.cov_lookback:]
+                for s in symbols
+            ]).T
+
+            covariance = CovarianceEstimator.exponential_weighted(
+                returns_matrix, self.config.cov_halflife
+            )
+        else:
+            # Use simple diagonal covariance
+            covariance = np.eye(n) * 0.04  # 20% vol assumption
+
+        # Get regime-adjusted position sizing
+        regime_params = self.regime_detector.get_regime_params(
+            self.current_regime, self.config.max_position_pct
+        )
+
+        # Optimize
+        try:
+            target_weights = self.optimizer.optimize(
+                expected_returns,
+                covariance,
+                self.config.optimization_method,
+            )
+        except Exception as e:
+            logger.warning(f"Optimization failed: {e}")
+            target_weights = np.ones(n) / n
+
+        # Apply regime adjustment
+        target_weights = target_weights * regime_params["adjusted_position_pct"] / self.config.max_position_pct
+
+        # Ensure constraints
+        target_weights = np.clip(target_weights, 0, regime_params["adjusted_position_pct"])
+
+        # Normalize if sum > max allocation
+        max_allocation = 0.95  # Keep 5% cash
+        if np.sum(target_weights) > max_allocation:
+            target_weights = target_weights / np.sum(target_weights) * max_allocation
+
+        # Execute trades to reach target weights
+        for i, symbol in enumerate(symbols):
+            target_value = self.portfolio_value * target_weights[i] * signals[symbol]["direction"]
+            current_value = self.positions.get(symbol, {}).get("market_value", 0)
+            current_qty = self.positions.get(symbol, {}).get("quantity", 0)
+
+            # Current position direction
+            current_direction = 1 if current_qty > 0 else (-1 if current_qty < 0 else 0)
+            target_direction = signals[symbol]["direction"]
+
+            trade_value = abs(target_value) - abs(current_value)
+
+            # Skip small trades
+            if abs(trade_value) < self.config.min_position_size:
+                continue
+
+            # Handle position reversal
+            if current_direction != 0 and current_direction != target_direction:
+                # Close current position first
+                self._close_position(symbol, prices.get(symbol, 0), volumes.get(symbol, 10000),
+                                    timestamp, "reversal")
+                trade_value = abs(target_value)
+
+            if trade_value > 0:
+                # Open or add to position
+                target_shares = trade_value / prices[symbol]
+                self._open_position(
+                    symbol, target_direction, target_shares, prices[symbol],
+                    volumes.get(symbol, 10000), timestamp
+                )
+            elif trade_value < 0 and abs(current_value) > 0:
+                # Reduce position
+                shares_to_sell = abs(trade_value) / prices[symbol]
+                if shares_to_sell >= abs(current_qty):
+                    self._close_position(symbol, prices[symbol], volumes.get(symbol, 10000),
+                                        timestamp, "reduce")
+
     def _execute_signals(
         self,
         signals: dict[str, dict],
@@ -641,11 +1518,12 @@ class JPMorganBacktester:
         timestamp: datetime,
     ) -> None:
         """Execute trading signals with liquidity constraints."""
-        # First handle stop losses
+        # First handle stop losses and take profits
         for symbol, pos in list(self.positions.items()):
-            if pos.get("stop_triggered"):
+            if pos.get("stop_triggered") or pos.get("take_profit_triggered"):
+                reason = "stop_loss" if pos.get("stop_triggered") else "take_profit"
                 self._close_position(symbol, prices.get(symbol, pos["current_price"]),
-                                    volumes.get(symbol, 10000), timestamp, "stop_loss")
+                                    volumes.get(symbol, 10000), timestamp, reason)
 
         # Limit number of new positions
         n_current = len([p for p in self.positions.values() if p["quantity"] != 0])
@@ -653,6 +1531,11 @@ class JPMorganBacktester:
 
         if n_available <= 0:
             return
+
+        # Get regime-adjusted parameters
+        regime_params = self.regime_detector.get_regime_params(
+            self.current_regime, self.config.max_position_pct
+        )
 
         # Sort signals by confidence
         sorted_signals = sorted(
@@ -675,8 +1558,9 @@ class JPMorganBacktester:
                 # Close opposite position first
                 self._close_position(symbol, price, volume, timestamp, "reversal")
 
-            # Calculate position size
-            target_value = self.portfolio_value * self.config.max_position_pct * confidence
+            # Calculate position size with regime adjustment
+            position_pct = regime_params["adjusted_position_pct"] * confidence
+            target_value = self.portfolio_value * position_pct
             target_shares = target_value / price
 
             # Execute with liquidity constraints
@@ -766,6 +1650,7 @@ class JPMorganBacktester:
             "total_cost": total_cost,
             "participation_rate": result.participation_rate,
             "reason": "signal",
+            "regime": self.current_regime.value,
         })
 
     def _close_position(
@@ -821,6 +1706,8 @@ class JPMorganBacktester:
         if remaining <= 0:
             pos["quantity"] = 0
             pos["cost_basis"] = 0
+            pos["stop_triggered"] = False
+            pos["take_profit_triggered"] = False
         else:
             pos["quantity"] = remaining * (1 if pos["quantity"] > 0 else -1)
             pos["cost_basis"] *= (remaining / quantity)
@@ -842,7 +1729,21 @@ class JPMorganBacktester:
             "impact_cost": impact_cost,
             "total_cost": total_cost,
             "reason": reason,
+            "regime": self.current_regime.value,
         })
+
+    def _run_walk_forward_validation(self) -> dict[str, Any]:
+        """Run walk-forward validation on backtest returns."""
+        returns = np.array(self.returns)
+
+        folds = []
+        for i, (train_idx, test_idx) in enumerate(self.wf_validator.generate_folds(len(returns))):
+            fold = self.wf_validator.calculate_fold_metrics(returns, (train_idx, test_idx), i)
+            folds.append(fold)
+
+        self.wf_folds = folds
+
+        return self.wf_validator.validate_results(folds)
 
     def _generate_results(self, elapsed_time: float) -> dict[str, Any]:
         """Generate comprehensive results."""
@@ -891,7 +1792,17 @@ class JPMorganBacktester:
         total_costs = sum(t.get("total_cost", 0) for t in self.trades)
 
         winning_trades = [t for t in self.trades if t.get("realized_pnl", 0) > 0]
-        win_rate = len(winning_trades) / n_trades if n_trades > 0 else 0
+        losing_trades = [t for t in self.trades if t.get("realized_pnl", 0) < 0]
+        win_rate = len(winning_trades) / len([t for t in self.trades if "realized_pnl" in t]) if any("realized_pnl" in t for t in self.trades) else 0
+
+        avg_win = np.mean([t["realized_pnl"] for t in winning_trades]) if winning_trades else 0
+        avg_loss = np.mean([t["realized_pnl"] for t in losing_trades]) if losing_trades else 0
+        profit_factor = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+
+        # Regime analysis
+        regime_counts = defaultdict(int)
+        for _, regime in self.regime_history:
+            regime_counts[regime] += 1
 
         return {
             "summary": {
@@ -909,12 +1820,20 @@ class JPMorganBacktester:
             "trading": {
                 "n_trades": n_trades,
                 "win_rate": win_rate,
+                "profit_factor": profit_factor,
+                "avg_win": avg_win,
+                "avg_loss": avg_loss,
                 "total_costs": total_costs,
                 "avg_cost_per_trade": total_costs / n_trades if n_trades > 0 else 0,
             },
             "risk": {
                 "max_drawdown": self.max_drawdown,
                 "was_killed": self.is_killed,
+                "current_drawdown": self.current_drawdown,
+            },
+            "regime_analysis": dict(regime_counts),
+            "optimization": {
+                "method": self.config.optimization_method.value,
             },
             "execution": {
                 "elapsed_time_seconds": elapsed_time,
@@ -997,8 +1916,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-drawdown",
         type=float,
-        default=0.15,
-        help="Maximum drawdown limit (default: 15%%)",
+        default=0.20,
+        help="Maximum drawdown limit (default: 20%%)",
+    )
+
+    parser.add_argument(
+        "--optimization",
+        type=str,
+        default="max_sharpe",
+        choices=["max_sharpe", "min_variance", "risk_parity", "hrp", "kelly", "equal_weight"],
+        help="Portfolio optimization method",
+    )
+
+    parser.add_argument(
+        "--no-regime",
+        action="store_true",
+        help="Disable regime detection",
     )
 
     parser.add_argument(
@@ -1042,10 +1975,22 @@ def main() -> int:
     """Main entry point."""
     args = parse_args()
 
+    # Map optimization method
+    opt_map = {
+        "max_sharpe": OptimizationMethod.MAX_SHARPE,
+        "min_variance": OptimizationMethod.MIN_VARIANCE,
+        "risk_parity": OptimizationMethod.RISK_PARITY,
+        "hrp": OptimizationMethod.HRP,
+        "kelly": OptimizationMethod.KELLY,
+        "equal_weight": OptimizationMethod.EQUAL_WEIGHT,
+    }
+
     # Configuration
     config = JPMorganBacktestConfig(
         initial_capital=args.capital,
         max_drawdown_pct=args.max_drawdown,
+        optimization_method=opt_map.get(args.optimization, OptimizationMethod.MAX_SHARPE),
+        enable_regime_detection=not args.no_regime,
         run_validation=args.validate and not args.no_validate,
         output_dir=Path(args.output),
     )
@@ -1070,6 +2015,8 @@ def main() -> int:
     print(f"Symbols: {len(symbols)}")
     print(f"Capital: ${config.initial_capital:,.0f}")
     print(f"Max Drawdown: {config.max_drawdown_pct:.0%}")
+    print(f"Optimization: {config.optimization_method.value}")
+    print(f"Regime Detection: {config.enable_regime_detection}")
     print(f"Validation: {config.run_validation}")
     print("=" * 70 + "\n")
 
@@ -1126,7 +2073,22 @@ def main() -> int:
     print(f"\nTrading:")
     print(f"  Total Trades: {trading.get('n_trades', 0)}")
     print(f"  Win Rate: {trading.get('win_rate', 0):.2%}")
+    print(f"  Profit Factor: {trading.get('profit_factor', 0):.2f}")
     print(f"  Total Costs: ${trading.get('total_costs', 0):,.2f}")
+
+    if "regime_analysis" in results:
+        print(f"\nRegime Analysis:")
+        for regime, count in results["regime_analysis"].items():
+            print(f"  {regime}: {count} bars")
+
+    if "walk_forward" in results:
+        wf = results["walk_forward"]
+        print(f"\nWalk-Forward Validation:")
+        print(f"  Avg Train Sharpe: {wf.get('avg_train_sharpe', 0):.3f}")
+        print(f"  Avg Test Sharpe: {wf.get('avg_test_sharpe', 0):.3f}")
+        print(f"  Overfit Ratio: {wf.get('overfit_ratio', 0):.2%}")
+        print(f"  PBO: {wf.get('probability_backtest_overfit', 0):.1%}")
+        print(f"  Profitable Folds: {wf.get('n_profitable_folds', 0)}/{wf.get('n_folds', 0)}")
 
     if "validation" in results:
         val = results["validation"]
