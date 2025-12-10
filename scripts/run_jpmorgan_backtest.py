@@ -168,7 +168,7 @@ class JPMorganBacktestConfig:
     # Position sizing
     max_position_pct: float = 0.08       # Max 8% per position
     max_portfolio_positions: int = 15    # Max concurrent positions
-    min_confidence: float = 0.52         # Lower threshold for more trades
+    min_confidence: float = 0.55         # Higher threshold for better win rate
     min_position_size: float = 10_000    # Minimum position value
 
     # Execution (Liquidity Constraints)
@@ -185,9 +185,9 @@ class JPMorganBacktestConfig:
     # Risk management
     max_drawdown_pct: float = 0.20       # Stop at 20% drawdown
     daily_var_limit: float = 0.03        # 3% daily VaR limit
-    position_stop_loss: float = 0.08     # 8% stop loss per position
-    position_take_profit: float = 0.15   # 15% take profit per position
-    min_holding_bars: int = 4            # Minimum 4 bars (1 hour for 15min data)
+    position_stop_loss: float = 0.05     # 5% stop loss per position (tighter)
+    position_take_profit: float = 0.12   # 12% take profit per position
+    min_holding_bars: int = 2            # Minimum 2 bars (30min for 15min data)
     cooldown_bars: int = 1               # Cooldown after closing position (1 bar)
 
     # Feature engineering
@@ -300,11 +300,12 @@ class RegimeDetector:
     ) -> dict[str, float]:
         """Get regime-adjusted trading parameters."""
         adjustments = {
+            # Tighter stop losses in volatile regimes (lower mult = tighter stop)
             RegimeType.BULL_LOW_VOL: {"size_mult": 1.2, "confidence_adj": -0.02, "stop_mult": 1.0},
-            RegimeType.BULL_HIGH_VOL: {"size_mult": 0.8, "confidence_adj": 0.05, "stop_mult": 1.2},
-            RegimeType.BEAR_LOW_VOL: {"size_mult": 0.7, "confidence_adj": 0.05, "stop_mult": 0.8},
-            RegimeType.BEAR_HIGH_VOL: {"size_mult": 0.5, "confidence_adj": 0.10, "stop_mult": 0.7},
-            RegimeType.SIDEWAYS: {"size_mult": 0.9, "confidence_adj": 0.0, "stop_mult": 1.0},
+            RegimeType.BULL_HIGH_VOL: {"size_mult": 0.8, "confidence_adj": 0.05, "stop_mult": 0.8},  # Tighter in high vol
+            RegimeType.BEAR_LOW_VOL: {"size_mult": 0.7, "confidence_adj": 0.05, "stop_mult": 0.7},
+            RegimeType.BEAR_HIGH_VOL: {"size_mult": 0.5, "confidence_adj": 0.10, "stop_mult": 0.6},  # Much tighter in bear + high vol
+            RegimeType.SIDEWAYS: {"size_mult": 0.9, "confidence_adj": 0.0, "stop_mult": 0.9},
             RegimeType.CRISIS: {"size_mult": 0.25, "confidence_adj": 0.15, "stop_mult": 0.5},
         }
 
@@ -1857,10 +1858,16 @@ class JPMorganBacktester:
         n_periods = len(returns)
         years = n_periods / periods_per_year
 
-        if years > 0:
+        # Fix: Cap annualized return to prevent explosion with short backtests
+        # Require at least ~1 month of data for meaningful annualization
+        min_years_for_annualization = 1 / 12  # ~21 trading days
+        if years >= min_years_for_annualization:
             annual_return = (1 + total_return) ** (1 / years) - 1
+            # Cap at reasonable bounds (-99% to +1000%)
+            annual_return = max(-0.99, min(10.0, annual_return))
         else:
-            annual_return = 0
+            # For very short periods, just show raw total return
+            annual_return = total_return
 
         annual_vol = np.std(returns) * np.sqrt(periods_per_year)
 
