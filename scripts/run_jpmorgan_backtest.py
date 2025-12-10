@@ -172,8 +172,8 @@ class JPMorganBacktestConfig:
     min_position_size: float = 10_000    # Minimum position value
 
     # Execution (Liquidity Constraints)
-    max_participation_rate: float = 0.02  # Max 2% of bar volume
-    max_position_adv_pct: float = 0.05    # Max 5% of ADV
+    max_participation_rate: float = 0.10  # Max 10% of bar volume
+    max_position_adv_pct: float = 0.10    # Max 10% of ADV
     enable_market_impact: bool = True
     enable_queue_simulation: bool = True
 
@@ -187,6 +187,8 @@ class JPMorganBacktestConfig:
     daily_var_limit: float = 0.03        # 3% daily VaR limit
     position_stop_loss: float = 0.08     # 8% stop loss per position
     position_take_profit: float = 0.15   # 15% take profit per position
+    min_holding_bars: int = 4            # Minimum 4 bars (1 hour for 15min data)
+    cooldown_bars: int = 1               # Cooldown after closing position (1 bar)
 
     # Feature engineering
     use_alternative_data: bool = True
@@ -1021,7 +1023,7 @@ def load_models(
     symbols: list[str],
     models_dir: Path,
 ) -> dict[str, Any]:
-    """Load trained models for symbols."""
+    """Load trained models for symbols with feature metadata."""
     models = {}
 
     for symbol in symbols:
@@ -1030,6 +1032,23 @@ def load_models(
         if not symbol_dir.exists():
             continue
 
+        # Load metadata for feature names
+        metadata_file = symbol_dir / "metadata.json"
+        feature_names = None
+
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, "r") as f:
+                    metadata = json.load(f)
+                    if "models" in metadata:
+                        for model_key in ["lightgbm_v1", "xgboost_v1"]:
+                            if model_key in metadata["models"]:
+                                feature_names = metadata["models"][model_key].get("feature_names", [])
+                                if feature_names:
+                                    break
+            except Exception as e:
+                logger.debug(f"Failed to load metadata for {symbol}: {e}")
+
         # Find model files
         model_files = list(symbol_dir.glob("*.pkl"))
 
@@ -1037,15 +1056,19 @@ def load_models(
             continue
 
         # Load best model (prefer lightgbm)
+        model_loaded = False
         for model_file in model_files:
             if "lightgbm" in model_file.name.lower():
                 try:
                     with open(model_file, "rb") as f:
                         model_data = pickle.load(f)
 
-                    # Extract model from wrapper
                     if isinstance(model_data, dict):
                         model = model_data.get("model", model_data)
+                        # Get feature names from pkl (more reliable)
+                        pkl_features = model_data.get("feature_names", [])
+                        if pkl_features:
+                            feature_names = pkl_features
                     else:
                         model = model_data
 
@@ -1053,10 +1076,39 @@ def load_models(
                         "model": model,
                         "path": str(model_file),
                         "type": "lightgbm",
+                        "feature_names": feature_names or [],
+                        "n_features": len(feature_names) if feature_names else 0,
                     }
+                    model_loaded = True
                     break
                 except Exception as e:
                     logger.warning(f"Failed to load model for {symbol}: {e}")
+
+        if not model_loaded:
+            for model_file in model_files:
+                if "xgboost" in model_file.name.lower():
+                    try:
+                        with open(model_file, "rb") as f:
+                            model_data = pickle.load(f)
+
+                        if isinstance(model_data, dict):
+                            model = model_data.get("model", model_data)
+                            pkl_features = model_data.get("feature_names", [])
+                            if pkl_features:
+                                feature_names = pkl_features
+                        else:
+                            model = model_data
+
+                        models[symbol] = {
+                            "model": model,
+                            "path": str(model_file),
+                            "type": "xgboost",
+                            "feature_names": feature_names or [],
+                            "n_features": len(feature_names) if feature_names else 0,
+                        }
+                        break
+                    except Exception as e:
+                        logger.warning(f"Failed to load xgboost for {symbol}: {e}")
 
     logger.info(f"Loaded models for {len(models)} symbols")
     return models
@@ -1125,6 +1177,10 @@ class JPMorganBacktester:
         self.trades: list[dict] = []
         self.daily_pnl: list[float] = []
         self.regime_history: list[tuple[datetime, str]] = []
+
+        # Position timing (for cooldown and min holding)
+        self.symbol_cooldown: dict[str, int] = {}  # symbol -> bar index when cooldown ends
+        self.position_open_bar: dict[str, int] = {}  # symbol -> bar index when opened
 
         # Historical returns for covariance
         self.symbol_returns: dict[str, list[float]] = defaultdict(list)
@@ -1223,14 +1279,15 @@ class JPMorganBacktester:
             )
 
             # Portfolio optimization and execution
+            bar_idx = i + start_idx
             if signals and len(signals) >= 2:
                 self._optimize_and_execute(
-                    signals, current_prices, current_volumes, timestamp
+                    signals, current_prices, current_volumes, timestamp, bar_idx
                 )
             elif signals:
                 # Single signal - just execute
                 self._execute_signals(
-                    signals, current_prices, current_volumes, timestamp
+                    signals, current_prices, current_volumes, timestamp, bar_idx
                 )
 
             # Record equity
@@ -1336,7 +1393,7 @@ class JPMorganBacktester:
         models: dict[str, Any],
         prices: dict[str, float],
     ) -> dict[str, dict]:
-        """Generate trading signals from models."""
+        """Generate trading signals from models using correct feature order."""
         signals = {}
 
         # Get regime-adjusted min confidence
@@ -1362,19 +1419,31 @@ class JPMorganBacktester:
                 # Get feature row
                 row = feat_df.row(bar_idx, named=True)
 
-                # Extract numeric features
-                exclude = {"timestamp", "symbol", "target", "tb_label", "tb_return",
-                          "tb_barrier", "tb_holding_period", "open", "high", "low",
-                          "close", "volume"}
-
-                feat_values = []
-                for col in feat_df.columns:
-                    if col not in exclude:
-                        val = row.get(col)
+                # Get model's expected feature names
+                expected_features = model_info.get("feature_names", [])
+                
+                if expected_features:
+                    # Use exact features in correct order
+                    feat_values = []
+                    for feat_name in expected_features:
+                        val = row.get(feat_name, 0.0)
                         if isinstance(val, (int, float)) and not np.isnan(val):
                             feat_values.append(float(val))
                         else:
                             feat_values.append(0.0)
+                else:
+                    # Fallback: extract all numeric features
+                    exclude = {"timestamp", "symbol", "target", "tb_label", "tb_return",
+                              "tb_barrier", "tb_holding_period", "open", "high", "low",
+                              "close", "volume"}
+                    feat_values = []
+                    for col in feat_df.columns:
+                        if col not in exclude:
+                            val = row.get(col)
+                            if isinstance(val, (int, float)) and not np.isnan(val):
+                                feat_values.append(float(val))
+                            else:
+                                feat_values.append(0.0)
 
                 if not feat_values:
                     continue
@@ -1407,7 +1476,13 @@ class JPMorganBacktester:
                     }
 
             except Exception as e:
-                logger.debug(f"Signal generation failed for {symbol}: {e}")
+                # Log first few errors as warning to see what's happening
+                if bar_idx < 10:
+                    logger.warning(f"Signal generation failed for {symbol} at bar {bar_idx}: {e}")
+
+        # Log signal count periodically
+        if bar_idx % 5000 == 0 and signals:
+            logger.info(f"Bar {bar_idx}: Generated {len(signals)} signals")
 
         return signals
 
@@ -1417,13 +1492,14 @@ class JPMorganBacktester:
         prices: dict[str, float],
         volumes: dict[str, float],
         timestamp: datetime,
+        bar_idx: int = 0,
     ) -> None:
         """Optimize portfolio weights and execute trades."""
         symbols = list(signals.keys())
         n = len(symbols)
 
         if n < 2:
-            self._execute_signals(signals, prices, volumes, timestamp)
+            self._execute_signals(signals, prices, volumes, timestamp, bar_idx)
             return
 
         # Build expected returns from signals
@@ -1516,14 +1592,21 @@ class JPMorganBacktester:
         prices: dict[str, float],
         volumes: dict[str, float],
         timestamp: datetime,
+        bar_idx: int = 0,
     ) -> None:
-        """Execute trading signals with liquidity constraints."""
-        # First handle stop losses and take profits
+        """Execute trading signals with liquidity constraints and cooldown."""
+        # First handle stop losses and take profits (respect min holding time)
         for symbol, pos in list(self.positions.items()):
+            open_bar = self.position_open_bar.get(symbol, 0)
+            holding_bars = bar_idx - open_bar
+
             if pos.get("stop_triggered") or pos.get("take_profit_triggered"):
-                reason = "stop_loss" if pos.get("stop_triggered") else "take_profit"
-                self._close_position(symbol, prices.get(symbol, pos["current_price"]),
-                                    volumes.get(symbol, 10000), timestamp, reason)
+                # Allow stop loss always, take profit only after min holding
+                if pos.get("stop_triggered") or holding_bars >= self.config.min_holding_bars:
+                    reason = "stop_loss" if pos.get("stop_triggered") else "take_profit"
+                    self._close_position(symbol, prices.get(symbol, pos["current_price"]),
+                                        volumes.get(symbol, 10000), timestamp, reason)
+                    self.symbol_cooldown[symbol] = bar_idx + self.config.cooldown_bars
 
         # Limit number of new positions
         n_current = len([p for p in self.positions.values() if p["quantity"] != 0])
@@ -1545,6 +1628,10 @@ class JPMorganBacktester:
         )[:n_available]
 
         for symbol, signal in sorted_signals:
+            # Check cooldown
+            if self.symbol_cooldown.get(symbol, 0) > bar_idx:
+                continue
+
             direction = signal["direction"]
             confidence = signal["confidence"]
             price = signal["price"]
@@ -1555,8 +1642,13 @@ class JPMorganBacktester:
                 pos = self.positions[symbol]
                 if pos["quantity"] * direction > 0:
                     continue
-                # Close opposite position first
+                # Check min holding period for reversal
+                open_bar = self.position_open_bar.get(symbol, 0)
+                if bar_idx - open_bar < self.config.min_holding_bars:
+                    continue
                 self._close_position(symbol, price, volume, timestamp, "reversal")
+                self.symbol_cooldown[symbol] = bar_idx + self.config.cooldown_bars
+                continue  # Don't open new position same bar
 
             # Calculate position size with regime adjustment
             position_pct = regime_params["adjusted_position_pct"] * confidence
@@ -1565,7 +1657,7 @@ class JPMorganBacktester:
 
             # Execute with liquidity constraints
             self._open_position(
-                symbol, direction, target_shares, price, volume, timestamp
+                symbol, direction, target_shares, price, volume, timestamp, bar_idx
             )
 
     def _open_position(
@@ -1576,6 +1668,7 @@ class JPMorganBacktester:
         price: float,
         bar_volume: float,
         timestamp: datetime,
+        bar_idx: int = 0,
     ) -> None:
         """Open a new position with liquidity constraints."""
         if target_shares <= 0:
@@ -1621,6 +1714,10 @@ class JPMorganBacktester:
         pos = self.positions[symbol]
         old_qty = pos["quantity"]
         new_qty = old_qty + signed_qty
+
+        # Track position open bar for min holding
+        if old_qty == 0:
+            self.position_open_bar[symbol] = bar_idx
 
         if new_qty != 0:
             if old_qty == 0:
