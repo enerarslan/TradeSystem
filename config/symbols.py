@@ -198,7 +198,15 @@ SYMBOL_INFO: dict[str, SymbolInfo] = {
         symbol="LLY", name="Eli Lilly and Company", sector=Sector.HEALTHCARE,
         market_cap_tier=MarketCapTier.MEGA, indices=[Index.SP500]
     ),
-    
+    "AMGN": SymbolInfo(
+        symbol="AMGN", name="Amgen Inc.", sector=Sector.HEALTHCARE,
+        market_cap_tier=MarketCapTier.LARGE, indices=[Index.DOW_JONES, Index.SP500, Index.NASDAQ100]
+    ),
+    "TMO": SymbolInfo(
+        symbol="TMO", name="Thermo Fisher Scientific", sector=Sector.HEALTHCARE,
+        market_cap_tier=MarketCapTier.MEGA, indices=[Index.SP500]
+    ),
+
     # === FINANCIALS ===
     "JPM": SymbolInfo(
         symbol="JPM", name="JPMorgan Chase & Co.", sector=Sector.FINANCIALS,
@@ -224,7 +232,15 @@ SYMBOL_INFO: dict[str, SymbolInfo] = {
         symbol="AXP", name="American Express", sector=Sector.FINANCIALS,
         market_cap_tier=MarketCapTier.LARGE, indices=[Index.DOW_JONES, Index.SP500]
     ),
-    
+    "TRV": SymbolInfo(
+        symbol="TRV", name="The Travelers Companies", sector=Sector.FINANCIALS,
+        market_cap_tier=MarketCapTier.LARGE, indices=[Index.DOW_JONES, Index.SP500]
+    ),
+    "BRK.B": SymbolInfo(
+        symbol="BRK.B", name="Berkshire Hathaway Class B", sector=Sector.FINANCIALS,
+        market_cap_tier=MarketCapTier.MEGA, indices=[Index.SP500]
+    ),
+
     # === CONSUMER ===
     "WMT": SymbolInfo(
         symbol="WMT", name="Walmart Inc.", sector=Sector.CONSUMER_STAPLES,
@@ -262,7 +278,11 @@ SYMBOL_INFO: dict[str, SymbolInfo] = {
         symbol="SBUX", name="Starbucks Corporation", sector=Sector.CONSUMER_DISCRETIONARY,
         market_cap_tier=MarketCapTier.LARGE, indices=[Index.SP500, Index.NASDAQ100]
     ),
-    
+    "WBA": SymbolInfo(
+        symbol="WBA", name="Walgreens Boots Alliance", sector=Sector.CONSUMER_STAPLES,
+        market_cap_tier=MarketCapTier.MID, indices=[Index.SP500, Index.NASDAQ100]
+    ),
+
     # === INDUSTRIALS & ENERGY ===
     "BA": SymbolInfo(
         symbol="BA", name="The Boeing Company", sector=Sector.INDUSTRIALS,
@@ -274,6 +294,14 @@ SYMBOL_INFO: dict[str, SymbolInfo] = {
     ),
     "HON": SymbolInfo(
         symbol="HON", name="Honeywell International", sector=Sector.INDUSTRIALS,
+        market_cap_tier=MarketCapTier.LARGE, indices=[Index.DOW_JONES, Index.SP500]
+    ),
+    "MMM": SymbolInfo(
+        symbol="MMM", name="3M Company", sector=Sector.INDUSTRIALS,
+        market_cap_tier=MarketCapTier.LARGE, indices=[Index.DOW_JONES, Index.SP500]
+    ),
+    "DOW": SymbolInfo(
+        symbol="DOW", name="Dow Inc.", sector=Sector.MATERIALS,
         market_cap_tier=MarketCapTier.LARGE, indices=[Index.DOW_JONES, Index.SP500]
     ),
     "XOM": SymbolInfo(
