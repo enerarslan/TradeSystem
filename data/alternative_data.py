@@ -234,7 +234,12 @@ class MacroDataLoader:
         # Merge all on timestamp
         result = dfs[0]
         for df in dfs[1:]:
-            result = result.join(df, on="timestamp", how="outer")
+            # FIXED: Use coalesce join to avoid timestamp_right duplicates
+            # Get non-timestamp columns from the new df
+            new_cols = [c for c in df.columns if c != "timestamp"]
+            if new_cols:
+                df_subset = df.select(["timestamp"] + new_cols)
+                result = result.join(df_subset, on="timestamp", how="outer", coalesce=True)
 
         # Sort and forward fill
         result = result.sort("timestamp")
@@ -725,6 +730,10 @@ class AlternativeDataPipeline:
             if len(macro_df) == 0:
                 return df
 
+            # FIXED: Drop existing _join_date if present to avoid conflicts
+            if "_join_date" in df.columns:
+                df = df.drop("_join_date")
+
             # Extract date for joining
             df = df.with_columns(
                 pl.col(timestamp_col).dt.date().alias("_join_date")
@@ -733,19 +742,35 @@ class AlternativeDataPipeline:
                 pl.col("timestamp").dt.date().alias("_join_date")
             )
 
-            # Join on date
+            # Join on date - exclude timestamp to avoid column conflicts
             macro_cols = [c for c in macro_df.columns if c not in ["timestamp", "_join_date"]]
+
+            # FIXED: Skip if no macro columns to add
+            if not macro_cols:
+                df = df.drop("_join_date")
+                return df
+
             macro_subset = macro_df.select(["_join_date"] + macro_cols)
 
+            # FIXED: Only select columns that don't already exist
+            existing_cols = set(df.columns)
+            new_macro_cols = [c for c in macro_cols if c not in existing_cols]
+
+            if not new_macro_cols:
+                df = df.drop("_join_date")
+                logger.info("Macro features already present, skipping")
+                return df
+
+            macro_subset = macro_df.select(["_join_date"] + new_macro_cols)
             df = df.join(macro_subset, on="_join_date", how="left")
             df = df.drop("_join_date")
 
             # Forward fill any gaps
-            for col in macro_cols:
+            for col in new_macro_cols:
                 if col in df.columns:
                     df = df.with_columns(pl.col(col).fill_null(strategy="forward"))
 
-            logger.info(f"Added {len(macro_cols)} macro features")
+            logger.info(f"Added {len(new_macro_cols)} macro features")
             return df
 
         except Exception as e:
@@ -762,10 +787,19 @@ class AlternativeDataPipeline:
     ) -> pl.DataFrame:
         """Add sentiment features."""
         try:
+            # FIXED: Skip if features already exist
+            if "alt_sentiment_score" in df.columns:
+                logger.info("Sentiment features already present, skipping")
+                return df
+
             sent_df = self.sentiment_loader.load_sentiment(symbol, SentimentSource.NEWS_API, start_date, end_date)
 
             if len(sent_df) == 0:
                 return df
+
+            # FIXED: Drop existing _join_date if present
+            if "_join_date" in df.columns:
+                df = df.drop("_join_date")
 
             # Extract date for joining
             df = df.with_columns(
@@ -809,10 +843,19 @@ class AlternativeDataPipeline:
     ) -> pl.DataFrame:
         """Add options-derived features."""
         try:
+            # FIXED: Skip if features already exist
+            if "alt_put_call_ratio" in df.columns:
+                logger.info("Options features already present, skipping")
+                return df
+
             opt_df = self.options_loader.load_options_metrics(symbol, start_date, end_date)
 
             if len(opt_df) == 0:
                 return df
+
+            # FIXED: Drop existing _join_date if present
+            if "_join_date" in df.columns:
+                df = df.drop("_join_date")
 
             # Extract date for joining
             df = df.with_columns(
