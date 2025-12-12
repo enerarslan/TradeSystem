@@ -1,0 +1,187 @@
+version: '3.8'
+
+services:
+  # Main Trading Application
+  alphatrade:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alphatrade_main
+    environment:
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - TRADING_MODE=${TRADING_MODE:-paper}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alphatrade
+      - POSTGRES_USER=trading
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-trading123}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./results:/app/results
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - trading_network
+    restart: unless-stopped
+    command: python main.py --mode ${TRADING_MODE:-paper}
+
+  # PostgreSQL with TimescaleDB
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: alphatrade_postgres
+    environment:
+      - POSTGRES_DB=alphatrade
+      - POSTGRES_USER=trading
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-trading123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - trading_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d alphatrade"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: alphatrade_redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - trading_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Grafana for Monitoring
+  grafana:
+    image: grafana/grafana:latest
+    container_name: alphatrade_grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - trading_network
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  # Prometheus for Metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: alphatrade_prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - trading_network
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+
+  # Jupyter Notebook for Research
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jupyter
+    container_name: alphatrade_jupyter
+    environment:
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-alphatrade123}
+    volumes:
+      - ./notebooks:/app/notebooks
+      - ./data:/app/data:ro
+      - ./models:/app/models
+      - ./src:/app/src:ro
+    ports:
+      - "8888:8888"
+    networks:
+      - trading_network
+    restart: unless-stopped
+
+  # Model Training Service
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alphatrade_trainer
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=alphatrade
+      - POSTGRES_USER=trading
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-trading123}
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+    networks:
+      - trading_network
+    profiles:
+      - training
+    command: python scripts/train_models.py
+
+  # Backtest Runner
+  backtester:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alphatrade_backtester
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./models:/app/models:ro
+      - ./results:/app/results
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+    networks:
+      - trading_network
+    profiles:
+      - backtest
+    command: python main.py --mode backtest
+
+networks:
+  trading_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  grafana_data:
+  prometheus_data:

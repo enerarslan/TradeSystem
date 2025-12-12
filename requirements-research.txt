@@ -1,60 +1,73 @@
-# AlphaTrade System - Environment Variables
-# Copy this file to .env and fill in your values
+# AlphaTrade System - Research & Development Dependencies
+# Additional packages for Jupyter notebook environment
 
 # ==============================================================================
-# Trading Mode
+# Jupyter Environment
 # ==============================================================================
-TRADING_MODE=paper  # Options: backtest, paper, live
+jupyter>=1.0.0
+jupyterlab>=4.0.0
+ipywidgets>=8.1.0
+jupyter-contrib-nbextensions>=0.7.0
+nbconvert>=7.14.0
 
 # ==============================================================================
-# Broker Credentials - Alpaca
+# Advanced Visualization
 # ==============================================================================
-ALPACA_API_KEY=your_alpaca_api_key_here
-ALPACA_API_SECRET=your_alpaca_api_secret_here
+matplotlib>=3.8.0
+seaborn>=0.13.0
+plotly>=5.18.0
+bokeh>=3.3.0
+altair>=5.2.0
+mplfinance>=0.12.10b0
 
 # ==============================================================================
-# Database Configuration
+# Advanced Statistics
 # ==============================================================================
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=alphatrade
-POSTGRES_USER=trading
-POSTGRES_PASSWORD=your_secure_password_here
+pymc>=5.10.0
+arviz>=0.17.0
+networkx>=3.2.0
 
 # ==============================================================================
-# Redis Configuration
+# Portfolio Optimization
 # ==============================================================================
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=
+cvxpy>=1.4.0
+PyPortfolioOpt>=1.5.5
+riskfolio-lib>=5.0.0
 
 # ==============================================================================
-# Monitoring
+# Backtesting Frameworks
 # ==============================================================================
-GRAFANA_PASSWORD=admin123
-PROMETHEUS_HOST=localhost
+backtrader>=1.9.78
+bt>=0.2.10
+vectorbt>=0.26.0
 
 # ==============================================================================
-# Jupyter Notebook
+# Alternative Data
 # ==============================================================================
-JUPYTER_TOKEN=your_secure_token_here
+yfinance>=0.2.35
+fredapi>=0.5.1
+quandl>=3.7.0
+newsapi-python>=0.2.7
 
 # ==============================================================================
-# Optional: Interactive Brokers
+# NLP for Sentiment
 # ==============================================================================
-# IBKR_HOST=127.0.0.1
-# IBKR_PORT=7497
-# IBKR_CLIENT_ID=1
+transformers>=4.36.0
+nltk>=3.8.0
+textblob>=0.17.1
+vaderSentiment>=3.3.2
 
 # ==============================================================================
-# Optional: Alternative Data APIs
+# Research Utilities
 # ==============================================================================
-# POLYGON_API_KEY=your_polygon_key
-# QUANDL_API_KEY=your_quandl_key
-# NEWS_API_KEY=your_news_api_key
+tqdm>=4.66.0
+memory-profiler>=0.61.0
+line-profiler>=4.1.0
+snakeviz>=2.2.0
 
 # ==============================================================================
-# Logging
+# Documentation
 # ==============================================================================
-LOG_LEVEL=INFO
-LOG_DIR=logs
+sphinx>=7.2.0
+sphinx-rtd-theme>=2.0.0
+nbsphinx>=0.9.3

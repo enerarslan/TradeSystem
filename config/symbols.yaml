@@ -1,0 +1,617 @@
+# =============================================================================
+# SYMBOL CONFIGURATION - 46 STOCKS UNIVERSE
+# JPMorgan-Level Trading Universe Management
+# =============================================================================
+
+# Symbol universe
+universe:
+  name: "US_Large_Cap_46"
+  description: "Large-cap US equities for algorithmic trading"
+  total_symbols: 46
+  data_frequency: "15min"
+
+# Sector classification (GICS-based)
+sectors:
+  technology:
+    symbols:
+      - AAPL   # Apple Inc.
+      - MSFT   # Microsoft Corporation
+      - GOOGL  # Alphabet Inc.
+      - NVDA   # NVIDIA Corporation
+      - META   # Meta Platforms Inc.
+      - ADBE   # Adobe Inc.
+      - CRM    # Salesforce Inc.
+      - INTC   # Intel Corporation
+      - CSCO   # Cisco Systems Inc.
+      - AVGO   # Broadcom Inc.
+    weight_limit: 0.30
+    correlation_group: "tech"
+
+  healthcare:
+    symbols:
+      - UNH   # UnitedHealth Group
+      - JNJ   # Johnson & Johnson
+      - LLY   # Eli Lilly and Company
+      - MRK   # Merck & Co.
+      - ABBV  # AbbVie Inc.
+      - TMO   # Thermo Fisher Scientific
+      - AMGN  # Amgen Inc.
+    weight_limit: 0.25
+    correlation_group: "healthcare"
+
+  financials:
+    symbols:
+      - JPM   # JPMorgan Chase & Co.
+      - BAC   # Bank of America Corp
+      - GS    # Goldman Sachs Group
+      - V     # Visa Inc.
+      - MA    # Mastercard Inc.
+      - AXP   # American Express
+    weight_limit: 0.25
+    correlation_group: "financials"
+
+  consumer_discretionary:
+    symbols:
+      - AMZN  # Amazon.com Inc.
+      - TSLA  # Tesla Inc.
+      - HD    # Home Depot Inc.
+      - MCD   # McDonald's Corporation
+      - NKE   # Nike Inc.
+      - DIS   # Walt Disney Company
+    weight_limit: 0.25
+    correlation_group: "consumer"
+
+  consumer_staples:
+    symbols:
+      - PG    # Procter & Gamble
+      - KO    # Coca-Cola Company
+      - PEP   # PepsiCo Inc.
+      - COST  # Costco Wholesale
+      - WMT   # Walmart Inc.
+      - WBA   # Walgreens Boots Alliance
+    weight_limit: 0.20
+    correlation_group: "staples"
+
+  industrials:
+    symbols:
+      - CAT   # Caterpillar Inc.
+      - BA    # Boeing Company
+      - HON   # Honeywell International
+      - MMM   # 3M Company
+      - DOW   # Dow Inc.
+    weight_limit: 0.20
+    correlation_group: "industrials"
+
+  energy:
+    symbols:
+      - XOM   # Exxon Mobil Corporation
+      - CVX   # Chevron Corporation
+    weight_limit: 0.15
+    correlation_group: "energy"
+
+  communication_services:
+    symbols:
+      - VZ    # Verizon Communications
+    weight_limit: 0.10
+    correlation_group: "telecom"
+
+  conglomerates:
+    symbols:
+      - BRK.B  # Berkshire Hathaway
+    weight_limit: 0.10
+    correlation_group: "diversified"
+
+  insurance:
+    symbols:
+      - TRV   # Travelers Companies
+    weight_limit: 0.10
+    correlation_group: "insurance"
+
+  other:
+    symbols:
+      - IBM   # International Business Machines
+    weight_limit: 0.10
+    correlation_group: "tech"
+
+# Full symbol list with metadata
+symbols:
+  AAPL:
+    name: "Apple Inc."
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 80000000
+    spread_bps: 1
+    beta: 1.20
+    dividend_yield: 0.005
+    options_liquid: true
+
+  MSFT:
+    name: "Microsoft Corporation"
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 25000000
+    spread_bps: 1
+    beta: 0.95
+    dividend_yield: 0.008
+    options_liquid: true
+
+  GOOGL:
+    name: "Alphabet Inc."
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 20000000
+    spread_bps: 2
+    beta: 1.10
+    dividend_yield: 0.000
+    options_liquid: true
+
+  NVDA:
+    name: "NVIDIA Corporation"
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 50000000
+    spread_bps: 2
+    beta: 1.70
+    dividend_yield: 0.001
+    options_liquid: true
+
+  META:
+    name: "Meta Platforms Inc."
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 15000000
+    spread_bps: 2
+    beta: 1.30
+    dividend_yield: 0.000
+    options_liquid: true
+
+  ADBE:
+    name: "Adobe Inc."
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 3
+    beta: 1.15
+    dividend_yield: 0.000
+    options_liquid: true
+
+  CRM:
+    name: "Salesforce Inc."
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 5000000
+    spread_bps: 3
+    beta: 1.25
+    dividend_yield: 0.000
+    options_liquid: true
+
+  INTC:
+    name: "Intel Corporation"
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 30000000
+    spread_bps: 1
+    beta: 0.90
+    dividend_yield: 0.015
+    options_liquid: true
+
+  CSCO:
+    name: "Cisco Systems Inc."
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 15000000
+    spread_bps: 1
+    beta: 0.85
+    dividend_yield: 0.030
+    options_liquid: true
+
+  AVGO:
+    name: "Broadcom Inc."
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 2000000
+    spread_bps: 5
+    beta: 1.10
+    dividend_yield: 0.020
+    options_liquid: true
+
+  UNH:
+    name: "UnitedHealth Group"
+    sector: "healthcare"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 3
+    beta: 0.75
+    dividend_yield: 0.013
+    options_liquid: true
+
+  JNJ:
+    name: "Johnson & Johnson"
+    sector: "healthcare"
+    market_cap: "large"
+    avg_volume: 7000000
+    spread_bps: 1
+    beta: 0.55
+    dividend_yield: 0.030
+    options_liquid: true
+
+  LLY:
+    name: "Eli Lilly and Company"
+    sector: "healthcare"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 3
+    beta: 0.50
+    dividend_yield: 0.010
+    options_liquid: true
+
+  MRK:
+    name: "Merck & Co."
+    sector: "healthcare"
+    market_cap: "large"
+    avg_volume: 10000000
+    spread_bps: 1
+    beta: 0.45
+    dividend_yield: 0.028
+    options_liquid: true
+
+  ABBV:
+    name: "AbbVie Inc."
+    sector: "healthcare"
+    market_cap: "large"
+    avg_volume: 6000000
+    spread_bps: 2
+    beta: 0.70
+    dividend_yield: 0.040
+    options_liquid: true
+
+  TMO:
+    name: "Thermo Fisher Scientific"
+    sector: "healthcare"
+    market_cap: "large"
+    avg_volume: 1500000
+    spread_bps: 4
+    beta: 0.85
+    dividend_yield: 0.002
+    options_liquid: true
+
+  AMGN:
+    name: "Amgen Inc."
+    sector: "healthcare"
+    market_cap: "large"
+    avg_volume: 2500000
+    spread_bps: 3
+    beta: 0.60
+    dividend_yield: 0.032
+    options_liquid: true
+
+  JPM:
+    name: "JPMorgan Chase & Co."
+    sector: "financials"
+    market_cap: "large"
+    avg_volume: 10000000
+    spread_bps: 1
+    beta: 1.15
+    dividend_yield: 0.025
+    options_liquid: true
+
+  BAC:
+    name: "Bank of America Corp"
+    sector: "financials"
+    market_cap: "large"
+    avg_volume: 40000000
+    spread_bps: 1
+    beta: 1.35
+    dividend_yield: 0.025
+    options_liquid: true
+
+  GS:
+    name: "Goldman Sachs Group"
+    sector: "financials"
+    market_cap: "large"
+    avg_volume: 2500000
+    spread_bps: 3
+    beta: 1.40
+    dividend_yield: 0.025
+    options_liquid: true
+
+  V:
+    name: "Visa Inc."
+    sector: "financials"
+    market_cap: "large"
+    avg_volume: 6000000
+    spread_bps: 2
+    beta: 0.95
+    dividend_yield: 0.008
+    options_liquid: true
+
+  MA:
+    name: "Mastercard Inc."
+    sector: "financials"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 2
+    beta: 1.05
+    dividend_yield: 0.006
+    options_liquid: true
+
+  AXP:
+    name: "American Express"
+    sector: "financials"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 2
+    beta: 1.25
+    dividend_yield: 0.012
+    options_liquid: true
+
+  AMZN:
+    name: "Amazon.com Inc."
+    sector: "consumer_discretionary"
+    market_cap: "large"
+    avg_volume: 45000000
+    spread_bps: 1
+    beta: 1.25
+    dividend_yield: 0.000
+    options_liquid: true
+
+  TSLA:
+    name: "Tesla Inc."
+    sector: "consumer_discretionary"
+    market_cap: "large"
+    avg_volume: 100000000
+    spread_bps: 2
+    beta: 2.00
+    dividend_yield: 0.000
+    options_liquid: true
+
+  HD:
+    name: "Home Depot Inc."
+    sector: "consumer_discretionary"
+    market_cap: "large"
+    avg_volume: 4000000
+    spread_bps: 2
+    beta: 1.05
+    dividend_yield: 0.025
+    options_liquid: true
+
+  MCD:
+    name: "McDonald's Corporation"
+    sector: "consumer_discretionary"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 2
+    beta: 0.65
+    dividend_yield: 0.022
+    options_liquid: true
+
+  NKE:
+    name: "Nike Inc."
+    sector: "consumer_discretionary"
+    market_cap: "large"
+    avg_volume: 6000000
+    spread_bps: 2
+    beta: 1.10
+    dividend_yield: 0.012
+    options_liquid: true
+
+  DIS:
+    name: "Walt Disney Company"
+    sector: "consumer_discretionary"
+    market_cap: "large"
+    avg_volume: 10000000
+    spread_bps: 1
+    beta: 1.20
+    dividend_yield: 0.000
+    options_liquid: true
+
+  PG:
+    name: "Procter & Gamble"
+    sector: "consumer_staples"
+    market_cap: "large"
+    avg_volume: 7000000
+    spread_bps: 1
+    beta: 0.40
+    dividend_yield: 0.025
+    options_liquid: true
+
+  KO:
+    name: "Coca-Cola Company"
+    sector: "consumer_staples"
+    market_cap: "large"
+    avg_volume: 12000000
+    spread_bps: 1
+    beta: 0.55
+    dividend_yield: 0.030
+    options_liquid: true
+
+  PEP:
+    name: "PepsiCo Inc."
+    sector: "consumer_staples"
+    market_cap: "large"
+    avg_volume: 5000000
+    spread_bps: 2
+    beta: 0.60
+    dividend_yield: 0.028
+    options_liquid: true
+
+  COST:
+    name: "Costco Wholesale"
+    sector: "consumer_staples"
+    market_cap: "large"
+    avg_volume: 2000000
+    spread_bps: 3
+    beta: 0.75
+    dividend_yield: 0.007
+    options_liquid: true
+
+  WMT:
+    name: "Walmart Inc."
+    sector: "consumer_staples"
+    market_cap: "large"
+    avg_volume: 8000000
+    spread_bps: 1
+    beta: 0.50
+    dividend_yield: 0.015
+    options_liquid: true
+
+  WBA:
+    name: "Walgreens Boots Alliance"
+    sector: "consumer_staples"
+    market_cap: "large"
+    avg_volume: 8000000
+    spread_bps: 2
+    beta: 0.80
+    dividend_yield: 0.050
+    options_liquid: true
+
+  CAT:
+    name: "Caterpillar Inc."
+    sector: "industrials"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 2
+    beta: 1.10
+    dividend_yield: 0.020
+    options_liquid: true
+
+  BA:
+    name: "Boeing Company"
+    sector: "industrials"
+    market_cap: "large"
+    avg_volume: 8000000
+    spread_bps: 2
+    beta: 1.50
+    dividend_yield: 0.000
+    options_liquid: true
+
+  HON:
+    name: "Honeywell International"
+    sector: "industrials"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 2
+    beta: 1.05
+    dividend_yield: 0.022
+    options_liquid: true
+
+  MMM:
+    name: "3M Company"
+    sector: "industrials"
+    market_cap: "large"
+    avg_volume: 3000000
+    spread_bps: 2
+    beta: 0.95
+    dividend_yield: 0.055
+    options_liquid: true
+
+  DOW:
+    name: "Dow Inc."
+    sector: "industrials"
+    market_cap: "large"
+    avg_volume: 5000000
+    spread_bps: 2
+    beta: 1.30
+    dividend_yield: 0.050
+    options_liquid: true
+
+  XOM:
+    name: "Exxon Mobil Corporation"
+    sector: "energy"
+    market_cap: "large"
+    avg_volume: 15000000
+    spread_bps: 1
+    beta: 0.90
+    dividend_yield: 0.035
+    options_liquid: true
+
+  CVX:
+    name: "Chevron Corporation"
+    sector: "energy"
+    market_cap: "large"
+    avg_volume: 8000000
+    spread_bps: 2
+    beta: 1.00
+    dividend_yield: 0.040
+    options_liquid: true
+
+  VZ:
+    name: "Verizon Communications"
+    sector: "communication_services"
+    market_cap: "large"
+    avg_volume: 15000000
+    spread_bps: 1
+    beta: 0.40
+    dividend_yield: 0.065
+    options_liquid: true
+
+  BRK.B:
+    name: "Berkshire Hathaway"
+    sector: "conglomerates"
+    market_cap: "large"
+    avg_volume: 4000000
+    spread_bps: 2
+    beta: 0.85
+    dividend_yield: 0.000
+    options_liquid: true
+
+  TRV:
+    name: "Travelers Companies"
+    sector: "insurance"
+    market_cap: "large"
+    avg_volume: 1500000
+    spread_bps: 3
+    beta: 0.80
+    dividend_yield: 0.022
+    options_liquid: true
+
+  IBM:
+    name: "International Business Machines"
+    sector: "technology"
+    market_cap: "large"
+    avg_volume: 4000000
+    spread_bps: 2
+    beta: 0.75
+    dividend_yield: 0.045
+    options_liquid: true
+
+# Trading restrictions
+restrictions:
+  # Symbols with trading restrictions
+  restricted: []
+
+  # Symbols requiring special handling
+  special_handling:
+    - symbol: "BRK.B"
+      reason: "Non-standard ticker format"
+      handling: "Use BRK-B for some APIs"
+
+  # Earnings blackout periods (auto-updated)
+  earnings_blackout_days_before: 2
+  earnings_blackout_days_after: 1
+
+# Correlation pairs for pairs trading
+correlation_pairs:
+  - pair: ["AAPL", "MSFT"]
+    sector: "technology"
+    historical_correlation: 0.85
+
+  - pair: ["JPM", "BAC"]
+    sector: "financials"
+    historical_correlation: 0.90
+
+  - pair: ["XOM", "CVX"]
+    sector: "energy"
+    historical_correlation: 0.92
+
+  - pair: ["V", "MA"]
+    sector: "financials"
+    historical_correlation: 0.88
+
+  - pair: ["PG", "KO"]
+    sector: "consumer_staples"
+    historical_correlation: 0.75
+
+  - pair: ["HD", "WMT"]
+    sector: "retail"
+    historical_correlation: 0.70
