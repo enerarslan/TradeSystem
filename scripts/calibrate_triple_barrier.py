@@ -618,15 +618,15 @@ class TripleBarrierCalibrator:
         for symbol, result in results.items():
             config['symbols'][symbol] = {
                 'volatility_group': result.volatility_group,
-                'atr_pct': round(result.atr_pct, 4),
-                'profit_target_atr_mult': round(result.profit_target_atr_mult, 2),
-                'stop_loss_atr_mult': round(result.stop_loss_atr_mult, 2),
-                'max_holding_period': result.max_holding_period,
+                'atr_pct': float(round(result.atr_pct, 4)),
+                'profit_target_atr_mult': float(round(result.profit_target_atr_mult, 2)),
+                'stop_loss_atr_mult': float(round(result.stop_loss_atr_mult, 2)),
+                'max_holding_period': int(result.max_holding_period),
                 'quality_metrics': {
-                    'label_autocorr': round(result.label_autocorrelation, 4),
-                    'upper_touch_pct': round(result.upper_touch_pct, 4),
-                    'lower_touch_pct': round(result.lower_touch_pct, 4),
-                    'vertical_touch_pct': round(result.vertical_touch_pct, 4)
+                    'label_autocorr': float(round(result.label_autocorrelation, 4)),
+                    'upper_touch_pct': float(round(result.upper_touch_pct, 4)),
+                    'lower_touch_pct': float(round(result.lower_touch_pct, 4)),
+                    'vertical_touch_pct': float(round(result.vertical_touch_pct, 4))
                 }
             }
 
