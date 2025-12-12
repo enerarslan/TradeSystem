@@ -4,10 +4,11 @@ JPMorgan-Level Data Cleaning and Transformation
 
 Features:
 - Missing data handling
-- Outlier detection and treatment
+- Outlier detection and treatment (Z-score, IQR, MAD, Winsorization)
 - Corporate actions adjustment
 - Time alignment and resampling
 - Data quality scoring
+- Feature Neutralization (beta neutralization via OLS regression)
 """
 
 import numpy as np
@@ -44,6 +45,7 @@ class OutlierMethod(Enum):
     MAD = "mad"
     PERCENTILE = "percentile"
     ISOLATION_FOREST = "isolation_forest"
+    WINSORIZE = "winsorize"  # Winsorization - cap at percentiles instead of removing
 
 
 @dataclass
@@ -182,24 +184,53 @@ class DataCleaner:
             if col not in df.columns:
                 continue
 
-            if method == OutlierMethod.ZSCORE:
-                outlier_mask = self._detect_zscore_outliers(df[col])
-            elif method == OutlierMethod.IQR:
-                outlier_mask = self._detect_iqr_outliers(df[col])
-            elif method == OutlierMethod.MAD:
-                outlier_mask = self._detect_mad_outliers(df[col])
+            if method == OutlierMethod.WINSORIZE:
+                # Winsorization - cap values at percentiles instead of removing
+                df[col] = self._winsorize(df[col])
             else:
-                outlier_mask = pd.Series(False, index=df.index)
+                if method == OutlierMethod.ZSCORE:
+                    outlier_mask = self._detect_zscore_outliers(df[col])
+                elif method == OutlierMethod.IQR:
+                    outlier_mask = self._detect_iqr_outliers(df[col])
+                elif method == OutlierMethod.MAD:
+                    outlier_mask = self._detect_mad_outliers(df[col])
+                else:
+                    outlier_mask = pd.Series(False, index=df.index)
 
-            # Replace outliers with interpolated values
-            if outlier_mask.any():
-                outlier_count = outlier_mask.sum()
-                logger.debug(f"Found {outlier_count} outliers in {col}")
+                # Replace outliers with interpolated values
+                if outlier_mask.any():
+                    outlier_count = outlier_mask.sum()
+                    logger.debug(f"Found {outlier_count} outliers in {col}")
 
-                df.loc[outlier_mask, col] = np.nan
-                df[col] = df[col].interpolate(method='linear')
+                    df.loc[outlier_mask, col] = np.nan
+                    df[col] = df[col].interpolate(method='linear')
 
         return df
+
+    def _winsorize(
+        self,
+        series: pd.Series,
+        lower_percentile: float = 1.0,
+        upper_percentile: float = 99.0
+    ) -> pd.Series:
+        """
+        Winsorize series by capping values at percentiles.
+
+        Unlike deletion, Winsorization preserves temporal continuity by
+        capping extreme values to the percentile bounds.
+
+        Args:
+            series: Input series
+            lower_percentile: Lower percentile bound (default 1st percentile)
+            upper_percentile: Upper percentile bound (default 99th percentile)
+
+        Returns:
+            Winsorized series
+        """
+        lower_bound = series.quantile(lower_percentile / 100)
+        upper_bound = series.quantile(upper_percentile / 100)
+
+        return series.clip(lower=lower_bound, upper=upper_bound)
 
     def _detect_zscore_outliers(
         self,
@@ -709,3 +740,544 @@ class CorporateActionsAdjuster:
                         df.loc[mask, col] = df.loc[mask, col] - amount
 
         return df
+
+
+class FeatureNeutralizer:
+    """
+    Feature Neutralization using OLS regression.
+
+    Orthogonalizes features against market factors (e.g., SPY returns)
+    to remove systematic market exposure.
+
+    Formula: Feature_Neutral = Feature_Raw - (Beta * Market_Return)
+
+    This helps create alpha factors that are independent of market direction.
+    """
+
+    def __init__(
+        self,
+        market_benchmark: str = 'SPY',
+        window: Optional[int] = None,
+        min_periods: int = 20
+    ):
+        """
+        Initialize FeatureNeutralizer.
+
+        Args:
+            market_benchmark: Symbol for market benchmark (default: SPY)
+            window: Rolling window for beta calculation (None = expanding)
+            min_periods: Minimum periods for calculation
+        """
+        self.market_benchmark = market_benchmark
+        self.window = window
+        self.min_periods = min_periods
+        self._market_returns: Optional[pd.Series] = None
+        self._fitted_betas: Dict[str, float] = {}
+
+        logger.info(f"FeatureNeutralizer initialized with benchmark: {market_benchmark}")
+
+    def set_market_returns(
+        self,
+        market_data: Union[pd.Series, pd.DataFrame]
+    ) -> 'FeatureNeutralizer':
+        """
+        Set market returns for neutralization.
+
+        Args:
+            market_data: Either returns series or DataFrame with 'close' column
+
+        Returns:
+            Self for chaining
+        """
+        if isinstance(market_data, pd.DataFrame):
+            if 'close' in market_data.columns:
+                self._market_returns = market_data['close'].pct_change()
+            else:
+                raise ValueError("DataFrame must have 'close' column")
+        else:
+            self._market_returns = market_data
+
+        logger.info(f"Market returns set: {len(self._market_returns)} observations")
+        return self
+
+    def calculate_beta(
+        self,
+        feature: pd.Series,
+        market_returns: Optional[pd.Series] = None
+    ) -> float:
+        """
+        Calculate beta of feature against market using OLS regression.
+
+        Args:
+            feature: Feature series
+            market_returns: Market returns (uses stored if not provided)
+
+        Returns:
+            Beta coefficient
+        """
+        market_returns = market_returns if market_returns is not None else self._market_returns
+
+        if market_returns is None:
+            raise ValueError("Market returns not set. Call set_market_returns() first.")
+
+        # Align indices
+        common_idx = feature.index.intersection(market_returns.index)
+        f = feature.loc[common_idx].dropna()
+        m = market_returns.loc[common_idx].dropna()
+
+        # Use intersection after dropna
+        common_idx = f.index.intersection(m.index)
+        f = f.loc[common_idx]
+        m = m.loc[common_idx]
+
+        if len(f) < self.min_periods:
+            logger.warning(f"Insufficient data for beta calculation: {len(f)} < {self.min_periods}")
+            return 0.0
+
+        # OLS regression: feature = alpha + beta * market + epsilon
+        # Beta = Cov(feature, market) / Var(market)
+        covariance = np.cov(f.values, m.values)[0, 1]
+        variance = np.var(m.values)
+
+        if variance == 0:
+            return 0.0
+
+        beta = covariance / variance
+        return beta
+
+    def calculate_rolling_beta(
+        self,
+        feature: pd.Series,
+        market_returns: Optional[pd.Series] = None,
+        window: Optional[int] = None
+    ) -> pd.Series:
+        """
+        Calculate rolling beta.
+
+        Args:
+            feature: Feature series
+            market_returns: Market returns
+            window: Rolling window (uses instance default if not provided)
+
+        Returns:
+            Series of rolling betas
+        """
+        market_returns = market_returns if market_returns is not None else self._market_returns
+        window = window or self.window
+
+        if market_returns is None:
+            raise ValueError("Market returns not set.")
+
+        # Align data
+        common_idx = feature.index.intersection(market_returns.index)
+        f = feature.loc[common_idx]
+        m = market_returns.loc[common_idx]
+
+        if window is None:
+            # Expanding beta
+            betas = pd.Series(index=f.index, dtype=float)
+            for i in range(self.min_periods, len(f) + 1):
+                f_window = f.iloc[:i]
+                m_window = m.iloc[:i]
+                cov = np.cov(f_window.dropna(), m_window.dropna())[0, 1]
+                var = m_window.var()
+                betas.iloc[i - 1] = cov / var if var > 0 else 0
+        else:
+            # Rolling beta
+            def calc_beta(x, y):
+                if len(x) < self.min_periods:
+                    return np.nan
+                cov = np.cov(x, y)[0, 1]
+                var = np.var(y)
+                return cov / var if var > 0 else 0
+
+            betas = pd.Series(index=f.index, dtype=float)
+            for i in range(window, len(f) + 1):
+                f_window = f.iloc[i - window:i]
+                m_window = m.iloc[i - window:i]
+                valid_mask = f_window.notna() & m_window.notna()
+                if valid_mask.sum() >= self.min_periods:
+                    betas.iloc[i - 1] = calc_beta(
+                        f_window[valid_mask].values,
+                        m_window[valid_mask].values
+                    )
+
+        return betas
+
+    def neutralize(
+        self,
+        feature: pd.Series,
+        market_returns: Optional[pd.Series] = None,
+        rolling: bool = False
+    ) -> pd.Series:
+        """
+        Neutralize feature against market.
+
+        Feature_Neutral = Feature_Raw - (Beta * Market_Return)
+
+        Args:
+            feature: Feature series to neutralize
+            market_returns: Market returns (uses stored if not provided)
+            rolling: Use rolling beta (True) or static beta (False)
+
+        Returns:
+            Neutralized feature series
+        """
+        market_returns = market_returns if market_returns is not None else self._market_returns
+
+        if market_returns is None:
+            raise ValueError("Market returns not set.")
+
+        # Align data
+        common_idx = feature.index.intersection(market_returns.index)
+        f = feature.loc[common_idx]
+        m = market_returns.loc[common_idx]
+
+        if rolling:
+            betas = self.calculate_rolling_beta(f, m)
+            neutralized = f - (betas * m)
+        else:
+            beta = self.calculate_beta(f, m)
+            neutralized = f - (beta * m)
+            self._fitted_betas[feature.name or 'feature'] = beta
+            logger.debug(f"Neutralized feature with beta={beta:.4f}")
+
+        return neutralized
+
+    def neutralize_dataframe(
+        self,
+        df: pd.DataFrame,
+        columns: Optional[List[str]] = None,
+        market_returns: Optional[pd.Series] = None,
+        rolling: bool = False,
+        suffix: str = '_neutral'
+    ) -> pd.DataFrame:
+        """
+        Neutralize multiple features in a DataFrame.
+
+        Args:
+            df: DataFrame with features
+            columns: Columns to neutralize (default: all numeric)
+            market_returns: Market returns
+            rolling: Use rolling beta
+            suffix: Suffix for neutralized column names
+
+        Returns:
+            DataFrame with neutralized features
+        """
+        market_returns = market_returns if market_returns is not None else self._market_returns
+
+        if market_returns is None:
+            raise ValueError("Market returns not set.")
+
+        result = df.copy()
+
+        if columns is None:
+            columns = df.select_dtypes(include=[np.number]).columns.tolist()
+
+        for col in columns:
+            if col not in df.columns:
+                continue
+
+            try:
+                neutralized = self.neutralize(df[col], market_returns, rolling)
+                result[f'{col}{suffix}'] = neutralized
+            except Exception as e:
+                logger.warning(f"Failed to neutralize {col}: {e}")
+
+        return result
+
+    def fit(
+        self,
+        features_df: pd.DataFrame,
+        market_returns: pd.Series,
+        columns: Optional[List[str]] = None
+    ) -> 'FeatureNeutralizer':
+        """
+        Fit neutralizer by calculating betas for all features.
+
+        Args:
+            features_df: DataFrame with features
+            market_returns: Market returns series
+            columns: Columns to fit (default: all numeric)
+
+        Returns:
+            Self for chaining
+        """
+        self.set_market_returns(market_returns)
+
+        if columns is None:
+            columns = features_df.select_dtypes(include=[np.number]).columns.tolist()
+
+        for col in columns:
+            if col not in features_df.columns:
+                continue
+
+            beta = self.calculate_beta(features_df[col], market_returns)
+            self._fitted_betas[col] = beta
+
+        logger.info(f"Fitted betas for {len(self._fitted_betas)} features")
+        return self
+
+    def transform(
+        self,
+        features_df: pd.DataFrame,
+        columns: Optional[List[str]] = None,
+        suffix: str = '_neutral'
+    ) -> pd.DataFrame:
+        """
+        Transform features using fitted betas.
+
+        Args:
+            features_df: DataFrame with features
+            columns: Columns to transform
+            suffix: Suffix for neutralized columns
+
+        Returns:
+            Transformed DataFrame
+        """
+        if self._market_returns is None:
+            raise ValueError("Must fit neutralizer first")
+
+        result = features_df.copy()
+
+        if columns is None:
+            columns = list(self._fitted_betas.keys())
+
+        for col in columns:
+            if col not in features_df.columns:
+                continue
+            if col not in self._fitted_betas:
+                continue
+
+            beta = self._fitted_betas[col]
+            common_idx = features_df.index.intersection(self._market_returns.index)
+
+            neutralized = features_df.loc[common_idx, col] - (beta * self._market_returns.loc[common_idx])
+            result.loc[common_idx, f'{col}{suffix}'] = neutralized
+
+        return result
+
+    def get_betas(self) -> Dict[str, float]:
+        """Get fitted betas"""
+        return self._fitted_betas.copy()
+
+
+class RobustOutlierHandler:
+    """
+    Robust outlier detection and handling.
+
+    Provides multiple methods for outlier treatment that preserve
+    temporal continuity:
+    - Winsorization (1st and 99th percentile capping)
+    - MAD-based detection
+    - Rolling statistics
+    """
+
+    def __init__(
+        self,
+        lower_percentile: float = 1.0,
+        upper_percentile: float = 99.0,
+        mad_threshold: float = 3.5,
+        rolling_window: int = 20
+    ):
+        """
+        Initialize RobustOutlierHandler.
+
+        Args:
+            lower_percentile: Lower percentile for winsorization
+            upper_percentile: Upper percentile for winsorization
+            mad_threshold: Threshold for MAD-based detection
+            rolling_window: Window for rolling statistics
+        """
+        self.lower_percentile = lower_percentile
+        self.upper_percentile = upper_percentile
+        self.mad_threshold = mad_threshold
+        self.rolling_window = rolling_window
+
+    def winsorize(
+        self,
+        series: pd.Series,
+        lower_percentile: Optional[float] = None,
+        upper_percentile: Optional[float] = None
+    ) -> pd.Series:
+        """
+        Winsorize series by capping at percentiles.
+
+        Args:
+            series: Input series
+            lower_percentile: Lower bound percentile
+            upper_percentile: Upper bound percentile
+
+        Returns:
+            Winsorized series
+        """
+        lower = lower_percentile or self.lower_percentile
+        upper = upper_percentile or self.upper_percentile
+
+        lower_bound = series.quantile(lower / 100)
+        upper_bound = series.quantile(upper / 100)
+
+        return series.clip(lower=lower_bound, upper=upper_bound)
+
+    def mad_score(self, series: pd.Series) -> pd.Series:
+        """
+        Calculate Median Absolute Deviation score.
+
+        MAD is more robust to outliers than standard deviation.
+
+        Args:
+            series: Input series
+
+        Returns:
+            MAD scores
+        """
+        median = series.median()
+        mad = np.median(np.abs(series - median))
+
+        if mad == 0:
+            return pd.Series(0, index=series.index)
+
+        # Modified Z-score using MAD
+        return 0.6745 * (series - median) / mad
+
+    def detect_mad_outliers(
+        self,
+        series: pd.Series,
+        threshold: Optional[float] = None
+    ) -> pd.Series:
+        """
+        Detect outliers using MAD.
+
+        Args:
+            series: Input series
+            threshold: MAD threshold (default: instance setting)
+
+        Returns:
+            Boolean mask of outliers
+        """
+        threshold = threshold or self.mad_threshold
+        mad_scores = self.mad_score(series)
+        return np.abs(mad_scores) > threshold
+
+    def rolling_winsorize(
+        self,
+        series: pd.Series,
+        window: Optional[int] = None
+    ) -> pd.Series:
+        """
+        Winsorize using rolling percentiles for time-series data.
+
+        This adapts to changing market regimes.
+
+        Args:
+            series: Input series
+            window: Rolling window size
+
+        Returns:
+            Rolling-winsorized series
+        """
+        window = window or self.rolling_window
+
+        rolling_lower = series.rolling(window).quantile(self.lower_percentile / 100)
+        rolling_upper = series.rolling(window).quantile(self.upper_percentile / 100)
+
+        result = series.copy()
+        result = result.clip(lower=rolling_lower, upper=rolling_upper)
+
+        return result
+
+    def handle_outliers(
+        self,
+        df: pd.DataFrame,
+        columns: Optional[List[str]] = None,
+        method: str = 'winsorize',
+        rolling: bool = False
+    ) -> pd.DataFrame:
+        """
+        Handle outliers in DataFrame.
+
+        Args:
+            df: Input DataFrame
+            columns: Columns to process (default: numeric columns)
+            method: 'winsorize', 'mad', or 'clip'
+            rolling: Use rolling statistics
+
+        Returns:
+            DataFrame with handled outliers
+        """
+        result = df.copy()
+
+        if columns is None:
+            columns = df.select_dtypes(include=[np.number]).columns.tolist()
+
+        for col in columns:
+            if col not in result.columns:
+                continue
+
+            if method == 'winsorize':
+                if rolling:
+                    result[col] = self.rolling_winsorize(result[col])
+                else:
+                    result[col] = self.winsorize(result[col])
+
+            elif method == 'mad':
+                outliers = self.detect_mad_outliers(result[col])
+                if outliers.any():
+                    logger.debug(f"MAD detected {outliers.sum()} outliers in {col}")
+                    # Replace with winsorized values
+                    winsorized = self.winsorize(result[col])
+                    result.loc[outliers, col] = winsorized.loc[outliers]
+
+            elif method == 'clip':
+                # Simple percentile clipping
+                result[col] = self.winsorize(result[col])
+
+        return result
+
+    def detect_and_report(
+        self,
+        df: pd.DataFrame,
+        columns: Optional[List[str]] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Detect and report outliers without modifying data.
+
+        Args:
+            df: Input DataFrame
+            columns: Columns to analyze
+
+        Returns:
+            Report dictionary with outlier statistics
+        """
+        report = {}
+
+        if columns is None:
+            columns = df.select_dtypes(include=[np.number]).columns.tolist()
+
+        for col in columns:
+            if col not in df.columns:
+                continue
+
+            series = df[col].dropna()
+
+            # MAD detection
+            mad_outliers = self.detect_mad_outliers(series)
+
+            # Percentile bounds
+            lower_bound = series.quantile(self.lower_percentile / 100)
+            upper_bound = series.quantile(self.upper_percentile / 100)
+            percentile_outliers = (series < lower_bound) | (series > upper_bound)
+
+            report[col] = {
+                'mad_outliers': mad_outliers.sum(),
+                'mad_outlier_pct': mad_outliers.mean() * 100,
+                'percentile_outliers': percentile_outliers.sum(),
+                'percentile_outlier_pct': percentile_outliers.mean() * 100,
+                'lower_bound': lower_bound,
+                'upper_bound': upper_bound,
+                'median': series.median(),
+                'mad': np.median(np.abs(series - series.median()))
+            }
+
+        return report

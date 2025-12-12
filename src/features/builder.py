@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 import warnings
 
 from .technical import TechnicalIndicators, AdvancedTechnicals
+from .fracdiff import FractionalDifferentiation, FracDiffConfig, FracDiffFeatureTransformer
 from ..utils.logger import get_logger, get_performance_logger
 from ..utils.helpers import safe_divide, timer
 
@@ -46,6 +47,12 @@ class FeatureConfig:
     min_importance: float = 0.001
     correlation_threshold: float = 0.95
 
+    # Fractional differentiation
+    use_frac_diff: bool = True
+    frac_diff_auto_optimize: bool = True
+    frac_diff_default_d: float = 0.5
+    frac_diff_threshold: float = 1e-5
+
 
 class FeatureBuilder:
     """
@@ -71,6 +78,23 @@ class FeatureBuilder:
         self._feature_functions: Dict[str, Callable] = {}
         self._register_features()
 
+        # Initialize fractional differentiation
+        if self.config.use_frac_diff:
+            frac_config = FracDiffConfig(
+                threshold=self.config.frac_diff_threshold
+            )
+            self._frac_diff = FractionalDifferentiation(frac_config)
+            self._frac_diff_transformer = FracDiffFeatureTransformer(
+                d=None if self.config.frac_diff_auto_optimize else self.config.frac_diff_default_d,
+                auto_optimize=self.config.frac_diff_auto_optimize,
+                threshold=self.config.frac_diff_threshold
+            )
+        else:
+            self._frac_diff = None
+            self._frac_diff_transformer = None
+
+        self._fitted_frac_diff_d: Dict[str, float] = {}
+
         logger.info("FeatureBuilder initialized")
 
     def _register_features(self) -> None:
@@ -85,6 +109,66 @@ class FeatureBuilder:
         self._feature_functions['statistical'] = self._generate_statistical_features
         self._feature_functions['time'] = self._generate_time_features
         self._feature_functions['pattern'] = self._generate_pattern_features
+        self._feature_functions['fracdiff'] = self._generate_fracdiff_features
+
+    def _generate_fracdiff_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate fractionally differentiated features.
+
+        Uses fractional differentiation to achieve stationarity while
+        preserving memory in the time series.
+        """
+        features = pd.DataFrame(index=df.index)
+
+        if self._frac_diff is None:
+            return features
+
+        # Apply FFD to close price
+        try:
+            result = self._frac_diff.auto_frac_diff(
+                df['close'],
+                find_optimal=self.config.frac_diff_auto_optimize
+            )
+            features['close_ffd'] = result.series
+            self._fitted_frac_diff_d['close'] = result.d
+
+            # Apply FFD to volume (log volume first)
+            log_volume = np.log1p(df['volume'])
+            vol_result = self._frac_diff.auto_frac_diff(
+                log_volume,
+                find_optimal=self.config.frac_diff_auto_optimize
+            )
+            features['log_volume_ffd'] = vol_result.series
+            self._fitted_frac_diff_d['log_volume'] = vol_result.d
+
+            # Apply to high-low range
+            hl_range = np.log(df['high'] / df['low'])
+            range_result = self._frac_diff.auto_frac_diff(hl_range, find_optimal=False)
+            features['hl_range_ffd'] = range_result.series
+
+            # Generate features using FFD close
+            if 'close_ffd' in features.columns:
+                ffd_close = features['close_ffd'].dropna()
+                if len(ffd_close) > 20:
+                    # Moving averages of FFD close
+                    features['ffd_close_sma_5'] = TechnicalIndicators.sma(features['close_ffd'], 5)
+                    features['ffd_close_sma_20'] = TechnicalIndicators.sma(features['close_ffd'], 20)
+
+                    # Z-score of FFD close
+                    ffd_mean = features['close_ffd'].rolling(20).mean()
+                    ffd_std = features['close_ffd'].rolling(20).std()
+                    features['ffd_close_zscore'] = (features['close_ffd'] - ffd_mean) / ffd_std
+
+            logger.info(f"Generated FFD features with d={result.d:.4f}")
+
+        except Exception as e:
+            logger.warning(f"FFD feature generation failed: {e}")
+
+        return features
+
+    def get_frac_diff_d(self) -> Dict[str, float]:
+        """Get fitted fractional differentiation d values"""
+        return self._fitted_frac_diff_d.copy()
 
     def build_features(
         self,

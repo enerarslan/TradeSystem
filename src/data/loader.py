@@ -677,3 +677,376 @@ class StreamingDataLoader:
             results.append(result)
 
         return results
+
+
+class Level2DataLoader:
+    """
+    Loader for Level 2 (Order Book) data.
+
+    Supports various formats:
+    - Multi-level order book snapshots
+    - Best bid/ask data
+    - Trade and quote (TAQ) data
+
+    Expected file formats:
+    - CSV with columns: timestamp, bid_price_1, bid_size_1, ..., ask_price_1, ask_size_1, ...
+    - Parquet with same schema
+    """
+
+    # Standard column mapping for Level 2 data
+    LEVEL2_COLUMN_MAPPING = {
+        'timestamp': ['timestamp', 'time', 'datetime', 'date'],
+        'best_bid': ['best_bid', 'bid', 'bid_price', 'bid_price_1'],
+        'best_ask': ['best_ask', 'ask', 'ask_price', 'ask_price_1'],
+        'bid_size': ['bid_size', 'bid_volume', 'bid_size_1', 'bid_qty'],
+        'ask_size': ['ask_size', 'ask_volume', 'ask_size_1', 'ask_qty'],
+    }
+
+    def __init__(
+        self,
+        data_path: str = "data/level2",
+        cache_path: str = "data/cache",
+        n_levels: int = 5,
+        enable_cache: bool = True
+    ):
+        """
+        Initialize Level2DataLoader.
+
+        Args:
+            data_path: Path to Level 2 data directory
+            cache_path: Path for cached data
+            n_levels: Number of order book levels to load
+            enable_cache: Enable data caching
+        """
+        self.data_path = Path(data_path)
+        self.cache_path = Path(cache_path)
+        self.n_levels = n_levels
+        self.enable_cache = enable_cache
+
+        self._cache: Dict[str, pd.DataFrame] = {}
+
+        logger.info(f"Level2DataLoader initialized. Path: {self.data_path}")
+
+    def load(
+        self,
+        symbol: str,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        source: str = "auto"
+    ) -> pd.DataFrame:
+        """
+        Load Level 2 data for a symbol.
+
+        Args:
+            symbol: Stock symbol
+            start_date: Start date filter
+            end_date: End date filter
+            source: Data source ('auto', 'csv', 'parquet')
+
+        Returns:
+            DataFrame with Level 2 data
+        """
+        cache_key = f"{symbol}_l2"
+        if cache_key in self._cache:
+            df = self._cache[cache_key].copy()
+            return self._filter_dates(df, start_date, end_date)
+
+        # Detect source
+        if source == "auto":
+            source = self._detect_source(symbol)
+
+        # Load data
+        if source == "csv":
+            df = self._load_csv(symbol)
+        elif source == "parquet":
+            df = self._load_parquet(symbol)
+        else:
+            raise ValueError(f"Unknown source: {source}")
+
+        # Standardize columns
+        df = self._standardize_columns(df)
+
+        # Cache
+        if self.enable_cache:
+            self._cache[cache_key] = df.copy()
+
+        return self._filter_dates(df, start_date, end_date)
+
+    def _detect_source(self, symbol: str) -> str:
+        """Detect best available data source"""
+        parquet_path = self.data_path / f"{symbol}_l2.parquet"
+        if parquet_path.exists():
+            return "parquet"
+
+        csv_path = self.data_path / f"{symbol}_l2.csv"
+        if csv_path.exists():
+            return "csv"
+
+        # Check alternative naming
+        parquet_path = self.data_path / f"{symbol}_orderbook.parquet"
+        if parquet_path.exists():
+            return "parquet"
+
+        csv_path = self.data_path / f"{symbol}_orderbook.csv"
+        if csv_path.exists():
+            return "csv"
+
+        raise FileNotFoundError(f"No Level 2 data found for {symbol}")
+
+    def _load_csv(self, symbol: str) -> pd.DataFrame:
+        """Load Level 2 data from CSV"""
+        # Try different file names
+        for suffix in ['_l2.csv', '_orderbook.csv', '_quotes.csv']:
+            file_path = self.data_path / f"{symbol}{suffix}"
+            if file_path.exists():
+                break
+        else:
+            raise FileNotFoundError(f"CSV file not found for {symbol}")
+
+        logger.debug(f"Loading Level 2 CSV: {file_path}")
+
+        df = pd.read_csv(
+            file_path,
+            parse_dates=[0],
+            index_col=0
+        )
+
+        return df
+
+    def _load_parquet(self, symbol: str) -> pd.DataFrame:
+        """Load Level 2 data from Parquet"""
+        for suffix in ['_l2.parquet', '_orderbook.parquet', '_quotes.parquet']:
+            file_path = self.data_path / f"{symbol}{suffix}"
+            if file_path.exists():
+                break
+        else:
+            raise FileNotFoundError(f"Parquet file not found for {symbol}")
+
+        logger.debug(f"Loading Level 2 Parquet: {file_path}")
+
+        df = pd.read_parquet(file_path)
+
+        return df
+
+    def _standardize_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize column names"""
+        column_mapping = {}
+
+        for standard_name, variants in self.LEVEL2_COLUMN_MAPPING.items():
+            for variant in variants:
+                if variant in df.columns:
+                    column_mapping[variant] = standard_name
+                    break
+
+        df = df.rename(columns=column_mapping)
+
+        # Ensure index is DatetimeIndex
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+
+        return df
+
+    def _filter_dates(
+        self,
+        df: pd.DataFrame,
+        start_date: Optional[datetime],
+        end_date: Optional[datetime]
+    ) -> pd.DataFrame:
+        """Filter DataFrame by date range"""
+        if start_date:
+            df = df[df.index >= start_date]
+        if end_date:
+            df = df[df.index <= end_date]
+        return df
+
+    def merge_with_ohlcv(
+        self,
+        level2_df: pd.DataFrame,
+        ohlcv_df: pd.DataFrame,
+        method: str = 'asof'
+    ) -> pd.DataFrame:
+        """
+        Merge Level 2 data with OHLCV data.
+
+        Args:
+            level2_df: Level 2 DataFrame
+            ohlcv_df: OHLCV DataFrame
+            method: Merge method ('asof', 'nearest', 'intersection')
+
+        Returns:
+            Merged DataFrame
+        """
+        if method == 'asof':
+            # Align Level 2 to OHLCV timestamps
+            merged = pd.merge_asof(
+                ohlcv_df.sort_index(),
+                level2_df.sort_index(),
+                left_index=True,
+                right_index=True,
+                direction='backward'
+            )
+        elif method == 'nearest':
+            merged = pd.merge_asof(
+                ohlcv_df.sort_index(),
+                level2_df.sort_index(),
+                left_index=True,
+                right_index=True,
+                direction='nearest'
+            )
+        elif method == 'intersection':
+            common_idx = ohlcv_df.index.intersection(level2_df.index)
+            merged = pd.concat([
+                ohlcv_df.loc[common_idx],
+                level2_df.loc[common_idx]
+            ], axis=1)
+        else:
+            raise ValueError(f"Unknown merge method: {method}")
+
+        return merged
+
+    def aggregate_to_bars(
+        self,
+        level2_df: pd.DataFrame,
+        freq: str = '15min'
+    ) -> pd.DataFrame:
+        """
+        Aggregate tick-level Level 2 data to bars.
+
+        Args:
+            level2_df: Tick-level Level 2 data
+            freq: Target frequency
+
+        Returns:
+            Aggregated Level 2 data
+        """
+        agg_dict = {}
+
+        # Aggregate best bid/ask
+        if 'best_bid' in level2_df.columns:
+            agg_dict['best_bid'] = ['first', 'last', 'mean', 'max', 'min']
+        if 'best_ask' in level2_df.columns:
+            agg_dict['best_ask'] = ['first', 'last', 'mean', 'max', 'min']
+        if 'bid_size' in level2_df.columns:
+            agg_dict['bid_size'] = ['mean', 'sum', 'max']
+        if 'ask_size' in level2_df.columns:
+            agg_dict['ask_size'] = ['mean', 'sum', 'max']
+
+        # Resample
+        resampled = level2_df.resample(freq).agg(agg_dict)
+
+        # Flatten column names
+        resampled.columns = ['_'.join(col).strip() for col in resampled.columns.values]
+
+        return resampled
+
+    def create_snapshot(
+        self,
+        row: pd.Series,
+        timestamp: pd.Timestamp
+    ) -> 'OrderBookSnapshot':
+        """
+        Create OrderBookSnapshot from a data row.
+
+        Args:
+            row: Data row with Level 2 columns
+            timestamp: Timestamp for snapshot
+
+        Returns:
+            OrderBookSnapshot object
+        """
+        from ..features.microstructure import OrderBookSnapshot, OrderBookLevel
+
+        bids = []
+        asks = []
+
+        for i in range(1, self.n_levels + 1):
+            bid_price_col = f'bid_price_{i}'
+            bid_size_col = f'bid_size_{i}'
+            ask_price_col = f'ask_price_{i}'
+            ask_size_col = f'ask_size_{i}'
+
+            if bid_price_col in row.index and pd.notna(row[bid_price_col]):
+                bids.append(OrderBookLevel(
+                    price=row[bid_price_col],
+                    size=row.get(bid_size_col, 0)
+                ))
+
+            if ask_price_col in row.index and pd.notna(row[ask_price_col]):
+                asks.append(OrderBookLevel(
+                    price=row[ask_price_col],
+                    size=row.get(ask_size_col, 0)
+                ))
+
+        # Fallback to simple bid/ask if no multi-level data
+        if not bids and 'best_bid' in row.index:
+            bids.append(OrderBookLevel(
+                price=row['best_bid'],
+                size=row.get('bid_size', 0)
+            ))
+        if not asks and 'best_ask' in row.index:
+            asks.append(OrderBookLevel(
+                price=row['best_ask'],
+                size=row.get('ask_size', 0)
+            ))
+
+        return OrderBookSnapshot(
+            timestamp=timestamp,
+            bids=bids,
+            asks=asks
+        )
+
+    def generate_synthetic_level2(
+        self,
+        ohlcv_df: pd.DataFrame,
+        spread_pct: float = 0.001,
+        depth_base: float = 1000,
+        n_levels: int = 5
+    ) -> pd.DataFrame:
+        """
+        Generate synthetic Level 2 data from OHLCV for testing.
+
+        Args:
+            ohlcv_df: OHLCV DataFrame
+            spread_pct: Base spread as percentage of price
+            depth_base: Base depth at each level
+            n_levels: Number of levels to generate
+
+        Returns:
+            Synthetic Level 2 DataFrame
+        """
+        level2_data = []
+
+        for idx, row in ohlcv_df.iterrows():
+            close = row['close']
+            volume = row.get('volume', depth_base * n_levels * 2)
+
+            # Base spread varies with volatility
+            if 'high' in row and 'low' in row:
+                volatility = (row['high'] - row['low']) / close
+                spread = close * max(spread_pct, volatility * 0.5)
+            else:
+                spread = close * spread_pct
+
+            mid = close
+            half_spread = spread / 2
+
+            record = {'timestamp': idx}
+
+            for i in range(1, n_levels + 1):
+                # Price gets worse by level
+                level_offset = half_spread * (i - 1) * 0.5
+
+                record[f'bid_price_{i}'] = mid - half_spread - level_offset
+                record[f'ask_price_{i}'] = mid + half_spread + level_offset
+
+                # Depth decreases by level (with some randomness)
+                level_depth = depth_base * np.exp(-0.3 * (i - 1))
+                record[f'bid_size_{i}'] = level_depth * (0.8 + 0.4 * np.random.random())
+                record[f'ask_size_{i}'] = level_depth * (0.8 + 0.4 * np.random.random())
+
+            level2_data.append(record)
+
+        df = pd.DataFrame(level2_data)
+        df.set_index('timestamp', inplace=True)
+
+        return df
