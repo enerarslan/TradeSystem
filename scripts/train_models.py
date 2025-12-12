@@ -903,10 +903,10 @@ def train_single_model(
     """Train a single model and return metrics"""
     logger.info(f"Training {model_name}...")
 
-    model = model_class(name=model_name, **kwargs)
+    model = model_class(**kwargs)
 
-    # Train
-    model.train(X_train, y_train, X_val, y_val)
+    # Train (use fit method)
+    model.fit(X_train, y_train, validation_data=(X_val, y_val))
 
     # Evaluate
     val_pred = model.predict(X_val)
@@ -915,13 +915,28 @@ def train_single_model(
     # Metrics
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 
+    n_classes = len(np.unique(y_train))
+    is_binary = n_classes == 2
+
     metrics = {
         'accuracy': accuracy_score(y_val, val_pred),
-        'precision': precision_score(y_val, val_pred, zero_division=0),
-        'recall': recall_score(y_val, val_pred, zero_division=0),
-        'f1': f1_score(y_val, val_pred, zero_division=0),
-        'auc': roc_auc_score(y_val, val_prob[:, 1]) if val_prob is not None else 0
+        'precision': precision_score(y_val, val_pred, average='weighted', zero_division=0),
+        'recall': recall_score(y_val, val_pred, average='weighted', zero_division=0),
+        'f1': f1_score(y_val, val_pred, average='weighted', zero_division=0),
     }
+
+    # Calculate AUC appropriately for binary vs multiclass
+    try:
+        if val_prob is not None and len(val_prob.shape) == 2:
+            if is_binary:
+                metrics['auc'] = roc_auc_score(y_val, val_prob[:, 1])
+            else:
+                metrics['auc'] = roc_auc_score(y_val, val_prob, multi_class='ovr', average='weighted')
+        else:
+            metrics['auc'] = 0.0
+    except Exception as e:
+        logger.warning(f"Could not calculate AUC: {e}")
+        metrics['auc'] = 0.0
 
     logger.info(f"{model_name} - Accuracy: {metrics['accuracy']:.4f}, AUC: {metrics['auc']:.4f}")
 
@@ -951,10 +966,25 @@ def train_ensemble(
 
     from sklearn.metrics import accuracy_score, roc_auc_score
 
+    n_classes = len(np.unique(y_train))
+    is_binary = n_classes == 2
+
     metrics = {
         'accuracy': accuracy_score(y_val, val_pred),
-        'auc': roc_auc_score(y_val, val_prob[:, 1]) if val_prob is not None else 0
     }
+
+    # Calculate AUC appropriately for binary vs multiclass
+    try:
+        if val_prob is not None and len(val_prob.shape) == 2:
+            if is_binary:
+                metrics['auc'] = roc_auc_score(y_val, val_prob[:, 1])
+            else:
+                metrics['auc'] = roc_auc_score(y_val, val_prob, multi_class='ovr', average='weighted')
+        else:
+            metrics['auc'] = 0.0
+    except Exception as e:
+        logger.warning(f"Could not calculate ensemble AUC: {e}")
+        metrics['auc'] = 0.0
 
     logger.info(f"Ensemble - Accuracy: {metrics['accuracy']:.4f}, AUC: {metrics['auc']:.4f}")
 
@@ -1084,6 +1114,14 @@ def main():
     X = features_df.drop(columns=['symbol'], errors='ignore')
     y = labels.astype(int)
 
+    # Validate label distribution
+    unique_labels = y.unique()
+    logger.info(f"Unique labels in dataset: {sorted(unique_labels)}")
+    logger.info(f"Label distribution:\n{y.value_counts().sort_index()}")
+
+    if len(unique_labels) < 2:
+        raise ValueError(f"Need at least 2 classes for classification, but found only: {unique_labels}")
+
     # Apply optimal feature selection if enabled
     if args.use_optimal_features:
         try:
@@ -1115,6 +1153,17 @@ def main():
 
     logger.info(f"Train size: {len(X_train)}, Validation size: {len(X_val)}")
 
+    # Validate train/val label distributions
+    train_labels = y_train.unique()
+    val_labels = y_val.unique()
+    logger.info(f"Train labels: {sorted(train_labels)}, distribution: {y_train.value_counts().to_dict()}")
+    logger.info(f"Val labels: {sorted(val_labels)}, distribution: {y_val.value_counts().to_dict()}")
+
+    if len(train_labels) < 2:
+        raise ValueError(f"Training set needs at least 2 classes, but found: {train_labels}")
+    if len(val_labels) < 2:
+        logger.warning(f"Validation set has only {len(val_labels)} classes: {val_labels}. Metrics may be limited.")
+
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1137,12 +1186,18 @@ def main():
     all_metrics['xgboost'] = xgb_metrics
 
     # Apply clustered feature importance analysis
-    cluster_results = apply_clustered_feature_selection(
-        xgb_model.model if hasattr(xgb_model, 'model') else xgb_model,
-        X_val,
-        y_val,
-        method='mdi'
-    )
+    try:
+        # Access the underlying model from our wrapper
+        underlying_model = xgb_model._model if hasattr(xgb_model, '_model') else xgb_model
+        cluster_results = apply_clustered_feature_selection(
+            underlying_model,
+            X_val,
+            y_val,
+            method='mdi'
+        )
+    except Exception as e:
+        logger.warning(f"Clustered feature importance failed: {e}")
+        cluster_results = ([], {})
 
     # LightGBM
     lgb_model, lgb_metrics = train_single_model(

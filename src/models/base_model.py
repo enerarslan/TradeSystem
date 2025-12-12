@@ -84,8 +84,8 @@ class BaseModel(ABC):
             version: Model version
             **hyperparameters: Model hyperparameters
         """
+        self.model_type = model_type  # Set first for _generate_model_id()
         self.model_id = model_id or self._generate_model_id()
-        self.model_type = model_type
         self.version = version
         self.hyperparameters = hyperparameters
 

@@ -319,14 +319,16 @@ class TripleBarrierCalibrator:
         """
         Classify symbol into volatility bucket.
 
-        Thresholds based on typical stock volatility:
-        - Low: ATR < 1% (stable large caps like JNJ, KO)
-        - Medium: 1% <= ATR < 2% (most stocks)
-        - High: ATR >= 2% (volatile stocks like TSLA, NVDA)
+        Thresholds adjusted for 15-minute intraday bars:
+        - Low: ATR < 0.4% (very stable stocks)
+        - Medium: 0.4% <= ATR < 0.6% (typical stocks)
+        - High: ATR >= 0.6% (volatile stocks like TSLA, NVDA)
+
+        Note: Intraday ATR is much lower than daily ATR
         """
-        if atr_pct < 1.0:
+        if atr_pct < 0.4:
             return "low"
-        elif atr_pct < 2.0:
+        elif atr_pct < 0.6:
             return "medium"
         else:
             return "high"

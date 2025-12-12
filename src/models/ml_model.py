@@ -125,8 +125,12 @@ class XGBoostModel(BaseModel):
 
             if num_classes == 2:
                 self.hyperparameters['objective'] = 'binary:logistic'
+                self.hyperparameters['eval_metric'] = 'logloss'  # Binary log loss
+                # Remove num_class if it was set for multiclass
+                self.hyperparameters.pop('num_class', None)
             else:
                 self.hyperparameters['num_class'] = num_classes
+                self.hyperparameters['eval_metric'] = 'mlogloss'  # Multi-class log loss
         else:
             y_encoded = y.values
             self._label_encoder = None
