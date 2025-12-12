@@ -308,10 +308,18 @@ class TripleBarrierLabeler:
                 continue
 
             # Get price path from t0 to t1
+            # Handle timezone issues by using positional indexing
             try:
-                path = close.loc[t0:t1]
-            except KeyError:
-                continue
+                # Find positions to avoid timezone offset issues with DST
+                t0_pos = close.index.get_loc(t0)
+                t1_pos = close.index.get_loc(t1) if t1 in close.index else close.index.searchsorted(t1)
+                path = close.iloc[t0_pos:t1_pos + 1]
+            except (KeyError, TypeError):
+                # Fallback to direct slicing if positional fails
+                try:
+                    path = close.loc[t0:t1]
+                except Exception:
+                    continue
 
             if len(path) < 2:
                 continue

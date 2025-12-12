@@ -110,6 +110,7 @@ if not USE_SRC_LABELING:
                 if pd.isna(vol) or vol <= 0:
                     continue
 
+                # Use positional indexing to avoid timezone issues
                 path = close.iloc[i:t1_idx + 1]
                 entry = path.iloc[0]
                 returns = (path / entry - 1)
@@ -117,14 +118,17 @@ if not USE_SRC_LABELING:
                 upper = vol * pt_sl[0]
                 lower = -vol * pt_sl[1]
 
-                # Determine label
-                upper_touch = returns[returns >= upper]
-                lower_touch = returns[returns <= lower]
+                # Determine label using positional comparison to avoid timezone issues
+                upper_mask = returns >= upper
+                lower_mask = returns <= lower
 
-                if len(upper_touch) > 0 and (len(lower_touch) == 0 or upper_touch.index[0] <= lower_touch.index[0]):
+                upper_touch_idx = upper_mask.values.argmax() if upper_mask.any() else -1
+                lower_touch_idx = lower_mask.values.argmax() if lower_mask.any() else -1
+
+                if upper_touch_idx > 0 and (lower_touch_idx < 0 or upper_touch_idx <= lower_touch_idx):
                     label = 1
                     touch = 'upper'
-                elif len(lower_touch) > 0:
+                elif lower_touch_idx > 0:
                     label = -1
                     touch = 'lower'
                 else:
