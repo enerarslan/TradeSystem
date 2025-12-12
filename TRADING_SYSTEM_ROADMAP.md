@@ -795,92 +795,290 @@ features_df, labels, weights, events = prepare_data(
 
 ---
 
-## 🆕 VERSION 3.3 PRE-TRAINING VALIDATION USAGE
+## 🆕 VERSION 3.3 PRE-TRAINING VALIDATION - STEP BY STEP EXECUTION GUIDE
 
-### Quick Start: Run All Validations
+Bu bölüm, model eğitimi öncesi TÜM veri doğrulama adımlarını sırasıyla açıklar.
+**ÖNEMLİ:** Bu adımları sırasıyla çalıştırın. Her adım bir öncekine bağlıdır.
+
+---
+
+### 📋 ÖZET: Çalıştırma Sırası
+
+| Adım | Komut | Süre | Çıktı |
+|------|-------|------|-------|
+| 1 | `python scripts/data_quality_pipeline.py --analyze` | ~2 dk | Konsol raporu |
+| 2 | `python scripts/data_quality_pipeline.py --process` | ~5 dk | `data/processed/*.csv` |
+| 3 | `python scripts/calibrate_triple_barrier.py --calibrate` | ~10 dk | `config/triple_barrier_params.yaml` |
+| 4 | `python scripts/setup_validation.py --verify-embargo` | ~1 dk | Embargo yüzdesi |
+| 5 | `python scripts/setup_validation.py --setup-holdout` | ~2 dk | `config/holdout_manifest.yaml` |
+| 6 | `python scripts/optimize_features.py --reduce` | ~2 dk | `config/optimal_features.yaml` |
+| 7 | `python scripts/optimize_features.py --add-regime` | ~1 dk | Regime feature raporu |
+| 8 | `python scripts/update_symbol_params.py --calculate` | ~3 dk | Konsol raporu |
+| 9 | `python scripts/update_symbol_params.py --update` | ~1 dk | `config/symbols.yaml` güncellenir |
+| 10 | `python scripts/run_pre_training_validation.py --all` | ~5 dk | `pre_training_validation_report.json` |
+
+---
+
+### ▶️ ADIM 1: Data Quality Analysis (Analiz - Değişiklik Yapmaz)
+
+**Amaç:** 46 sembolün veri kalitesini kontrol et (trading hours, OHLC, volume anomalies)
+
 ```bash
-# Run complete pre-training validation
-python scripts/run_pre_training_validation.py --all
-
-# Output: pre_training_validation_report.json with PASS/FAIL status
+python scripts/data_quality_pipeline.py --analyze
 ```
 
-### Step 1: Data Quality Pipeline
+**Beklenen Çıktı:**
+- Her sembol için kalite skoru (0-100)
+- Extended hours yüzdesi (hedef: <1%)
+- OHLC violation sayısı (hedef: 0)
+- Volume anomaly sayısı
+
+**Başarı Kriteri:** Ortalama skor > 80
+
+---
+
+### ▶️ ADIM 2: Data Quality Processing (Temiz Veri Üretimi)
+
+**Amaç:** Verileri temizle ve `data/processed/` klasörüne kaydet
+
 ```bash
-# Analyze data quality without modifying
-python scripts/data_quality_pipeline.py --analyze
-
-# Process and save clean data
 python scripts/data_quality_pipeline.py --process
+```
 
-# Validate processed data
+**Beklenen Çıktı:**
+- `data/processed/{SYMBOL}_15min_clean.csv` dosyaları (46 adet)
+- Sadece regular trading hours (09:30-16:00 ET)
+- OHLC anomalileri düzeltilmiş
+- Volume spike'ları işaretlenmiş
+
+**Doğrulama:**
+```bash
 python scripts/data_quality_pipeline.py --validate
 ```
 
-### Step 2: Triple Barrier Calibration
+---
+
+### ▶️ ADIM 3: Triple Barrier Calibration (Label Üretimi)
+
+**Amaç:** Her sembol için optimal barrier parametreleri hesapla
+
 ```bash
-# Calibrate barrier parameters for all symbols
 python scripts/calibrate_triple_barrier.py --calibrate
-
-# Validate label quality
-python scripts/calibrate_triple_barrier.py --validate
-
-# Analyze specific symbol
-python scripts/calibrate_triple_barrier.py --analyze AAPL
-
-# Output: config/triple_barrier_params.yaml
 ```
 
-### Step 3: Setup Validation (Embargo & Holdout)
+**Beklenen Çıktı:**
+- `config/triple_barrier_params.yaml` dosyası
+- Her sembol için: pt_multiplier, sl_multiplier, max_holding_bars
+- ATR-bazlı barrier genişlikleri
+
+**Tek Sembol Analizi (opsiyonel):**
 ```bash
-# Reserve holdout data (CRITICAL - run once before training)
-python scripts/setup_validation.py --setup-holdout
+python scripts/calibrate_triple_barrier.py --analyze AAPL
+python scripts/calibrate_triple_barrier.py --analyze MSFT
+python scripts/calibrate_triple_barrier.py --analyze NVDA
+```
 
-# Verify embargo settings
+**Label Kalite Doğrulama:**
+```bash
+python scripts/calibrate_triple_barrier.py --validate
+```
+
+**Başarı Kriterleri:**
+- Her class %25-40 arasında
+- Label autocorrelation < 0.1
+- Vertical touch < %50
+
+---
+
+### ▶️ ADIM 4: Embargo Verification
+
+**Amaç:** PurgedKFoldCV için minimum %5 embargo hesapla
+
+```bash
 python scripts/setup_validation.py --verify-embargo
+```
 
-# Verify holdout isolation
+**Beklenen Çıktı:**
+- Max feature lookback: ~200 bars
+- Calculated embargo: ~11% (200/1800 günlük bar)
+- PASS/FAIL durumu
+
+**Başarı Kriteri:** Embargo >= 5%
+
+---
+
+### ▶️ ADIM 5: Holdout Data Setup (KRİTİK - Sadece 1 Kez Çalıştır!)
+
+**Amaç:** Test verisi ayır (temporal + symbol-based)
+
+```bash
+python scripts/setup_validation.py --setup-holdout
+```
+
+**Beklenen Çıktı:**
+- `config/holdout_manifest.yaml` dosyası
+- 3 aylık temporal holdout (son 3 ay)
+- 6 sembol holdout (her sektörden 2)
+- Stress period işaretleme (COVID, Fed meetings)
+
+**UYARI:** Bu komutu sadece 1 KEZ çalıştırın! Tekrar çalıştırırsanız holdout değişir.
+
+**Doğrulama:**
+```bash
 python scripts/setup_validation.py --verify-holdout
 ```
 
-### Step 4: Feature Optimization
+---
+
+### ▶️ ADIM 6: Feature Optimization (Redundancy Removal)
+
+**Amaç:** 68 teknik özelliği ~36 optimal özelliğe indir
+
 ```bash
-# Add regime features to data
-python scripts/optimize_features.py --add-regime --symbol AAPL
-
-# Analyze feature correlations
-python scripts/optimize_features.py --analyze
-
-# Reduce to optimal feature set
 python scripts/optimize_features.py --reduce
 ```
 
-### Step 5: Update Symbol Parameters
+**Beklenen Çıktı:**
+- `config/optimal_features.yaml` dosyası
+- Original: 68 features
+- Final: ~36 features (47% reduction)
+- Correlation clustering raporu
+
+**Başarı Kriteri:** Final feature count: 35-60
+
+---
+
+### ▶️ ADIM 7: Regime Feature Generation
+
+**Amaç:** VIX, Trend ve Volatility regime özellikleri ekle
+
 ```bash
-# Calculate parameters for all symbols
+python scripts/optimize_features.py --add-regime --symbol AAPL
+```
+
+**Beklenen Çıktı:**
+- 24 regime feature eklendi
+- VIX regime dağılımı (Low/Normal/High/Extreme)
+- Trend regime dağılımı (Strong Bear → Strong Bull)
+- Volatility regime dağılımı
+
+**Toplam Feature Sayısı:** 36 teknik + 24 regime = **60 feature**
+
+---
+
+### ▶️ ADIM 8: Symbol Parameters Calculation
+
+**Amaç:** Her sembol için spread, volume, beta hesapla
+
+```bash
 python scripts/update_symbol_params.py --calculate
+```
 
-# Analyze specific symbol
-python scripts/update_symbol_params.py --symbol AAPL
+**Beklenen Çıktı:**
+- 46 sembol için parametre tablosu
+- Ortalama spread (bps)
+- Günlük ortalama volume
+- Beta to SPY
 
-# Update symbols.yaml with calculated values
+---
+
+### ▶️ ADIM 9: Update symbols.yaml
+
+**Amaç:** Hesaplanan parametreleri config dosyasına yaz
+
+```bash
 python scripts/update_symbol_params.py --update
+```
 
-# Validate current configuration
+**Beklenen Çıktı:**
+- `config/symbols.yaml` güncellendi
+- Her sembol için: spread_bps, avg_daily_volume, beta
+
+**Doğrulama:**
+```bash
 python scripts/update_symbol_params.py --validate
 ```
 
-### Success Criteria (All Must Pass)
-| Criterion | Target | Check |
-|-----------|--------|-------|
-| Regular Hours Only | 26 bars/day, no extended hours | `extended_hours_pct < 1%` |
-| OHLC Valid | No violations | `ohlc_violations == 0` |
-| Label Balance | Each class 25-40% | All classes in range |
-| Label Autocorr | < 0.1 | `abs(autocorr) < 0.1` |
-| Embargo | >= 5% of training data | `embargo_pct >= 0.05` |
-| Holdout Reserved | 3 months + 6 symbols | Manifest exists |
-| Features | < 80, no redundancy | `feature_count <= 80` |
-| Leakage Test | PASS | No leakage detected |
+---
+
+### ▶️ ADIM 10: Final Validation (Tüm Kontroller)
+
+**Amaç:** Tüm adımların başarılı olduğunu doğrula
+
+```bash
+python scripts/run_pre_training_validation.py --all
+```
+
+**Beklenen Çıktı:**
+- `pre_training_validation_report.json` dosyası
+- Her kontrol için PASS/FAIL durumu
+- Özet rapor
+
+---
+
+### ✅ Başarı Kriterleri Tablosu
+
+| Kriter | Hedef | Kontrol Komutu |
+|--------|-------|----------------|
+| Regular Hours Only | extended_hours < 1% | `--analyze` |
+| OHLC Valid | violations = 0 | `--analyze` |
+| Label Balance | Her class %25-40 | `--validate` (calibrate) |
+| Label Autocorr | < 0.1 | `--validate` (calibrate) |
+| Embargo | >= 5% | `--verify-embargo` |
+| Holdout Reserved | Manifest exists | `--verify-holdout` |
+| Technical Features | 35-60 | `--reduce` |
+| Regime Features | 24 | `--add-regime` |
+| Total Features | 55-85 | Manual check |
+| Final Validation | All PASS | `--all` |
+
+---
+
+### 🚀 HIZLI BAŞLANGIÇ (Copy-Paste)
+
+Tüm adımları sırasıyla çalıştırmak için:
+
+```bash
+# Adım 1-2: Data Quality
+python scripts/data_quality_pipeline.py --analyze
+python scripts/data_quality_pipeline.py --process
+
+# Adım 3: Triple Barrier
+python scripts/calibrate_triple_barrier.py --calibrate
+
+# Adım 4-5: Embargo & Holdout
+python scripts/setup_validation.py --verify-embargo
+python scripts/setup_validation.py --setup-holdout
+
+# Adım 6-7: Features
+python scripts/optimize_features.py --reduce
+python scripts/optimize_features.py --add-regime
+
+# Adım 8-9: Symbol Parameters
+python scripts/update_symbol_params.py --calculate
+python scripts/update_symbol_params.py --update
+
+# Adım 10: Final Check
+python scripts/run_pre_training_validation.py --all
+```
+
+---
+
+### ⚠️ Troubleshooting
+
+**Hata: "Data file not found"**
+- `data/raw/` klasöründe `{SYMBOL}_15min.csv` dosyaları olmalı
+- Dosya adı formatı: `AAPL_15min.csv`
+
+**Hata: "ModuleNotFoundError"**
+- `pip install -r requirements.txt` çalıştırın
+- Eksik modül: `pip install {module_name}`
+
+**Hata: "Label imbalance"**
+- Triple barrier parametrelerini ayarlayın
+- `pt_sl_ratio` değerini değiştirin
+
+**Hata: "Too few features"**
+- `optimize_features.py` içinde `cluster_threshold` değerini artırın (0.92 → 0.95)
 
 ---
 
