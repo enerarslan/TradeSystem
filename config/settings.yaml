@@ -286,7 +286,7 @@ ml:
   optimization:
     method: "optuna"  # grid, random, optuna, hyperopt
     n_trials: 100
-    cv_folds: 5
+    cv_folds: 3  # Updated: 3-fold recommended for 11% embargo (effective test: 20.3%)
     scoring: "f1_weighted"
 
 # =============================================================================

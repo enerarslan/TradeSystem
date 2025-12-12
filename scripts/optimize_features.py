@@ -798,8 +798,8 @@ def main():
     parser.add_argument(
         '--symbol',
         type=str,
-        default='AAPL',
-        help='Symbol to analyze (default: AAPL)'
+        default='ALL',
+        help='Symbol to analyze (default: ALL for all symbols, or specific like AAPL)'
     )
     parser.add_argument(
         '--output',
@@ -816,10 +816,11 @@ def main():
         logger.info("FEATURE CORRELATION ANALYSIS" if args.analyze else "FEATURE REDUCTION")
         logger.info("=" * 60)
 
-        # Generate features from raw data
-        print(f"\nGenerating technical features for {args.symbol}...")
+        # For correlation analysis, use AAPL as representative sample (or specified symbol)
+        analysis_symbol = args.symbol if args.symbol != 'ALL' else 'AAPL'
+        print(f"\nGenerating technical features for {analysis_symbol}...")
 
-        data_path = Path("data/raw") / f"{args.symbol}_15min.csv"
+        data_path = Path("data/raw") / f"{analysis_symbol}_15min.csv"
         if not data_path.exists():
             print(f"Data file not found: {data_path}")
             return
@@ -866,61 +867,130 @@ def main():
         logger.info("REGIME FEATURE GENERATION")
         logger.info("=" * 60)
 
-        # Load sample data
-        data_path = Path("data/raw") / f"{args.symbol}_15min.csv"
-        if not data_path.exists():
-            print(f"Data file not found: {data_path}")
-            return
+        # Get all symbols from config or data/raw directory
+        symbols_to_process = []
 
-        df = pd.read_csv(data_path, parse_dates=['timestamp'], index_col='timestamp')
+        if args.symbol and args.symbol != 'ALL':
+            # Single symbol mode
+            symbols_to_process = [args.symbol]
+        else:
+            # ALL symbols mode - get from data/raw directory
+            raw_dir = Path("data/raw")
+            if raw_dir.exists():
+                symbols_to_process = sorted([
+                    f.stem.replace('_15min', '')
+                    for f in raw_dir.glob("*_15min.csv")
+                ])
 
-        # Generate regime features
+            if not symbols_to_process:
+                print("No data files found in data/raw/")
+                return
+
+            print(f"\nProcessing {len(symbols_to_process)} symbols...")
+
         generator = RegimeFeatureGenerator()
-        df_with_regime = generator.add_all_regime_features(df)
+        all_regime_stats = {}
 
-        # Show new features
-        regime_cols = [c for c in df_with_regime.columns if c not in df.columns]
+        for symbol in symbols_to_process:
+            data_path = Path("data/raw") / f"{symbol}_15min.csv"
+            if not data_path.exists():
+                print(f"  {symbol}: Data file not found, skipping")
+                continue
 
-        print(f"\nAdded {len(regime_cols)} regime features to {args.symbol}:")
-        print("-" * 60)
+            df = pd.read_csv(data_path, parse_dates=['timestamp'], index_col='timestamp')
 
-        for col in regime_cols:
-            sample = df_with_regime[col].dropna()
-            print(f"  {col}:")
-            print(f"    Range: [{sample.min():.4f}, {sample.max():.4f}]")
-            print(f"    Mean: {sample.mean():.4f}")
-            if df_with_regime[col].dtype in ['int64', 'int32']:
-                print(f"    Distribution: {df_with_regime[col].value_counts().to_dict()}")
+            # Generate regime features
+            df_with_regime = generator.add_all_regime_features(df)
 
-        # Show regime distribution
-        print("\n" + "=" * 60)
-        print("REGIME DISTRIBUTION")
-        print("=" * 60)
+            # Get regime columns
+            regime_cols = [c for c in df_with_regime.columns if c not in df.columns]
 
-        if 'vix_regime' in df_with_regime.columns:
-            vix_dist = df_with_regime['vix_regime'].value_counts().sort_index()
-            print("\nVIX Regime:")
-            print(f"  Low (-1):     {vix_dist.get(-1, 0):,} bars")
-            print(f"  Normal (0):   {vix_dist.get(0, 0):,} bars")
-            print(f"  High (1):     {vix_dist.get(1, 0):,} bars")
-            print(f"  Extreme (2):  {vix_dist.get(2, 0):,} bars")
+            # Collect stats
+            if 'vix_regime' in df_with_regime.columns:
+                vix_dist = df_with_regime['vix_regime'].value_counts()
+                trend_dist = df_with_regime['trend_regime'].value_counts()
+                vol_dist = df_with_regime['vol_regime'].value_counts()
 
-        if 'trend_regime' in df_with_regime.columns:
-            trend_dist = df_with_regime['trend_regime'].value_counts().sort_index()
-            print("\nTrend Regime:")
-            print(f"  Strong Bear (-2): {trend_dist.get(-2, 0):,} bars")
-            print(f"  Bear (-1):        {trend_dist.get(-1, 0):,} bars")
-            print(f"  Sideways (0):     {trend_dist.get(0, 0):,} bars")
-            print(f"  Bull (1):         {trend_dist.get(1, 0):,} bars")
-            print(f"  Strong Bull (2):  {trend_dist.get(2, 0):,} bars")
+                all_regime_stats[symbol] = {
+                    'vix_high_pct': (vix_dist.get(1, 0) + vix_dist.get(2, 0)) / len(df_with_regime) * 100,
+                    'trend_bull_pct': (trend_dist.get(1, 0) + trend_dist.get(2, 0)) / len(df_with_regime) * 100,
+                    'vol_high_pct': (vol_dist.get(2, 0) + vol_dist.get(3, 0)) / len(df_with_regime) * 100,
+                    'bars': len(df_with_regime)
+                }
 
-        if 'vol_regime' in df_with_regime.columns:
-            vol_dist = df_with_regime['vol_regime'].value_counts().sort_index()
-            print("\nVolatility Regime:")
-            print(f"  Low (0):      {vol_dist.get(0, 0):,} bars")
-            print(f"  Normal (1):   {vol_dist.get(1, 0):,} bars")
-            print(f"  High (2):     {vol_dist.get(2, 0):,} bars")
-            print(f"  Extreme (3):  {vol_dist.get(3, 0):,} bars")
+            if len(symbols_to_process) == 1:
+                # Single symbol - show detailed output
+                print(f"\nAdded {len(regime_cols)} regime features to {symbol}:")
+                print("-" * 60)
+
+                for col in regime_cols:
+                    sample = df_with_regime[col].dropna()
+                    print(f"  {col}:")
+                    print(f"    Range: [{sample.min():.4f}, {sample.max():.4f}]")
+                    print(f"    Mean: {sample.mean():.4f}")
+                    if df_with_regime[col].dtype in ['int64', 'int32']:
+                        print(f"    Distribution: {df_with_regime[col].value_counts().to_dict()}")
+            else:
+                # Multi symbol - show progress
+                print(f"  {symbol}: {len(regime_cols)} regime features added")
+
+        # Show summary for multi-symbol mode
+        if len(symbols_to_process) > 1 and all_regime_stats:
+            print("\n" + "=" * 60)
+            print("REGIME SUMMARY (ALL SYMBOLS)")
+            print("=" * 60)
+
+            print(f"\n{'Symbol':<8} {'Bars':>10} {'VIX High%':>10} {'Bull%':>10} {'VolHigh%':>10}")
+            print("-" * 50)
+
+            total_bars = 0
+            total_vix_high = 0
+            total_bull = 0
+            total_vol_high = 0
+
+            for symbol, stats in sorted(all_regime_stats.items()):
+                print(f"{symbol:<8} {stats['bars']:>10,} {stats['vix_high_pct']:>10.1f} {stats['trend_bull_pct']:>10.1f} {stats['vol_high_pct']:>10.1f}")
+                total_bars += stats['bars']
+                total_vix_high += stats['vix_high_pct'] * stats['bars']
+                total_bull += stats['trend_bull_pct'] * stats['bars']
+                total_vol_high += stats['vol_high_pct'] * stats['bars']
+
+            print("-" * 50)
+            print(f"{'TOTAL':<8} {total_bars:>10,} {total_vix_high/total_bars:>10.1f} {total_bull/total_bars:>10.1f} {total_vol_high/total_bars:>10.1f}")
+
+            print(f"\nTotal regime features per symbol: 24")
+            print(f"Symbols processed: {len(all_regime_stats)}")
+
+        # Show regime distribution for single symbol
+        if len(symbols_to_process) == 1:
+            print("\n" + "=" * 60)
+            print("REGIME DISTRIBUTION")
+            print("=" * 60)
+
+            if 'vix_regime' in df_with_regime.columns:
+                vix_dist = df_with_regime['vix_regime'].value_counts().sort_index()
+                print("\nVIX Regime:")
+                print(f"  Low (-1):     {vix_dist.get(-1, 0):,} bars")
+                print(f"  Normal (0):   {vix_dist.get(0, 0):,} bars")
+                print(f"  High (1):     {vix_dist.get(1, 0):,} bars")
+                print(f"  Extreme (2):  {vix_dist.get(2, 0):,} bars")
+
+            if 'trend_regime' in df_with_regime.columns:
+                trend_dist = df_with_regime['trend_regime'].value_counts().sort_index()
+                print("\nTrend Regime:")
+                print(f"  Strong Bear (-2): {trend_dist.get(-2, 0):,} bars")
+                print(f"  Bear (-1):        {trend_dist.get(-1, 0):,} bars")
+                print(f"  Sideways (0):     {trend_dist.get(0, 0):,} bars")
+                print(f"  Bull (1):         {trend_dist.get(1, 0):,} bars")
+                print(f"  Strong Bull (2):  {trend_dist.get(2, 0):,} bars")
+
+            if 'vol_regime' in df_with_regime.columns:
+                vol_dist = df_with_regime['vol_regime'].value_counts().sort_index()
+                print("\nVolatility Regime:")
+                print(f"  Low (0):      {vol_dist.get(0, 0):,} bars")
+                print(f"  Normal (1):   {vol_dist.get(1, 0):,} bars")
+                print(f"  High (2):     {vol_dist.get(2, 0):,} bars")
+                print(f"  Extreme (3):  {vol_dist.get(3, 0):,} bars")
 
     else:
         parser.print_help()

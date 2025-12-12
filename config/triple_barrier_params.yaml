@@ -1,0 +1,1230 @@
+version: '1.0'
+calibration_date: '2025-12-12T19:25:46.176105'
+default_params:
+  profit_target_atr_mult: 1.5
+  stop_loss_atr_mult: 1.0
+  max_holding_period: 10
+  volatility_lookback: 20
+vix_adjustments:
+  low:
+    threshold: 15
+    multiplier: 0.8
+  normal:
+    threshold: 25
+    multiplier: 1.0
+  high:
+    threshold: 35
+    multiplier: 1.5
+  extreme:
+    threshold: 50
+    multiplier: 2.0
+symbols:
+  AAPL:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - &id001 !!python/object/apply:numpy.dtype
+      args:
+      - f8
+      - false
+      - true
+      state: !!python/tuple
+      - 3
+      - <
+      - null
+      - null
+      - null
+      - -1
+      - -1
+      - 0
+    - !!binary |
+      1lbsL7sn5T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        Lv8h/fZ15j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        tFn1udqK3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        JlMFo5I64T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  ABBV:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      Q61p3nGK6j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        tMh2vp8a5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        jSjtDb4w3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        umsJ+aBn4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  ADBE:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      ZMxdS8gH2T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        xSCwcmiR5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pHA9Ctej3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        rkfhehSu4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  AMGN:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      r5RliGNd4D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SnuDL0ym5D8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        JLn8h/Tb2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        jErqBDQR4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  AMZN:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      gSbChqdX6D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        s3vysFBr5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        KA8LtaZ52z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        bHh6pSxD4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  AVGO:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      SgwCK4cW5z8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        dnEbDeAt5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        6Nms+lxt3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        DJOpglFJ4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  AXP:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      hxbZzvdT3z8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        8tJNYhBY5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        I0p7gy9M3j8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        7lpCPujZ4D8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  BAC:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      63O1FfvL3j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        jNtoAG+B5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        845TdCSX2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pN++Dpwz4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  BA:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      dnEbDeAt4j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        YVRSJ6CJ5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        1CtlGeJY2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        FmpN845T4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  BRK.B:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      qFfKMsSx0j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        CmgibHh65T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        lkOLbOf73T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        NV66SQwC4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  CAT:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      C7Wmeccp4D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        hxbZzvdT5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        Dr4wmSoY3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        +aBns+pz4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  COST:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      ukkMAiuH1j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        2c73U+Ol5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        ejarPldb3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        w2SqYFRS4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  CRM:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MuauJeSD2j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        UWuad5yi5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        TfOOU3Qk2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        WYY41sVt4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  CSCO:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      hslUwaik1j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        gLdAguLH5D8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        JLn8h/Tb2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        jErqBDQR4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  CVX:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      vsEXJlMF4T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        BFYOLbKd5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        UrgehetR3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        16NwPQrX4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  DIS:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      IGPuWkI+2D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        hjjWxW005j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        W0I+6Nms2j8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        8IXJVMGo4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  DOW:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      sp3vp8ZL5z8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        S8gHPZtV5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        +Q/pt68D2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        IR/0bFZ94j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Kj8=
+  GOOGL:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      bef7qfHS3T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        Ece6uI0G5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        vjCZKhiV3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        oWez6nO14T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  GS:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      sHJoke184z8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        VcGopE5A5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        wcqhRbbz3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        oBov3SQG4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  HD:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      5WGh1jTv2D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        7MA5I0p75T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        6gQ0ETY83T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        i/1l9+Rh4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  HON:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      B/AWSFD82D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        umsJ+aBn5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        WYY41sVt3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        07zjFB3J4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  IBM:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      tTf4wmSq2D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        W9O84xQd5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        cT0K16Nw3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SOF6FK5H4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  INTC:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      nl4pyxDH4D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        ZmZmZmZm5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        bjSAt0CC2j8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        I9v5fmq84j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        YTJVMCqpMz8=
+  JNJ:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      Rdjw9EpZ1j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        vAUSFD/G5D8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        2/l+arx02z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        MCqpE9BE4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  JPM:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      j8L1KFyP4D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        p3nHKTqS5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SgwCK4cW3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        2/l+arx04T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  KO:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      TYQNT6+U0T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SZ2AJsKG5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        rkfhehSu2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        g1FJnYAm4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Kj8=
+  LLY:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      rWnecYqO5j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        XkvIBz2b5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        nu+nxks33T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        MQisHFpk4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  MA:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      eJyiI7n83z8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        VFInoImw5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        y6FFtvP93D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        Gy/dJAaB4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  MCD:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      jgbwFkhQ1D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        /yH99nXg5D8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        xf6ye/Kw3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        nYAmwoan4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  META:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      oWez6nO14T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        oImw4emV5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pHA9Ctej3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        zO7Jw0Kt4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  MMM:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      PzVeukkM2j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        zhlR2ht85T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        uECC4seY2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pN++Dpwz4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  MRK:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      w9MrZRni4j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        8tJNYhBY5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        oImw4emV2j8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        MLsnDwu14j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  MSFT:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      YcPTK2UZ2j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        aJHtfD815j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        uY0G8BZI3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        JLn8h/Tb4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  NKE:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      Di2yne+n3j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        f9k9eVio5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        7uvAOSNK2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        CYofY+5a4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  NVDA:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      /kP67evA4z8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        eHqlLEMc5z8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        bef7qfHS3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SgwCK4cW4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  PEP:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      hJ7Nqs/V1j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SFD8GHPX5D8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        HOviNhrA2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        coqO5PIf4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  PG:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      qaROQBNh1z8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        tvP91Hjp5D8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        TfOOU3Qk2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        WYY41sVt4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  TMO:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      7zhFR3L55T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        C0YldQKa5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        PE7RkVz+2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        4lgXt9EA4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  TRV:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      +zpwzojS2j8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pN++Dpwz5j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        HVpkO99P3T8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        EHo2qz5X4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  TSLA:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      6pWyDHGs6T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        i/1l9+Rh5z8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        8BZIUPwY2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        ppvEILBy4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  UNH:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      jnVxGw3g6T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        dLUV+8vu5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        woanV8oy3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        nzws1Jrm4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  VZ:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      TDeJQWDl2D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        S1mGONbF5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        1CtlGeJY2z8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        FmpN845T4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
+  V:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      Xf5D+u3r2D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        hJ7Nqs/V5D8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        bcX+snvy3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        Z0Rpb/CF4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  WBA:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      63O1FfvLvj8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        TYQNT6+U5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        WMoyxLEu2j8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        8kHPZtXn4j8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Kj8=
+  WMT:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      O3DOiNLe1D8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        MzMzMzMz5T8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pHA9Ctej3D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        6pWyDHGs4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        LUMc6+I2Gj8=
+  XOM:
+    volatility_group: low
+    atr_pct: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      HOviNhrA4T8=
+    profit_target_atr_mult: 1.8
+    stop_loss_atr_mult: 1.2
+    max_holding_period: 40
+    quality_metrics:
+      label_autocorr: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        aJHtfD815j8=
+      upper_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        y6FFtvP93D8=
+      lower_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        Gy/dJAaB4T8=
+      vertical_touch_pct: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAAAA=
