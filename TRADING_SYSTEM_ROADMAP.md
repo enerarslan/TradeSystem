@@ -1,10 +1,10 @@
 # AlphaTrade System - AI Agent Roadmap
 ## JPMorgan-Level Institutional Trading Platform
 
-**Version:** 3.1 - AFML INSTITUTIONAL GRADE
-**Status:** ✅ All Components Built + Full AFML Implementation
+**Version:** 3.2 - AFML INSTITUTIONAL GRADE + ENHANCED TRAINING PIPELINE
+**Status:** ✅ All Components Built + Full AFML Implementation + Cross-Asset Integration
 **Total Files:** 47+ Python files + configs + deployment
-**Lines of Code:** ~25,000+
+**Lines of Code:** ~27,000+
 **Last Updated:** December 2024
 
 ---
@@ -18,7 +18,17 @@ A complete institutional-grade algorithmic trading system capable of:
 - Algorithmic execution (TWAP, VWAP, POV, Adaptive)
 - Real-time monitoring and reporting
 
-### Version 3.1 AFML Institutional Features (NEW):
+### Version 3.2 Enhanced Training Pipeline (NEW):
+- **Automatic Symbol Loading** - Extracts all 46 symbols from sectors in symbols.yaml
+- **Trading Hours Filter** - Filters to US regular hours (9:30-16:00 ET), removes pre/post market noise
+- **Cross-Asset Features Integration** - Correlations, sector momentum, beta, factor exposures connected
+- **Regime Detection Features** - HMM regime, volatility regime, trend regime integrated into training
+- **Enhanced Sample Weights** - Combines uniqueness weights + time decay (configurable alpha)
+- **Dynamic Embargo Calculation** - Automatically sized based on maximum feature lookback periods
+- **Cross-Sectional Features** - Return/volume/momentum ranks, sector-relative metrics, z-scores
+- **Symbol-Specific Transaction Costs** - Uses spread_bps from symbols.yaml for realistic backtests
+
+### Version 3.1 AFML Institutional Features:
 - **Information-Driven Bars** - Volume/Dollar/Tick bars for better statistical properties
 - **Triple Barrier Method** - Path-dependent labeling with dynamic volatility barriers
 - **Meta-Labeling Framework** - Two-stage approach separating direction from bet sizing
@@ -80,7 +90,7 @@ alphatrade/
 │   ├── data/
 │   │   ├── __init__.py
 │   │   ├── loader.py          ✅ Multi-asset data loader
-│   │   ├── preprocessor.py    ✅ Data cleaning + Information-Driven Bars (v3.1)
+│   │   ├── preprocessor.py    ✅ Data cleaning + Information-Driven Bars + Trading Hours Filter (v3.2)
 │   │   ├── labeling.py        ✅ NEW: Triple Barrier + Meta-Labeling (v3.1)
 │   │   ├── database.py        ✅ PostgreSQL/TimescaleDB/Redis
 │   │   └── live_feed.py       ✅ WebSocket real-time feed
@@ -89,8 +99,8 @@ alphatrade/
 │   │   ├── technical.py       ✅ 100+ technical indicators
 │   │   ├── builder.py         ✅ Feature pipeline (200+ features)
 │   │   ├── microstructure.py  ✅ Market microstructure
-│   │   ├── cross_asset.py     ✅ Cross-asset analysis
-│   │   ├── regime.py          ✅ HMM regime detection
+│   │   ├── cross_asset.py     ✅ Cross-asset analysis (integrated v3.2)
+│   │   ├── regime.py          ✅ HMM regime detection (integrated v3.2)
 │   │   └── alternative.py     ✅ Alternative data
 │   ├── models/
 │   │   ├── __init__.py
@@ -119,7 +129,7 @@ alphatrade/
 │   │   └── async_pipeline.py  ✅ Async event-driven pipeline
 │   ├── backtest/
 │   │   ├── __init__.py
-│   │   ├── engine.py          ✅ Event-driven + Dynamic TCA
+│   │   ├── engine.py          ✅ Event-driven + Dynamic TCA + Symbol-Specific Costs (v3.2)
 │   │   └── metrics.py         ✅ Performance attribution + PSR/DSR (v3.1)
 │   ├── mlops/                  ✅ NEW - MLOps Module
 │   │   ├── __init__.py
@@ -132,7 +142,7 @@ alphatrade/
 │       └── numba_accelerators.py ✅ JIT-compiled functions
 ├── scripts/
 │   ├── init_db.sql            ✅ Database schema
-│   └── train_models.py        ✅ AFML Institutional Training Pipeline (v3.1)
+│   └── train_models.py        ✅ AFML Institutional Training Pipeline + Full Feature Integration (v3.2)
 ├── monitoring/
 │   └── prometheus/
 │       └── prometheus.yml     ✅ Metrics config
@@ -470,6 +480,19 @@ Order | File/Command | Purpose
 | Feature Neutralization | ✅ | Market beta removal, microstructure feature downweighting |
 | Winsorization Policy | ✅ | Default outlier handling preserves tail event information |
 
+### Phase 7: Enhanced Training Pipeline v3.2 (COMPLETED ✅)
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| Automatic Symbol Loading | ✅ | Extracts all 46 symbols from sectors in symbols.yaml automatically |
+| Trading Hours Filter | ✅ | `TradingHoursFilter` class filters to US regular hours (9:30-16:00 ET) |
+| Cross-Asset Features | ✅ | `CrossAssetFeatures` integrated: correlations, sector momentum, beta, factor exposures |
+| Regime Detection | ✅ | `RegimeDetector` integrated: HMM, volatility regime, trend regime features |
+| Combined Sample Weights | ✅ | `combine_weights()`: uniqueness + time decay with configurable alpha |
+| Dynamic Embargo | ✅ | `calculate_dynamic_embargo()`: sized based on max feature lookback (200+ periods) |
+| Cross-Sectional Features | ✅ | `add_cross_sectional_features()`: ranks, z-scores, sector-relative metrics |
+| Symbol-Specific Transaction Costs | ✅ | `BacktestConfig.symbol_spread_bps`: uses spread_bps from symbols.yaml |
+
 ---
 
 ## 🔬 ADVANCED FEATURES USAGE
@@ -616,7 +639,132 @@ regime_analysis = explainer.explain_by_regime(X_test, regimes)
 
 ---
 
-*Document Version: 3.1*
-*Implementation Status: COMPLETE + FULL AFML INSTITUTIONAL METHODOLOGY*
+## 🆕 VERSION 3.2 ENHANCED FEATURES USAGE
+
+### Trading Hours Filter (v3.2)
+```python
+from src.data.preprocessor import TradingHoursFilter
+
+# Filter to regular US trading hours only
+filter = TradingHoursFilter(
+    market_open="09:30",
+    market_close="16:00",
+    timezone="America/New_York",
+    include_extended_hours=False  # Set True for pre/post market
+)
+
+# Single DataFrame
+df_filtered = filter.filter(df)
+
+# Multiple symbols
+filtered_data = filter.filter_multi({"AAPL": df_aapl, "MSFT": df_msft})
+
+# Check if timestamp is in trading hours
+is_open = filter.is_trading_hours(datetime.now())
+```
+
+### Cross-Sectional Features (v3.2)
+```python
+from scripts.train_models import add_cross_sectional_features
+
+# Add cross-sectional ranking features
+symbol_data = {
+    "AAPL": df_aapl,
+    "MSFT": df_msft,
+    "GOOGL": df_googl
+}
+
+sector_mapping = {
+    "Technology": ["AAPL", "MSFT", "GOOGL"]
+}
+
+enhanced_data = add_cross_sectional_features(symbol_data, sector_mapping)
+# Each DataFrame now contains:
+#   cs_return_rank, cs_return_zscore, cs_volume_rank,
+#   cs_volatility_pctl, cs_momentum_rank, cs_sector_rank,
+#   cs_vs_sector_return, cs_vs_sector_momentum,
+#   cs_distance_from_max, cs_distance_from_min
+```
+
+### Dynamic Embargo Calculation (v3.2)
+```python
+from scripts.train_models import calculate_dynamic_embargo
+
+# Automatically size embargo based on feature lookbacks
+embargo_pct = calculate_dynamic_embargo(
+    feature_columns=X.columns.tolist(),
+    data_frequency_minutes=15,    # 15-minute bars
+    min_embargo_pct=0.05          # AFML minimum 5%
+)
+# Returns e.g., 6.4% if max lookback is 200 periods
+```
+
+### Combined Sample Weights (v3.2)
+```python
+from src.data.labeling import get_sample_weights, get_time_decay_weights, combine_weights
+
+# Uniqueness weights for overlapping labels
+uniqueness = get_sample_weights(events, close_prices)
+
+# Time decay weights (recent samples get more weight)
+time_decay = get_time_decay_weights(events, c=0.5)
+
+# Combine with 50/50 weighting
+combined = combine_weights(uniqueness, time_decay, alpha=0.5)
+```
+
+### Symbol-Specific Transaction Costs (v3.2)
+```python
+from src.backtest.engine import BacktestConfig, load_symbol_spreads_from_config
+import yaml
+
+# Load symbol spreads from config
+with open('config/symbols.yaml') as f:
+    symbols_config = yaml.safe_load(f)
+
+spreads = load_symbol_spreads_from_config(symbols_config)
+# Returns: {"AAPL": 1.5, "MSFT": 1.2, "SPY": 0.5, ...}
+
+# Create config with symbol-specific costs
+config = BacktestConfig(
+    slippage_bps=5,              # Default fallback
+    symbol_spread_bps=spreads   # Symbol-specific spreads
+)
+
+# Or use the factory function
+from src.backtest.engine import create_backtest_config_from_yaml
+config = create_backtest_config_from_yaml(settings_config, symbols_config)
+```
+
+### Full Training Pipeline (v3.2)
+```python
+from scripts.train_models import prepare_data
+
+# Load symbols.yaml for sector mapping
+symbols_config = load_config("config/symbols.yaml")
+
+# Prepare data with all v3.2 enhancements
+features_df, labels, weights, events = prepare_data(
+    symbols=["AAPL", "MSFT", "GOOGL"],
+    use_information_bars=True,
+    use_triple_barrier=True,
+    neutralize=True,
+    filter_trading_hours=True,      # v3.2: Remove pre/post market
+    include_extended_hours=False,
+    use_cross_asset_features=True,  # v3.2: Correlations, sector momentum
+    use_regime_features=True,       # v3.2: HMM regime, volatility regime
+    use_time_decay_weights=True,    # v3.2: Combined sample weights
+    time_decay_factor=0.5,
+    symbols_config=symbols_config   # v3.2: For sector mapping
+)
+# Returns enhanced features including cross-sectional ranks,
+# regime features, and properly weighted samples
+```
+
+---
+
+*Document Version: 3.2*
+*Implementation Status: COMPLETE + FULL AFML INSTITUTIONAL METHODOLOGY + ENHANCED TRAINING PIPELINE*
 *Ready for: Backtest → Paper Trading → Live Trading*
-*AFML Features: Triple Barrier, Meta-Labeling, Information Bars, Clustered Importance, PSR/DSR, PurgedKFoldCV 5% Embargo*
+*v3.1 Features: Triple Barrier, Meta-Labeling, Information Bars, Clustered Importance, PSR/DSR, PurgedKFoldCV 5% Embargo*
+*v3.2 Features: Trading Hours Filter, Cross-Asset Integration, Regime Features, Cross-Sectional Ranks, Dynamic Embargo, Combined Weights, Symbol-Specific Costs*
