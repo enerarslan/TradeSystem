@@ -17,7 +17,6 @@ xgboost>=2.0.0
 lightgbm>=4.0.0
 # CatBoost - Windows kurulumu için: pip install catboost --no-build-isolation
 # Sorun devam ederse: pip install catboost==1.2.7
-catboost>=1.2.0
 
 # ==============================================================================
 # Deep Learning (CPU version for easier install)

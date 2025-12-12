@@ -1217,13 +1217,13 @@ def main():
     models.append(lgb_model)
     all_metrics['lightgbm'] = lgb_metrics
 
-    # CatBoost
+    # CatBoost (uses depth instead of max_depth, iterations instead of n_estimators)
     cat_model, cat_metrics = train_single_model(
         CatBoostModel,
         X_train, y_train, X_val, y_val,
         model_name="catboost_v1",
-        n_estimators=200,
-        max_depth=6,
+        iterations=200,
+        depth=6,
         learning_rate=0.1
     )
     models.append(cat_model)
