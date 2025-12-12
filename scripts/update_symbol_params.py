@@ -284,7 +284,18 @@ class SymbolAnalyzer:
             for directory in [Path("data/processed"), self.data_dir]:
                 path = directory / f"{symbol}{suffix}"
                 if path.exists():
-                    return pd.read_csv(path, parse_dates=['timestamp'], index_col='timestamp')
+                    df = pd.read_csv(path)
+                    # Ensure timestamp is properly parsed as DatetimeIndex
+                    if 'timestamp' in df.columns:
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                        df = df.set_index('timestamp')
+                    elif 'date' in df.columns:
+                        df['date'] = pd.to_datetime(df['date'])
+                        df = df.set_index('date')
+                    # Ensure index is DatetimeIndex
+                    if not isinstance(df.index, pd.DatetimeIndex):
+                        df.index = pd.to_datetime(df.index)
+                    return df
 
         raise FileNotFoundError(f"No data found for {symbol}")
 
