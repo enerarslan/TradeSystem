@@ -1,10 +1,10 @@
 # AlphaTrade System - AI Agent Roadmap
 ## JPMorgan-Level Institutional Trading Platform
 
-**Version:** 3.0 - ADVANCED IMPLEMENTATION
-**Status:** ✅ All Components Built + Advanced ML Features
-**Total Files:** 45+ Python files + configs + deployment
-**Lines of Code:** ~22,000+
+**Version:** 3.1 - AFML INSTITUTIONAL GRADE
+**Status:** ✅ All Components Built + Full AFML Implementation
+**Total Files:** 47+ Python files + configs + deployment
+**Lines of Code:** ~25,000+
 **Last Updated:** December 2024
 
 ---
@@ -18,11 +18,21 @@ A complete institutional-grade algorithmic trading system capable of:
 - Algorithmic execution (TWAP, VWAP, POV, Adaptive)
 - Real-time monitoring and reporting
 
-### Version 3.0 Advanced Features:
+### Version 3.1 AFML Institutional Features (NEW):
+- **Information-Driven Bars** - Volume/Dollar/Tick bars for better statistical properties
+- **Triple Barrier Method** - Path-dependent labeling with dynamic volatility barriers
+- **Meta-Labeling Framework** - Two-stage approach separating direction from bet sizing
+- **CUSUM Event Sampling** - Adaptive event detection for structural breaks
+- **Sample Weight Calculation** - Handles overlapping labels with uniqueness weights
+- **Clustered Feature Importance** - Hierarchical clustering for robust feature selection
+- **Probabilistic Sharpe Ratio (PSR)** - Accounts for non-normality in returns
+- **Deflated Sharpe Ratio (DSR)** - Adjusts for multiple testing / p-hacking
+- **PurgedKFoldCV with 5% Embargo** - Eliminates serial correlation leakage
+- **Feature Neutralization** - Market beta removal for alpha isolation
+- **Winsorization Policy** - Preserves tail event information
+
+### Version 3.0 Features (Previous):
 - **Fractional Differentiation (FFD)** for stationary yet memory-preserving features
-- **Triple Barrier Method** for sophisticated labeling (AFML Chapter 3)
-- **Meta-Labeling Framework** for bet sizing and signal filtering
-- **Purged K-Fold Cross Validation** preventing data leakage
 - **Hierarchical Risk Parity (HRP)** for robust portfolio optimization
 - **Dynamic Transaction Cost Analysis** with Almgren-Chriss market impact
 - **Numba JIT Acceleration** for 10-100x performance gains
@@ -70,7 +80,8 @@ alphatrade/
 │   ├── data/
 │   │   ├── __init__.py
 │   │   ├── loader.py          ✅ Multi-asset data loader
-│   │   ├── preprocessor.py    ✅ Data cleaning & quality
+│   │   ├── preprocessor.py    ✅ Data cleaning + Information-Driven Bars (v3.1)
+│   │   ├── labeling.py        ✅ NEW: Triple Barrier + Meta-Labeling (v3.1)
 │   │   ├── database.py        ✅ PostgreSQL/TimescaleDB/Redis
 │   │   └── live_feed.py       ✅ WebSocket real-time feed
 │   ├── features/
@@ -87,7 +98,7 @@ alphatrade/
 │   │   ├── ml_model.py        ✅ XGBoost/LightGBM/CatBoost/RF + MetaLabeling
 │   │   ├── ensemble.py        ✅ Voting/Stacking/Blending
 │   │   ├── deep_learning.py   ✅ LSTM/Transformer/Attention
-│   │   ├── training.py        ✅ Walk-forward + Purged K-Fold CV
+│   │   ├── training.py        ✅ Walk-forward + PurgedKFoldCV 5% embargo + Clustered Feature Importance (v3.1)
 │   │   └── explainability.py  ✅ SHAP-based model explanations
 │   ├── strategy/
 │   │   ├── __init__.py
@@ -109,7 +120,7 @@ alphatrade/
 │   ├── backtest/
 │   │   ├── __init__.py
 │   │   ├── engine.py          ✅ Event-driven + Dynamic TCA
-│   │   └── metrics.py         ✅ Performance attribution
+│   │   └── metrics.py         ✅ Performance attribution + PSR/DSR (v3.1)
 │   ├── mlops/                  ✅ NEW - MLOps Module
 │   │   ├── __init__.py
 │   │   ├── experiment_tracking.py ✅ MLflow integration
@@ -121,7 +132,7 @@ alphatrade/
 │       └── numba_accelerators.py ✅ JIT-compiled functions
 ├── scripts/
 │   ├── init_db.sql            ✅ Database schema
-│   └── train_models.py        ✅ Model training script
+│   └── train_models.py        ✅ AFML Institutional Training Pipeline (v3.1)
 ├── monitoring/
 │   └── prometheus/
 │       └── prometheus.yml     ✅ Metrics config
@@ -283,7 +294,8 @@ Order | File/Command | Purpose
 | File | Features |
 |------|----------|
 | `loader.py` | Multi-asset parallel loading, CSV/Parquet/API support |
-| `preprocessor.py` | Gap filling, outlier detection, quality scoring |
+| `preprocessor.py` | Gap filling, Winsorization (not drop), **Information-Driven Bars (Volume/Dollar/Tick)** |
+| `labeling.py` | **NEW v3.1:** Triple Barrier Method, Meta-Labeling, CUSUM Filter, Sample Weights |
 | `database.py` | TimescaleDB hypertables, Redis caching |
 | `live_feed.py` | Alpaca/Polygon WebSocket, bar aggregation |
 
@@ -305,7 +317,7 @@ Order | File/Command | Purpose
 | `ml_model.py` | XGBoost, LightGBM, CatBoost, RandomForest with GPU, **MetaLabelingModel** |
 | `ensemble.py` | VotingEnsemble, StackingEnsemble, BlendingEnsemble |
 | `deep_learning.py` | Bidirectional LSTM, Transformer with attention |
-| `training.py` | Walk-forward validation, Optuna tuning, **Purged K-Fold CV**, **Combinatorial Purged CV** |
+| `training.py` | Walk-forward, Optuna, **PurgedKFoldCV (5% embargo)**, **Combinatorial Purged CV**, **Clustered Feature Importance (MDI/MDA)** |
 | `explainability.py` | **SHAP-based explanations**, feature importance, waterfall/force plots |
 
 ### Strategy Framework (`src/strategy/`)
@@ -338,7 +350,7 @@ Order | File/Command | Purpose
 | File | Features |
 |------|----------|
 | `engine.py` | Event-driven + vectorized, realistic fills, slippage, **Dynamic Transaction Cost Analysis (Almgren-Chriss)** |
-| `metrics.py` | Sharpe, Sortino, Calmar, Max DD, attribution analysis |
+| `metrics.py` | Sharpe, Sortino, Calmar, Max DD, attribution, **Probabilistic SR (PSR)**, **Deflated SR (DSR)**, **Minimum Track Record Length** |
 
 ### MLOps (`src/mlops/`) - NEW
 
@@ -442,47 +454,119 @@ Order | File/Command | Purpose
 | DVC Data Versioning | ✅ | Data pipelines, remote storage, reproducibility |
 | SHAP Explainability | ✅ | Feature importance, waterfall plots, regime explanations |
 
+### Phase 6: AFML Institutional Methodology v3.1 (COMPLETED ✅)
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| Information-Driven Bars | ✅ | Volume/Dollar/Tick bars - better statistical properties than time bars |
+| Triple Barrier Method | ✅ | Path-dependent labeling with dynamic volatility barriers (AFML Ch.3) |
+| Meta-Labeling | ✅ | Two-stage approach: primary model (direction) + secondary model (bet sizing) |
+| CUSUM Event Filter | ✅ | Adaptive event sampling for structural break detection |
+| Sample Weight Calculation | ✅ | Uniqueness weights + time decay for overlapping labels |
+| Clustered Feature Importance | ✅ | Hierarchical clustering + MDI/MDA at cluster level (AFML Ch.8) |
+| Probabilistic Sharpe Ratio | ✅ | Accounts for skewness/kurtosis in returns distribution |
+| Deflated Sharpe Ratio | ✅ | Adjusts for multiple testing / p-hacking bias |
+| PurgedKFoldCV 5% Embargo | ✅ | Minimum 5% embargo to eliminate serial correlation leakage |
+| Feature Neutralization | ✅ | Market beta removal, microstructure feature downweighting |
+| Winsorization Policy | ✅ | Default outlier handling preserves tail event information |
+
 ---
 
 ## 🔬 ADVANCED FEATURES USAGE
 
-### Triple Barrier Method
+### Triple Barrier Method (v3.1)
 ```python
-from src.features.builder import FeatureBuilder
+from src.data.labeling import TripleBarrierLabeler, TripleBarrierConfig
 
-fb = FeatureBuilder()
-labels = fb.generate_triple_barrier_labels(
-    df,
-    pt_sl_ratio=2.0,  # 2:1 profit:loss ratio
-    max_holding_period=20,
-    min_return=0.01
+config = TripleBarrierConfig(
+    pt_sl_ratio=(1.0, 1.0),      # Symmetric barriers
+    volatility_lookback=20,      # EWM volatility window
+    max_holding_period=10,       # Max bars to hold
+    min_return=0.001             # Minimum return threshold
 )
+
+labeler = TripleBarrierLabeler(config)
+events = labeler.get_events_with_ohlcv(
+    prices=df,                   # OHLCV DataFrame
+    pt_sl=(1.0, 1.0)            # Profit/StopLoss multipliers
+)
+# events contains: label, bin_label, t1, ret, touch_type
 ```
 
-### Meta-Labeling with Bet Sizing
+### Meta-Labeling with Bet Sizing (v3.1)
 ```python
-from src.models.ml_model import MetaLabelingModel
+from src.data.labeling import MetaLabeler, MetaLabelingConfig
 
-meta_model = MetaLabelingModel(
-    primary_model=trend_model,
-    secondary_model=LGBMClassifier(),
-    bet_sizing_method='kelly'
+config = MetaLabelingConfig(
+    primary_threshold=0.5,
+    use_probability=True
 )
-meta_model.fit(X_train, y_train, primary_signals)
-positions = meta_model.get_sized_positions(X_test, primary_signals_test)
+meta_labeler = MetaLabeler(config)
+
+# Get side from primary model
+side = meta_labeler.get_primary_side(primary_predictions)
+
+# Create meta-labels
+meta_events = meta_labeler.create_meta_labels(triple_barrier_events, side)
+
+# Prepare training data for secondary model
+X_meta, y_meta = meta_labeler.get_meta_training_data(features, meta_events)
 ```
 
-### Purged Cross-Validation
+### Information-Driven Bars (v3.1)
+```python
+from src.data.preprocessor import convert_time_bars_to_information_bars
+
+# Convert 15-min bars to dollar bars
+dollar_bars = convert_time_bars_to_information_bars(
+    time_bars=df,
+    bar_type="dollar",           # "volume", "dollar", or "tick"
+    target_bars_per_day=50       # Auto-estimate threshold
+)
+# Returns IID-normal distributed returns with lower serial correlation
+```
+
+### Purged Cross-Validation with 5% Embargo (v3.1)
 ```python
 from src.models.training import CrossValidationTrainer
 
 cv_trainer = CrossValidationTrainer(
     cv_method='purged_kfold',
     n_splits=5,
-    purge_gap=10,
-    embargo_pct=0.01
+    purge_gap=0,
+    embargo_pct=0.05             # Minimum 5% per AFML recommendations
 )
-results = cv_trainer.cross_validate(model, X, y, times)
+results = cv_trainer.cross_validate(model, X, y, t1=events['t1'])
+```
+
+### Clustered Feature Importance (v3.1)
+```python
+from src.models.training import feature_importance_with_clustering
+
+result = feature_importance_with_clustering(
+    model=fitted_model,
+    X=features,
+    y=labels,
+    n_clusters=None,             # Auto-determine via silhouette
+    method='mda',                # 'mda' or 'mdi'
+    n_iterations=10
+)
+# Returns: cluster_importance, feature_importance, clusters, selected_features
+```
+
+### Probabilistic & Deflated Sharpe Ratio (v3.1)
+```python
+from src.backtest.metrics import SharpeRatioStatistics
+
+sr_stats = SharpeRatioStatistics(periods_per_year=252)
+report = sr_stats.generate_sharpe_report(
+    returns=strategy_returns,
+    n_trials=10,                 # Number of backtests run
+    sr_benchmark=0.0,
+    confidence=0.95
+)
+# report contains: sharpe_ratio, probabilistic_sr, deflated_sr,
+# minimum_track_record, confidence_interval, interpretation
 ```
 
 ### Hierarchical Risk Parity
@@ -532,7 +616,7 @@ regime_analysis = explainer.explain_by_regime(X_test, regimes)
 
 ---
 
-*Document Version: 3.0*
-*Implementation Status: COMPLETE + ADVANCED FEATURES*
+*Document Version: 3.1*
+*Implementation Status: COMPLETE + FULL AFML INSTITUTIONAL METHODOLOGY*
 *Ready for: Backtest → Paper Trading → Live Trading*
-*Advanced ML: Triple Barrier, Meta-Labeling, Purged CV, HRP, MLOps*
+*AFML Features: Triple Barrier, Meta-Labeling, Information Bars, Clustered Importance, PSR/DSR, PurgedKFoldCV 5% Embargo*

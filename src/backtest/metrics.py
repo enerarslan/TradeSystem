@@ -1048,3 +1048,424 @@ Tail Ratio:          {perf.tail_ratio:>12.2f}
 </html>
 """
         return html
+
+
+class SharpeRatioStatistics:
+    """
+    Advanced Sharpe Ratio Statistics.
+
+    Based on "Advances in Financial Machine Learning" by Marcos Lopez de Prado.
+
+    Standard Sharpe Ratio issues:
+    - Susceptible to p-hacking (selection bias from multiple trials)
+    - Ignores non-normality (skewness, kurtosis)
+    - No statistical significance measure
+
+    Solutions implemented:
+    1. Probabilistic Sharpe Ratio (PSR): Probability that SR > benchmark
+    2. Deflated Sharpe Ratio (DSR): Adjusts for multiple testing
+    3. Minimum Track Record Length (minTRL): Required data for significance
+    """
+
+    def __init__(
+        self,
+        risk_free_rate: float = 0.0,
+        periods_per_year: int = 252
+    ):
+        """
+        Initialize SharpeRatioStatistics.
+
+        Args:
+            risk_free_rate: Annual risk-free rate
+            periods_per_year: Number of periods per year (252 for daily)
+        """
+        self.risk_free_rate = risk_free_rate
+        self.periods_per_year = periods_per_year
+
+    def calculate_sharpe_ratio(
+        self,
+        returns: pd.Series,
+        annualize: bool = True
+    ) -> float:
+        """
+        Calculate standard Sharpe Ratio.
+
+        Args:
+            returns: Returns series
+            annualize: Whether to annualize
+
+        Returns:
+            Sharpe ratio
+        """
+        if len(returns) == 0 or returns.std() == 0:
+            return 0.0
+
+        excess_returns = returns - self.risk_free_rate / self.periods_per_year
+        sr = excess_returns.mean() / returns.std()
+
+        if annualize:
+            sr = sr * np.sqrt(self.periods_per_year)
+
+        return sr
+
+    def probabilistic_sharpe_ratio(
+        self,
+        returns: pd.Series,
+        sr_benchmark: float = 0.0
+    ) -> float:
+        """
+        Calculate Probabilistic Sharpe Ratio (PSR).
+
+        PSR gives the probability that the estimated Sharpe Ratio (SR*)
+        exceeds a benchmark Sharpe Ratio (SR_benchmark).
+
+        PSR = Phi((SR* - SR_benchmark) / SE(SR*))
+
+        Where SE(SR*) accounts for non-normality through skewness and kurtosis.
+
+        Based on AFML Chapter 14.
+
+        Args:
+            returns: Returns series
+            sr_benchmark: Benchmark Sharpe ratio to exceed
+
+        Returns:
+            PSR (probability between 0 and 1)
+        """
+        n = len(returns)
+
+        if n < 3 or returns.std() == 0:
+            return 0.5  # Indeterminate
+
+        # Calculate estimated Sharpe ratio (non-annualized)
+        sr_star = self.calculate_sharpe_ratio(returns, annualize=False)
+
+        # Calculate skewness and kurtosis
+        skewness = returns.skew()
+        kurtosis = returns.kurtosis()  # Excess kurtosis
+
+        # Standard error of SR accounting for non-normality
+        # SE(SR*) = sqrt((1 + 0.5*SR*^2 - skew*SR* + (kurt-3)/4*SR*^2) / (n-1))
+        sr_squared = sr_star ** 2
+        var_sr = (1 + 0.5 * sr_squared - skewness * sr_star +
+                  (kurtosis) / 4 * sr_squared) / (n - 1)
+
+        if var_sr < 0:
+            var_sr = 1 / (n - 1)  # Fallback to standard SE
+
+        se_sr = np.sqrt(var_sr)
+
+        if se_sr == 0:
+            return 0.5
+
+        # PSR = Phi((SR* - SR_benchmark) / SE(SR*))
+        z_score = (sr_star - sr_benchmark) / se_sr
+        psr = stats.norm.cdf(z_score)
+
+        return psr
+
+    def deflated_sharpe_ratio(
+        self,
+        returns: pd.Series,
+        n_trials: int = 1,
+        var_sharpe_trials: float = None,
+        sr_benchmark: float = 0.0
+    ) -> float:
+        """
+        Calculate Deflated Sharpe Ratio (DSR).
+
+        DSR adjusts for multiple testing by computing the expected
+        maximum Sharpe ratio under the null hypothesis (random strategy).
+
+        This combats selection bias / p-hacking from running many backtests.
+
+        DSR = PSR(SR*, E[max(SR)] under null)
+
+        Based on AFML Chapter 14.
+
+        Args:
+            returns: Returns series
+            n_trials: Number of independent trials (backtests) run
+            var_sharpe_trials: Variance of SR across trials (estimated if None)
+            sr_benchmark: Minimum acceptable SR (default: 0)
+
+        Returns:
+            DSR (probability between 0 and 1)
+        """
+        n = len(returns)
+
+        if n < 3 or returns.std() == 0:
+            return 0.5
+
+        # Calculate estimated Sharpe ratio
+        sr_star = self.calculate_sharpe_ratio(returns, annualize=False)
+
+        # Estimate variance of SR across trials if not provided
+        if var_sharpe_trials is None:
+            # Default: assume standard SE
+            var_sharpe_trials = 1 / (n - 1)
+
+        # Expected maximum SR under null hypothesis
+        # E[max(SR)] = sqrt(V[SR]) * ((1 - gamma) * Phi^-1(1 - 1/N) + gamma * Phi^-1(1 - 1/(N*e)))
+        # Approximation using Euler-Mascheroni constant
+        gamma = 0.5772156649  # Euler-Mascheroni constant
+
+        if n_trials > 1:
+            z1 = stats.norm.ppf(1 - 1 / n_trials)
+            z2 = stats.norm.ppf(1 - 1 / (n_trials * np.e))
+            e_max_sr = np.sqrt(var_sharpe_trials) * ((1 - gamma) * z1 + gamma * z2)
+        else:
+            e_max_sr = 0
+
+        # Adjusted benchmark
+        sr_benchmark_adj = max(sr_benchmark, e_max_sr)
+
+        # Calculate PSR with adjusted benchmark
+        dsr = self.probabilistic_sharpe_ratio(returns, sr_benchmark_adj)
+
+        return dsr
+
+    def minimum_track_record_length(
+        self,
+        returns: pd.Series,
+        sr_benchmark: float = 0.0,
+        confidence: float = 0.95
+    ) -> int:
+        """
+        Calculate Minimum Track Record Length (minTRL).
+
+        minTRL is the minimum number of observations needed to reject
+        the null hypothesis that the true SR <= SR_benchmark.
+
+        Based on AFML Chapter 14.
+
+        Args:
+            returns: Returns series
+            sr_benchmark: Benchmark SR to exceed
+            confidence: Confidence level (e.g., 0.95 for 95%)
+
+        Returns:
+            Minimum track record length (number of observations)
+        """
+        n = len(returns)
+
+        if n < 3 or returns.std() == 0:
+            return float('inf')
+
+        # Calculate estimated Sharpe ratio (non-annualized)
+        sr_star = self.calculate_sharpe_ratio(returns, annualize=False)
+
+        if sr_star <= sr_benchmark:
+            return float('inf')  # Cannot reject null
+
+        # Calculate skewness and kurtosis
+        skewness = returns.skew()
+        kurtosis = returns.kurtosis()
+
+        # z-score for confidence level
+        z_alpha = stats.norm.ppf(confidence)
+
+        # minTRL formula (from AFML)
+        # minTRL = 1 + (1 + 0.5*SR*^2 - skew*SR* + (kurt-3)/4*SR*^2) * (z_alpha / (SR* - SR_b))^2
+        sr_squared = sr_star ** 2
+        variance_factor = 1 + 0.5 * sr_squared - skewness * sr_star + (kurtosis) / 4 * sr_squared
+        z_ratio = z_alpha / (sr_star - sr_benchmark)
+
+        min_trl = 1 + variance_factor * (z_ratio ** 2)
+
+        return int(np.ceil(min_trl))
+
+    def sharpe_ratio_confidence_interval(
+        self,
+        returns: pd.Series,
+        confidence: float = 0.95
+    ) -> Tuple[float, float]:
+        """
+        Calculate confidence interval for Sharpe Ratio.
+
+        Args:
+            returns: Returns series
+            confidence: Confidence level
+
+        Returns:
+            Tuple of (lower_bound, upper_bound)
+        """
+        n = len(returns)
+
+        if n < 3 or returns.std() == 0:
+            return (0.0, 0.0)
+
+        sr_star = self.calculate_sharpe_ratio(returns, annualize=False)
+
+        # Calculate skewness and kurtosis
+        skewness = returns.skew()
+        kurtosis = returns.kurtosis()
+
+        # Standard error
+        sr_squared = sr_star ** 2
+        var_sr = (1 + 0.5 * sr_squared - skewness * sr_star +
+                  (kurtosis) / 4 * sr_squared) / (n - 1)
+
+        if var_sr < 0:
+            var_sr = 1 / (n - 1)
+
+        se_sr = np.sqrt(var_sr)
+
+        # Confidence interval
+        z = stats.norm.ppf((1 + confidence) / 2)
+
+        lower = sr_star - z * se_sr
+        upper = sr_star + z * se_sr
+
+        # Annualize
+        annualization_factor = np.sqrt(self.periods_per_year)
+        lower *= annualization_factor
+        upper *= annualization_factor
+
+        return (lower, upper)
+
+    def generate_sharpe_report(
+        self,
+        returns: pd.Series,
+        n_trials: int = 1,
+        sr_benchmark: float = 0.0,
+        confidence: float = 0.95
+    ) -> Dict[str, Any]:
+        """
+        Generate comprehensive Sharpe ratio analysis report.
+
+        Args:
+            returns: Returns series
+            n_trials: Number of backtests/trials run
+            sr_benchmark: Benchmark SR
+            confidence: Confidence level
+
+        Returns:
+            Dictionary with comprehensive Sharpe statistics
+        """
+        sr = self.calculate_sharpe_ratio(returns, annualize=True)
+        psr = self.probabilistic_sharpe_ratio(returns, sr_benchmark)
+        dsr = self.deflated_sharpe_ratio(returns, n_trials, sr_benchmark=sr_benchmark)
+        min_trl = self.minimum_track_record_length(returns, sr_benchmark, confidence)
+        ci = self.sharpe_ratio_confidence_interval(returns, confidence)
+
+        # Additional statistics
+        n = len(returns)
+        skewness = returns.skew()
+        kurtosis = returns.kurtosis()
+
+        # Interpretation
+        is_significant = psr > confidence
+        has_enough_data = n >= min_trl
+        is_deflated_significant = dsr > confidence
+
+        return {
+            'sharpe_ratio': sr,
+            'sharpe_ratio_annualized': sr,
+            'sharpe_ratio_daily': sr / np.sqrt(self.periods_per_year),
+            'probabilistic_sr': psr,
+            'deflated_sr': dsr,
+            'minimum_track_record': min_trl,
+            'confidence_interval': ci,
+            'n_observations': n,
+            'n_trials': n_trials,
+            'sr_benchmark': sr_benchmark,
+            'confidence_level': confidence,
+            'skewness': skewness,
+            'kurtosis': kurtosis,
+            'is_significant': is_significant,
+            'has_enough_data': has_enough_data,
+            'is_deflated_significant': is_deflated_significant,
+            'interpretation': self._interpret_results(
+                sr, psr, dsr, min_trl, n, is_significant,
+                has_enough_data, is_deflated_significant
+            )
+        }
+
+    def _interpret_results(
+        self,
+        sr: float,
+        psr: float,
+        dsr: float,
+        min_trl: int,
+        n: int,
+        is_significant: bool,
+        has_enough_data: bool,
+        is_deflated_significant: bool
+    ) -> str:
+        """Generate human-readable interpretation."""
+        interpretation = []
+
+        # SR interpretation
+        if sr > 2.0:
+            interpretation.append("Exceptional Sharpe ratio (>2.0)")
+        elif sr > 1.0:
+            interpretation.append("Strong Sharpe ratio (>1.0)")
+        elif sr > 0.5:
+            interpretation.append("Acceptable Sharpe ratio (>0.5)")
+        elif sr > 0:
+            interpretation.append("Weak positive Sharpe ratio")
+        else:
+            interpretation.append("Negative Sharpe ratio - strategy underperforms")
+
+        # PSR interpretation
+        if is_significant:
+            interpretation.append(f"PSR significant ({psr:.1%} > 95%)")
+        else:
+            interpretation.append(f"PSR not significant ({psr:.1%} < 95%)")
+
+        # Track record
+        if has_enough_data:
+            interpretation.append(f"Sufficient data ({n} >= {min_trl} minTRL)")
+        else:
+            interpretation.append(f"Need more data ({n} < {min_trl} minTRL)")
+
+        # DSR interpretation
+        if is_deflated_significant:
+            interpretation.append("Survives multiple testing adjustment (DSR)")
+        else:
+            interpretation.append("May be result of selection bias (low DSR)")
+
+        return " | ".join(interpretation)
+
+
+def calculate_psr(
+    returns: pd.Series,
+    sr_benchmark: float = 0.0,
+    periods_per_year: int = 252
+) -> float:
+    """
+    Convenience function for Probabilistic Sharpe Ratio.
+
+    Args:
+        returns: Returns series
+        sr_benchmark: Benchmark SR to exceed
+        periods_per_year: Periods per year
+
+    Returns:
+        PSR value
+    """
+    calc = SharpeRatioStatistics(periods_per_year=periods_per_year)
+    return calc.probabilistic_sharpe_ratio(returns, sr_benchmark)
+
+
+def calculate_dsr(
+    returns: pd.Series,
+    n_trials: int,
+    sr_benchmark: float = 0.0,
+    periods_per_year: int = 252
+) -> float:
+    """
+    Convenience function for Deflated Sharpe Ratio.
+
+    Args:
+        returns: Returns series
+        n_trials: Number of trials/backtests
+        sr_benchmark: Benchmark SR
+        periods_per_year: Periods per year
+
+    Returns:
+        DSR value
+    """
+    calc = SharpeRatioStatistics(periods_per_year=periods_per_year)
+    return calc.deflated_sharpe_ratio(returns, n_trials, sr_benchmark=sr_benchmark)

@@ -98,7 +98,7 @@ class DataCleaner:
         df: pd.DataFrame,
         fill_method: FillMethod = FillMethod.FFILL,
         handle_outliers: bool = True,
-        outlier_method: OutlierMethod = OutlierMethod.ZSCORE
+        outlier_method: OutlierMethod = OutlierMethod.WINSORIZE  # Changed from ZSCORE per AFML
     ) -> pd.DataFrame:
         """
         Clean DataFrame with standard pipeline.
@@ -108,6 +108,10 @@ class DataCleaner:
             fill_method: Method for filling missing values
             handle_outliers: Whether to handle outliers
             outlier_method: Method for outlier detection
+                           POLICY: Default is WINSORIZE (not DROP) per AFML recommendations.
+                           Financial tail events contain critical information and should
+                           be capped, not removed. Dropping outliers destroys information
+                           limits and biases models toward normal market conditions.
 
         Returns:
             Cleaned DataFrame
@@ -1281,3 +1285,474 @@ class RobustOutlierHandler:
             }
 
         return report
+
+
+class InformationDrivenBars:
+    """
+    Information-Driven Bar Generation.
+
+    Based on "Advances in Financial Machine Learning" by Marcos Lopez de Prado.
+
+    Time bars have poor statistical properties:
+    - Serial correlation
+    - Non-normality
+    - Heteroskedasticity
+
+    Information-driven bars (Volume, Dollar, Tick) address these issues by
+    sampling based on market activity rather than time:
+    - Volume Bars: Sample every N shares traded
+    - Dollar Bars: Sample every $X exchanged
+    - Tick Bars: Sample every N transactions
+
+    Benefits:
+    - Returns closer to IID normal distribution
+    - Better convergence for ML models
+    - Adapts to market activity naturally
+    - More events during high-information periods
+    """
+
+    def __init__(
+        self,
+        bar_type: str = "dollar",
+        threshold: float = None,
+        initial_estimate_bars: int = 100
+    ):
+        """
+        Initialize InformationDrivenBars.
+
+        Args:
+            bar_type: "volume", "dollar", or "tick"
+            threshold: Sampling threshold (auto-estimated if None)
+            initial_estimate_bars: Bars to use for auto-estimation
+        """
+        self.bar_type = bar_type.lower()
+        self.threshold = threshold
+        self.initial_estimate_bars = initial_estimate_bars
+
+        if self.bar_type not in ["volume", "dollar", "tick"]:
+            raise ValueError(f"Unknown bar type: {bar_type}")
+
+        logger.info(f"InformationDrivenBars initialized: type={bar_type}, threshold={threshold}")
+
+    def estimate_threshold(
+        self,
+        data: pd.DataFrame,
+        target_bars_per_day: int = 50
+    ) -> float:
+        """
+        Estimate appropriate threshold based on data.
+
+        Args:
+            data: OHLCV DataFrame with tick or minute data
+            target_bars_per_day: Desired number of bars per trading day
+
+        Returns:
+            Estimated threshold
+        """
+        if self.bar_type == "volume":
+            # Total volume / (number of days * target bars per day)
+            total_volume = data['volume'].sum()
+            n_days = (data.index[-1] - data.index[0]).days or 1
+            threshold = total_volume / (n_days * target_bars_per_day)
+
+        elif self.bar_type == "dollar":
+            # Dollar volume = price * volume
+            data['dollar_volume'] = data['close'] * data['volume']
+            total_dollar = data['dollar_volume'].sum()
+            n_days = (data.index[-1] - data.index[0]).days or 1
+            threshold = total_dollar / (n_days * target_bars_per_day)
+
+        elif self.bar_type == "tick":
+            # For tick bars, threshold is number of ticks
+            n_ticks = len(data)
+            n_days = (data.index[-1] - data.index[0]).days or 1
+            threshold = n_ticks / (n_days * target_bars_per_day)
+
+        logger.info(f"Estimated {self.bar_type} threshold: {threshold:,.2f}")
+
+        return threshold
+
+    def generate_bars(
+        self,
+        data: pd.DataFrame,
+        threshold: float = None
+    ) -> pd.DataFrame:
+        """
+        Generate information-driven bars from tick/minute data.
+
+        Args:
+            data: DataFrame with columns ['open', 'high', 'low', 'close', 'volume']
+                  Index should be DatetimeIndex
+            threshold: Sampling threshold (uses instance value if None)
+
+        Returns:
+            DataFrame with OHLCV bars sampled by information
+        """
+        threshold = threshold or self.threshold
+
+        if threshold is None:
+            threshold = self.estimate_threshold(data)
+            self.threshold = threshold
+
+        if self.bar_type == "volume":
+            return self._generate_volume_bars(data, threshold)
+        elif self.bar_type == "dollar":
+            return self._generate_dollar_bars(data, threshold)
+        elif self.bar_type == "tick":
+            return self._generate_tick_bars(data, threshold)
+
+    def _generate_volume_bars(
+        self,
+        data: pd.DataFrame,
+        threshold: float
+    ) -> pd.DataFrame:
+        """
+        Generate Volume Bars.
+
+        Sample a new bar every time cumulative volume exceeds threshold.
+
+        Args:
+            data: OHLCV DataFrame
+            threshold: Volume threshold per bar
+
+        Returns:
+            DataFrame with volume bars
+        """
+        bars = []
+        cumulative_volume = 0
+
+        bar_open = data['open'].iloc[0]
+        bar_high = data['high'].iloc[0]
+        bar_low = data['low'].iloc[0]
+        bar_close = data['close'].iloc[0]
+        bar_volume = 0
+        bar_start_time = data.index[0]
+
+        for idx in range(len(data)):
+            row = data.iloc[idx]
+            timestamp = data.index[idx]
+
+            # Update bar statistics
+            bar_high = max(bar_high, row['high'])
+            bar_low = min(bar_low, row['low'])
+            bar_close = row['close']
+            bar_volume += row['volume']
+            cumulative_volume += row['volume']
+
+            # Check if threshold reached
+            if cumulative_volume >= threshold:
+                bars.append({
+                    'timestamp': bar_start_time,
+                    'open': bar_open,
+                    'high': bar_high,
+                    'low': bar_low,
+                    'close': bar_close,
+                    'volume': bar_volume,
+                    'vwap': (bar_close + bar_high + bar_low) / 3,  # Approximation
+                    'bar_duration': (timestamp - bar_start_time).total_seconds()
+                })
+
+                # Reset for next bar
+                cumulative_volume = 0
+                bar_volume = 0
+
+                if idx + 1 < len(data):
+                    next_row = data.iloc[idx + 1]
+                    bar_start_time = data.index[idx + 1]
+                    bar_open = next_row['open']
+                    bar_high = next_row['high']
+                    bar_low = next_row['low']
+
+        # Handle remaining data
+        if bar_volume > 0:
+            bars.append({
+                'timestamp': bar_start_time,
+                'open': bar_open,
+                'high': bar_high,
+                'low': bar_low,
+                'close': bar_close,
+                'volume': bar_volume,
+                'vwap': (bar_close + bar_high + bar_low) / 3,
+                'bar_duration': (data.index[-1] - bar_start_time).total_seconds()
+            })
+
+        result = pd.DataFrame(bars)
+        if len(result) > 0:
+            result.set_index('timestamp', inplace=True)
+
+        logger.info(f"Generated {len(result)} volume bars from {len(data)} samples")
+
+        return result
+
+    def _generate_dollar_bars(
+        self,
+        data: pd.DataFrame,
+        threshold: float
+    ) -> pd.DataFrame:
+        """
+        Generate Dollar Bars.
+
+        Sample a new bar every time cumulative dollar volume exceeds threshold.
+        Dollar volume = price * volume (represents actual money exchanged)
+
+        This is the most robust sampling method as it:
+        - Accounts for price changes over time
+        - Better represents actual market activity
+        - More stable across different price levels
+
+        Args:
+            data: OHLCV DataFrame
+            threshold: Dollar volume threshold per bar
+
+        Returns:
+            DataFrame with dollar bars
+        """
+        bars = []
+        cumulative_dollar = 0
+
+        bar_open = data['open'].iloc[0]
+        bar_high = data['high'].iloc[0]
+        bar_low = data['low'].iloc[0]
+        bar_close = data['close'].iloc[0]
+        bar_volume = 0
+        bar_dollar_volume = 0
+        bar_start_time = data.index[0]
+
+        for idx in range(len(data)):
+            row = data.iloc[idx]
+            timestamp = data.index[idx]
+
+            # Calculate dollar volume for this period
+            # Use VWAP approximation for better accuracy
+            vwap = (row['high'] + row['low'] + row['close']) / 3
+            dollar_volume = vwap * row['volume']
+
+            # Update bar statistics
+            bar_high = max(bar_high, row['high'])
+            bar_low = min(bar_low, row['low'])
+            bar_close = row['close']
+            bar_volume += row['volume']
+            bar_dollar_volume += dollar_volume
+            cumulative_dollar += dollar_volume
+
+            # Check if threshold reached
+            if cumulative_dollar >= threshold:
+                bars.append({
+                    'timestamp': bar_start_time,
+                    'open': bar_open,
+                    'high': bar_high,
+                    'low': bar_low,
+                    'close': bar_close,
+                    'volume': bar_volume,
+                    'dollar_volume': bar_dollar_volume,
+                    'vwap': bar_dollar_volume / bar_volume if bar_volume > 0 else bar_close,
+                    'bar_duration': (timestamp - bar_start_time).total_seconds()
+                })
+
+                # Reset for next bar
+                cumulative_dollar = 0
+                bar_volume = 0
+                bar_dollar_volume = 0
+
+                if idx + 1 < len(data):
+                    next_row = data.iloc[idx + 1]
+                    bar_start_time = data.index[idx + 1]
+                    bar_open = next_row['open']
+                    bar_high = next_row['high']
+                    bar_low = next_row['low']
+
+        # Handle remaining data
+        if bar_volume > 0:
+            bars.append({
+                'timestamp': bar_start_time,
+                'open': bar_open,
+                'high': bar_high,
+                'low': bar_low,
+                'close': bar_close,
+                'volume': bar_volume,
+                'dollar_volume': bar_dollar_volume,
+                'vwap': bar_dollar_volume / bar_volume if bar_volume > 0 else bar_close,
+                'bar_duration': (data.index[-1] - bar_start_time).total_seconds()
+            })
+
+        result = pd.DataFrame(bars)
+        if len(result) > 0:
+            result.set_index('timestamp', inplace=True)
+
+        logger.info(f"Generated {len(result)} dollar bars from {len(data)} samples")
+
+        return result
+
+    def _generate_tick_bars(
+        self,
+        data: pd.DataFrame,
+        threshold: float
+    ) -> pd.DataFrame:
+        """
+        Generate Tick Bars.
+
+        Sample a new bar every N ticks (transactions).
+
+        Args:
+            data: OHLCV DataFrame (each row represents one or more ticks)
+            threshold: Number of ticks per bar
+
+        Returns:
+            DataFrame with tick bars
+        """
+        threshold = int(threshold)
+        bars = []
+        tick_count = 0
+
+        bar_open = data['open'].iloc[0]
+        bar_high = data['high'].iloc[0]
+        bar_low = data['low'].iloc[0]
+        bar_close = data['close'].iloc[0]
+        bar_volume = 0
+        bar_start_time = data.index[0]
+
+        for idx in range(len(data)):
+            row = data.iloc[idx]
+            timestamp = data.index[idx]
+
+            # Update bar statistics
+            bar_high = max(bar_high, row['high'])
+            bar_low = min(bar_low, row['low'])
+            bar_close = row['close']
+            bar_volume += row['volume']
+            tick_count += 1
+
+            # Check if threshold reached
+            if tick_count >= threshold:
+                bars.append({
+                    'timestamp': bar_start_time,
+                    'open': bar_open,
+                    'high': bar_high,
+                    'low': bar_low,
+                    'close': bar_close,
+                    'volume': bar_volume,
+                    'tick_count': tick_count,
+                    'bar_duration': (timestamp - bar_start_time).total_seconds()
+                })
+
+                # Reset for next bar
+                tick_count = 0
+                bar_volume = 0
+
+                if idx + 1 < len(data):
+                    next_row = data.iloc[idx + 1]
+                    bar_start_time = data.index[idx + 1]
+                    bar_open = next_row['open']
+                    bar_high = next_row['high']
+                    bar_low = next_row['low']
+
+        # Handle remaining data
+        if tick_count > 0:
+            bars.append({
+                'timestamp': bar_start_time,
+                'open': bar_open,
+                'high': bar_high,
+                'low': bar_low,
+                'close': bar_close,
+                'volume': bar_volume,
+                'tick_count': tick_count,
+                'bar_duration': (data.index[-1] - bar_start_time).total_seconds()
+            })
+
+        result = pd.DataFrame(bars)
+        if len(result) > 0:
+            result.set_index('timestamp', inplace=True)
+
+        logger.info(f"Generated {len(result)} tick bars from {len(data)} samples")
+
+        return result
+
+    def compute_bar_statistics(
+        self,
+        bars: pd.DataFrame
+    ) -> Dict[str, Any]:
+        """
+        Compute statistics about generated bars.
+
+        Helps validate that bars have better statistical properties
+        than time bars.
+
+        Args:
+            bars: Generated bars DataFrame
+
+        Returns:
+            Dictionary with statistics
+        """
+        if len(bars) == 0:
+            return {}
+
+        returns = bars['close'].pct_change().dropna()
+
+        from scipy import stats as scipy_stats
+
+        # Test for normality
+        if len(returns) > 8:
+            _, normality_pvalue = scipy_stats.normaltest(returns)
+        else:
+            normality_pvalue = np.nan
+
+        # Test for serial correlation
+        if len(returns) > 10:
+            autocorr_lag1 = returns.autocorr(lag=1)
+        else:
+            autocorr_lag1 = np.nan
+
+        statistics = {
+            'n_bars': len(bars),
+            'returns_mean': returns.mean(),
+            'returns_std': returns.std(),
+            'returns_skew': returns.skew(),
+            'returns_kurtosis': returns.kurtosis(),
+            'normality_pvalue': normality_pvalue,
+            'autocorr_lag1': autocorr_lag1,
+            'avg_bar_duration_seconds': bars['bar_duration'].mean() if 'bar_duration' in bars else np.nan,
+            'bar_duration_std': bars['bar_duration'].std() if 'bar_duration' in bars else np.nan
+        }
+
+        return statistics
+
+
+def convert_time_bars_to_information_bars(
+    time_bars: pd.DataFrame,
+    bar_type: str = "dollar",
+    threshold: float = None,
+    target_bars_per_day: int = 50
+) -> pd.DataFrame:
+    """
+    Convenience function to convert time bars to information-driven bars.
+
+    Args:
+        time_bars: OHLCV DataFrame with time-based bars
+        bar_type: "volume", "dollar", or "tick"
+        threshold: Sampling threshold (auto-estimated if None)
+        target_bars_per_day: Target bars per day for auto-estimation
+
+    Returns:
+        DataFrame with information-driven bars
+    """
+    generator = InformationDrivenBars(bar_type=bar_type, threshold=threshold)
+
+    if threshold is None:
+        threshold = generator.estimate_threshold(time_bars, target_bars_per_day)
+
+    bars = generator.generate_bars(time_bars, threshold)
+
+    # Compute and log statistics
+    stats = generator.compute_bar_statistics(bars)
+
+    logger.info(
+        f"Bar conversion complete: {len(time_bars)} time bars -> {len(bars)} {bar_type} bars"
+    )
+
+    if 'normality_pvalue' in stats and not np.isnan(stats['normality_pvalue']):
+        logger.info(
+            f"Bar statistics: normality p={stats['normality_pvalue']:.4f}, "
+            f"autocorr={stats['autocorr_lag1']:.4f}"
+        )
+
+    return bars

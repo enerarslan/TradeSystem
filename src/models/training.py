@@ -640,7 +640,7 @@ class PurgedKFoldCV:
         self,
         n_splits: int = 5,
         purge_gap: int = 0,
-        embargo_pct: float = 0.01
+        embargo_pct: float = 0.05  # AFML recommends at least 5% embargo
     ):
         """
         Initialize PurgedKFoldCV.
@@ -651,7 +651,17 @@ class PurgedKFoldCV:
                       (accounts for label forward-looking window)
             embargo_pct: Percentage of test set size to embargo after test set
                         (accounts for serial correlation)
+                        IMPORTANT: Must be at least 0.05 (5%) to eliminate
+                        serial correlation leakage. Default changed from 0.01
+                        per AFML recommendations.
         """
+        if embargo_pct < 0.05:
+            logger.warning(
+                f"embargo_pct={embargo_pct} is below recommended minimum of 0.05. "
+                f"Setting to 0.05 to prevent serial correlation leakage."
+            )
+            embargo_pct = 0.05
+
         self.n_splits = n_splits
         self.purge_gap = purge_gap
         self.embargo_pct = embargo_pct
@@ -1064,3 +1074,536 @@ class CrossValidationTrainer:
         )
 
         return summary
+
+
+class ClusteredFeatureImportance:
+    """
+    Clustered Feature Importance for Financial ML.
+
+    Based on AFML Chapter 8: Feature Importance.
+
+    Standard feature importance methods (MDI, MDA) are unreliable when
+    features are correlated because:
+    - Importance is diluted across correlated features
+    - Substitution effects distort rankings
+    - Random selection among correlated features adds noise
+
+    Clustered Feature Importance addresses this by:
+    1. Clustering features using hierarchical clustering
+    2. Computing importance at the cluster level
+    3. Distributing cluster importance to individual features
+
+    Benefits:
+    - More stable importance rankings
+    - Better handles multicollinearity
+    - Identifies redundant feature groups
+    - More interpretable results
+    """
+
+    def __init__(
+        self,
+        n_clusters: Optional[int] = None,
+        linkage_method: str = 'ward',
+        distance_metric: str = 'correlation',
+        cluster_method: str = 'silhouette'
+    ):
+        """
+        Initialize ClusteredFeatureImportance.
+
+        Args:
+            n_clusters: Number of clusters (auto-determined if None)
+            linkage_method: Hierarchical clustering linkage method
+                           ('ward', 'complete', 'average', 'single')
+            distance_metric: Distance metric for clustering
+            cluster_method: Method for determining optimal clusters
+                           ('silhouette', 'gap', 'elbow')
+        """
+        self.n_clusters = n_clusters
+        self.linkage_method = linkage_method
+        self.distance_metric = distance_metric
+        self.cluster_method = cluster_method
+
+        self._cluster_labels: Optional[np.ndarray] = None
+        self._linkage_matrix: Optional[np.ndarray] = None
+        self._feature_names: Optional[List[str]] = None
+
+    def fit(
+        self,
+        X: pd.DataFrame,
+        n_clusters: Optional[int] = None
+    ) -> 'ClusteredFeatureImportance':
+        """
+        Fit feature clusters using hierarchical clustering.
+
+        Args:
+            X: Feature DataFrame
+            n_clusters: Override for number of clusters
+
+        Returns:
+            Self for chaining
+        """
+        from scipy.cluster.hierarchy import linkage, fcluster
+        from scipy.spatial.distance import pdist, squareform
+
+        self._feature_names = X.columns.tolist()
+        n_clusters = n_clusters or self.n_clusters
+
+        # Compute correlation matrix
+        corr_matrix = X.corr()
+
+        # Convert correlation to distance
+        # distance = sqrt(0.5 * (1 - correlation))
+        distance_matrix = np.sqrt(0.5 * (1 - corr_matrix.fillna(0)))
+
+        # Ensure distance matrix is valid (no NaN/Inf)
+        distance_matrix = distance_matrix.replace([np.inf, -np.inf], 1.0).fillna(1.0)
+
+        # Convert to condensed form for linkage
+        condensed_dist = squareform(distance_matrix.values, checks=False)
+
+        # Perform hierarchical clustering
+        self._linkage_matrix = linkage(condensed_dist, method=self.linkage_method)
+
+        # Determine optimal number of clusters if not specified
+        if n_clusters is None:
+            n_clusters = self._find_optimal_clusters(X, condensed_dist)
+
+        # Get cluster labels
+        self._cluster_labels = fcluster(self._linkage_matrix, n_clusters, criterion='maxclust')
+
+        logger.info(
+            f"Clustered {len(self._feature_names)} features into {n_clusters} clusters"
+        )
+
+        return self
+
+    def _find_optimal_clusters(
+        self,
+        X: pd.DataFrame,
+        condensed_dist: np.ndarray
+    ) -> int:
+        """
+        Find optimal number of clusters using specified method.
+
+        Args:
+            X: Feature DataFrame
+            condensed_dist: Condensed distance matrix
+
+        Returns:
+            Optimal number of clusters
+        """
+        from scipy.cluster.hierarchy import fcluster
+
+        n_features = len(X.columns)
+        max_clusters = min(n_features // 2, 20)  # Reasonable upper bound
+
+        if self.cluster_method == 'silhouette':
+            return self._silhouette_optimal(X, condensed_dist, max_clusters)
+        elif self.cluster_method == 'gap':
+            return self._gap_statistic_optimal(X, condensed_dist, max_clusters)
+        else:  # elbow
+            return self._elbow_optimal(condensed_dist, max_clusters)
+
+    def _silhouette_optimal(
+        self,
+        X: pd.DataFrame,
+        condensed_dist: np.ndarray,
+        max_clusters: int
+    ) -> int:
+        """Find optimal clusters using silhouette score."""
+        from scipy.cluster.hierarchy import fcluster
+        from scipy.spatial.distance import squareform
+
+        try:
+            from sklearn.metrics import silhouette_score
+        except ImportError:
+            logger.warning("sklearn not available for silhouette, using default 5 clusters")
+            return 5
+
+        best_score = -1
+        best_n = 2
+
+        # Need square form for silhouette
+        distance_matrix = squareform(condensed_dist)
+
+        for n in range(2, max_clusters + 1):
+            labels = fcluster(self._linkage_matrix, n, criterion='maxclust')
+
+            # Need at least 2 unique clusters
+            if len(np.unique(labels)) < 2:
+                continue
+
+            try:
+                score = silhouette_score(distance_matrix, labels, metric='precomputed')
+                if score > best_score:
+                    best_score = score
+                    best_n = n
+            except Exception:
+                continue
+
+        logger.info(f"Optimal clusters (silhouette): {best_n} (score={best_score:.4f})")
+        return best_n
+
+    def _gap_statistic_optimal(
+        self,
+        X: pd.DataFrame,
+        condensed_dist: np.ndarray,
+        max_clusters: int
+    ) -> int:
+        """Find optimal clusters using gap statistic."""
+        from scipy.cluster.hierarchy import fcluster
+
+        n_references = 10
+        gaps = []
+
+        for n in range(1, max_clusters + 1):
+            labels = fcluster(self._linkage_matrix, n, criterion='maxclust')
+            wk = self._compute_within_cluster_dispersion(X.values, labels)
+
+            # Reference distributions
+            ref_wks = []
+            for _ in range(n_references):
+                # Generate random data with same shape
+                random_data = np.random.uniform(
+                    X.min().values, X.max().values, X.shape
+                )
+                ref_labels = fcluster(self._linkage_matrix, n, criterion='maxclust')
+                ref_wk = self._compute_within_cluster_dispersion(random_data, ref_labels)
+                ref_wks.append(np.log(ref_wk) if ref_wk > 0 else 0)
+
+            gap = np.mean(ref_wks) - (np.log(wk) if wk > 0 else 0)
+            gaps.append(gap)
+
+        # Find first significant gap
+        best_n = np.argmax(gaps) + 1
+        logger.info(f"Optimal clusters (gap statistic): {best_n}")
+        return best_n
+
+    def _elbow_optimal(
+        self,
+        condensed_dist: np.ndarray,
+        max_clusters: int
+    ) -> int:
+        """Find optimal clusters using elbow method."""
+        from scipy.cluster.hierarchy import fcluster
+
+        dispersions = []
+
+        for n in range(1, max_clusters + 1):
+            labels = fcluster(self._linkage_matrix, n, criterion='maxclust')
+            # Use linkage matrix heights as proxy for dispersion
+            dispersions.append(self._linkage_matrix[-(n-1), 2] if n > 1 else 0)
+
+        # Find elbow using second derivative
+        if len(dispersions) < 3:
+            return 2
+
+        second_deriv = np.diff(dispersions, n=2)
+        if len(second_deriv) > 0:
+            best_n = np.argmax(second_deriv) + 2
+        else:
+            best_n = 2
+
+        logger.info(f"Optimal clusters (elbow): {best_n}")
+        return max(2, min(best_n, max_clusters))
+
+    def _compute_within_cluster_dispersion(
+        self,
+        X: np.ndarray,
+        labels: np.ndarray
+    ) -> float:
+        """Compute total within-cluster dispersion."""
+        wk = 0
+        for cluster in np.unique(labels):
+            cluster_points = X[labels == cluster]
+            if len(cluster_points) > 1:
+                centroid = cluster_points.mean(axis=0)
+                wk += np.sum((cluster_points - centroid) ** 2)
+        return wk
+
+    def get_cluster_assignments(self) -> Dict[str, int]:
+        """
+        Get feature to cluster assignments.
+
+        Returns:
+            Dictionary mapping feature names to cluster IDs
+        """
+        if self._cluster_labels is None:
+            raise ValueError("Must fit() first")
+
+        return dict(zip(self._feature_names, self._cluster_labels))
+
+    def get_clusters(self) -> Dict[int, List[str]]:
+        """
+        Get cluster to features mapping.
+
+        Returns:
+            Dictionary mapping cluster IDs to feature names
+        """
+        if self._cluster_labels is None:
+            raise ValueError("Must fit() first")
+
+        clusters = {}
+        for feature, cluster in zip(self._feature_names, self._cluster_labels):
+            if cluster not in clusters:
+                clusters[cluster] = []
+            clusters[cluster].append(feature)
+
+        return clusters
+
+    def compute_clustered_importance(
+        self,
+        model,
+        X: pd.DataFrame,
+        y: pd.Series,
+        method: str = 'mda',
+        n_iterations: int = 10
+    ) -> Tuple[pd.Series, pd.Series]:
+        """
+        Compute feature importance at cluster level then distribute.
+
+        Args:
+            model: Fitted model with feature_importances_ or predict method
+            X: Feature DataFrame
+            y: Labels
+            method: 'mda' (Mean Decrease Accuracy) or 'mdi' (Mean Decrease Impurity)
+            n_iterations: Iterations for MDA
+
+        Returns:
+            Tuple of (cluster_importance, feature_importance)
+        """
+        if self._cluster_labels is None:
+            self.fit(X)
+
+        clusters = self.get_clusters()
+        n_clusters = len(clusters)
+
+        if method == 'mdi':
+            cluster_importance = self._compute_mdi_cluster_importance(model, clusters)
+        else:  # mda
+            cluster_importance = self._compute_mda_cluster_importance(
+                model, X, y, clusters, n_iterations
+            )
+
+        # Distribute cluster importance to individual features
+        feature_importance = self._distribute_importance(cluster_importance, clusters)
+
+        return cluster_importance, feature_importance
+
+    def _compute_mdi_cluster_importance(
+        self,
+        model,
+        clusters: Dict[int, List[str]]
+    ) -> pd.Series:
+        """
+        Compute MDI (Mean Decrease Impurity) at cluster level.
+
+        For tree-based models, sums feature importances within clusters.
+        """
+        if not hasattr(model, 'feature_importances_'):
+            raise ValueError("Model must have feature_importances_ for MDI")
+
+        # Get feature importances from model
+        if hasattr(model, 'feature_names_in_'):
+            feature_names = model.feature_names_in_
+        else:
+            feature_names = self._feature_names
+
+        importances = dict(zip(feature_names, model.feature_importances_))
+
+        # Sum importances within clusters
+        cluster_importance = {}
+        for cluster_id, features in clusters.items():
+            cluster_importance[cluster_id] = sum(
+                importances.get(f, 0) for f in features
+            )
+
+        # Normalize
+        total = sum(cluster_importance.values())
+        if total > 0:
+            cluster_importance = {k: v / total for k, v in cluster_importance.items()}
+
+        return pd.Series(cluster_importance).sort_values(ascending=False)
+
+    def _compute_mda_cluster_importance(
+        self,
+        model,
+        X: pd.DataFrame,
+        y: pd.Series,
+        clusters: Dict[int, List[str]],
+        n_iterations: int
+    ) -> pd.Series:
+        """
+        Compute MDA (Mean Decrease Accuracy) at cluster level.
+
+        Permutes all features in a cluster simultaneously to measure
+        cluster-level importance.
+        """
+        try:
+            from sklearn.metrics import accuracy_score
+        except ImportError:
+            logger.warning("sklearn not available for MDA")
+            return pd.Series()
+
+        # Get baseline score
+        y_pred = model.predict(X)
+        baseline_score = accuracy_score(y, y_pred)
+
+        cluster_importance = {}
+
+        for cluster_id, features in clusters.items():
+            importance_scores = []
+
+            for _ in range(n_iterations):
+                X_permuted = X.copy()
+
+                # Permute all features in cluster simultaneously
+                for feature in features:
+                    if feature in X_permuted.columns:
+                        X_permuted[feature] = np.random.permutation(X_permuted[feature].values)
+
+                # Score with permuted features
+                y_pred_permuted = model.predict(X_permuted)
+                permuted_score = accuracy_score(y, y_pred_permuted)
+
+                # Importance = decrease in accuracy
+                importance_scores.append(baseline_score - permuted_score)
+
+            cluster_importance[cluster_id] = np.mean(importance_scores)
+
+        # Normalize (only positive importances)
+        min_imp = min(cluster_importance.values())
+        if min_imp < 0:
+            cluster_importance = {k: v - min_imp for k, v in cluster_importance.items()}
+
+        total = sum(cluster_importance.values())
+        if total > 0:
+            cluster_importance = {k: v / total for k, v in cluster_importance.items()}
+
+        return pd.Series(cluster_importance).sort_values(ascending=False)
+
+    def _distribute_importance(
+        self,
+        cluster_importance: pd.Series,
+        clusters: Dict[int, List[str]]
+    ) -> pd.Series:
+        """
+        Distribute cluster importance to individual features.
+
+        Each feature gets its cluster's importance divided by cluster size.
+        """
+        feature_importance = {}
+
+        for cluster_id, features in clusters.items():
+            cluster_imp = cluster_importance.get(cluster_id, 0)
+            feature_imp = cluster_imp / len(features)
+
+            for feature in features:
+                feature_importance[feature] = feature_imp
+
+        return pd.Series(feature_importance).sort_values(ascending=False)
+
+    def select_features(
+        self,
+        feature_importance: pd.Series,
+        method: str = 'top_n',
+        n: int = 20,
+        threshold: float = 0.01
+    ) -> List[str]:
+        """
+        Select features based on clustered importance.
+
+        Args:
+            feature_importance: Series of feature importances
+            method: 'top_n', 'threshold', or 'top_per_cluster'
+            n: Number of features for 'top_n'
+            threshold: Minimum importance for 'threshold'
+
+        Returns:
+            List of selected feature names
+        """
+        if method == 'top_n':
+            return feature_importance.head(n).index.tolist()
+
+        elif method == 'threshold':
+            return feature_importance[feature_importance >= threshold].index.tolist()
+
+        elif method == 'top_per_cluster':
+            # Select top feature from each cluster
+            clusters = self.get_clusters()
+            selected = []
+
+            for cluster_id, features in clusters.items():
+                cluster_features = feature_importance[features].sort_values(ascending=False)
+                if len(cluster_features) > 0:
+                    selected.append(cluster_features.index[0])
+
+            return selected
+
+        else:
+            raise ValueError(f"Unknown selection method: {method}")
+
+    def drop_redundant_clusters(
+        self,
+        cluster_importance: pd.Series,
+        threshold: float = 0.01
+    ) -> List[int]:
+        """
+        Identify redundant clusters with low importance.
+
+        Args:
+            cluster_importance: Series of cluster importances
+            threshold: Minimum importance to keep cluster
+
+        Returns:
+            List of cluster IDs to drop
+        """
+        return cluster_importance[cluster_importance < threshold].index.tolist()
+
+
+def feature_importance_with_clustering(
+    model,
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_clusters: Optional[int] = None,
+    method: str = 'mda',
+    n_iterations: int = 10
+) -> Dict[str, Any]:
+    """
+    Convenience function for clustered feature importance analysis.
+
+    Args:
+        model: Fitted model
+        X: Feature DataFrame
+        y: Labels
+        n_clusters: Number of clusters (auto if None)
+        method: 'mda' or 'mdi'
+        n_iterations: Iterations for MDA
+
+    Returns:
+        Dictionary with importance results and cluster info
+    """
+    cfi = ClusteredFeatureImportance(n_clusters=n_clusters)
+    cfi.fit(X)
+
+    cluster_imp, feature_imp = cfi.compute_clustered_importance(
+        model, X, y, method=method, n_iterations=n_iterations
+    )
+
+    clusters = cfi.get_clusters()
+
+    # Identify redundant clusters
+    redundant = cfi.drop_redundant_clusters(cluster_imp, threshold=0.01)
+
+    # Get recommended features
+    selected = cfi.select_features(feature_imp, method='top_per_cluster')
+
+    return {
+        'cluster_importance': cluster_imp,
+        'feature_importance': feature_imp,
+        'clusters': clusters,
+        'redundant_clusters': redundant,
+        'selected_features': selected,
+        'n_clusters': len(clusters),
+        'n_features': len(X.columns)
+    }
