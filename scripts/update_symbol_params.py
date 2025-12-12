@@ -287,14 +287,16 @@ class SymbolAnalyzer:
                     df = pd.read_csv(path)
                     # Ensure timestamp is properly parsed as DatetimeIndex
                     if 'timestamp' in df.columns:
-                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
                         df = df.set_index('timestamp')
+                        df.index = df.index.tz_localize(None)  # Remove timezone
                     elif 'date' in df.columns:
-                        df['date'] = pd.to_datetime(df['date'])
+                        df['date'] = pd.to_datetime(df['date'], utc=True)
                         df = df.set_index('date')
+                        df.index = df.index.tz_localize(None)
                     # Ensure index is DatetimeIndex
                     if not isinstance(df.index, pd.DatetimeIndex):
-                        df.index = pd.to_datetime(df.index)
+                        df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
                     return df
 
         raise FileNotFoundError(f"No data found for {symbol}")
