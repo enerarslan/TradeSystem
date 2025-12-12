@@ -1,617 +1,1167 @@
-# =============================================================================
-# SYMBOL CONFIGURATION - 46 STOCKS UNIVERSE
-# JPMorgan-Level Trading Universe Management
-# =============================================================================
-
-# Symbol universe
 universe:
-  name: "US_Large_Cap_46"
-  description: "Large-cap US equities for algorithmic trading"
+  name: US_Large_Cap_46
+  description: Large-cap US equities for algorithmic trading
   total_symbols: 46
-  data_frequency: "15min"
-
-# Sector classification (GICS-based)
+  data_frequency: 15min
 sectors:
   technology:
     symbols:
-      - AAPL   # Apple Inc.
-      - MSFT   # Microsoft Corporation
-      - GOOGL  # Alphabet Inc.
-      - NVDA   # NVIDIA Corporation
-      - META   # Meta Platforms Inc.
-      - ADBE   # Adobe Inc.
-      - CRM    # Salesforce Inc.
-      - INTC   # Intel Corporation
-      - CSCO   # Cisco Systems Inc.
-      - AVGO   # Broadcom Inc.
-    weight_limit: 0.30
-    correlation_group: "tech"
-
+    - AAPL
+    - MSFT
+    - GOOGL
+    - NVDA
+    - META
+    - ADBE
+    - CRM
+    - INTC
+    - CSCO
+    - AVGO
+    weight_limit: 0.3
+    correlation_group: tech
   healthcare:
     symbols:
-      - UNH   # UnitedHealth Group
-      - JNJ   # Johnson & Johnson
-      - LLY   # Eli Lilly and Company
-      - MRK   # Merck & Co.
-      - ABBV  # AbbVie Inc.
-      - TMO   # Thermo Fisher Scientific
-      - AMGN  # Amgen Inc.
+    - UNH
+    - JNJ
+    - LLY
+    - MRK
+    - ABBV
+    - TMO
+    - AMGN
     weight_limit: 0.25
-    correlation_group: "healthcare"
-
+    correlation_group: healthcare
   financials:
     symbols:
-      - JPM   # JPMorgan Chase & Co.
-      - BAC   # Bank of America Corp
-      - GS    # Goldman Sachs Group
-      - V     # Visa Inc.
-      - MA    # Mastercard Inc.
-      - AXP   # American Express
+    - JPM
+    - BAC
+    - GS
+    - V
+    - MA
+    - AXP
     weight_limit: 0.25
-    correlation_group: "financials"
-
+    correlation_group: financials
   consumer_discretionary:
     symbols:
-      - AMZN  # Amazon.com Inc.
-      - TSLA  # Tesla Inc.
-      - HD    # Home Depot Inc.
-      - MCD   # McDonald's Corporation
-      - NKE   # Nike Inc.
-      - DIS   # Walt Disney Company
+    - AMZN
+    - TSLA
+    - HD
+    - MCD
+    - NKE
+    - DIS
     weight_limit: 0.25
-    correlation_group: "consumer"
-
+    correlation_group: consumer
   consumer_staples:
     symbols:
-      - PG    # Procter & Gamble
-      - KO    # Coca-Cola Company
-      - PEP   # PepsiCo Inc.
-      - COST  # Costco Wholesale
-      - WMT   # Walmart Inc.
-      - WBA   # Walgreens Boots Alliance
-    weight_limit: 0.20
-    correlation_group: "staples"
-
+    - PG
+    - KO
+    - PEP
+    - COST
+    - WMT
+    - WBA
+    weight_limit: 0.2
+    correlation_group: staples
   industrials:
     symbols:
-      - CAT   # Caterpillar Inc.
-      - BA    # Boeing Company
-      - HON   # Honeywell International
-      - MMM   # 3M Company
-      - DOW   # Dow Inc.
-    weight_limit: 0.20
-    correlation_group: "industrials"
-
+    - CAT
+    - BA
+    - HON
+    - MMM
+    - DOW
+    weight_limit: 0.2
+    correlation_group: industrials
   energy:
     symbols:
-      - XOM   # Exxon Mobil Corporation
-      - CVX   # Chevron Corporation
+    - XOM
+    - CVX
     weight_limit: 0.15
-    correlation_group: "energy"
-
+    correlation_group: energy
   communication_services:
     symbols:
-      - VZ    # Verizon Communications
-    weight_limit: 0.10
-    correlation_group: "telecom"
-
+    - VZ
+    weight_limit: 0.1
+    correlation_group: telecom
   conglomerates:
     symbols:
-      - BRK.B  # Berkshire Hathaway
-    weight_limit: 0.10
-    correlation_group: "diversified"
-
+    - BRK.B
+    weight_limit: 0.1
+    correlation_group: diversified
   insurance:
     symbols:
-      - TRV   # Travelers Companies
-    weight_limit: 0.10
-    correlation_group: "insurance"
-
+    - TRV
+    weight_limit: 0.1
+    correlation_group: insurance
   other:
     symbols:
-      - IBM   # International Business Machines
-    weight_limit: 0.10
-    correlation_group: "tech"
-
-# Full symbol list with metadata
+    - IBM
+    weight_limit: 0.1
+    correlation_group: tech
 symbols:
   AAPL:
-    name: "Apple Inc."
-    sector: "technology"
-    market_cap: "large"
+    name: Apple Inc.
+    sector: technology
+    market_cap: large
     avg_volume: 80000000
-    spread_bps: 1
-    beta: 1.20
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - &id001 !!python/object/apply:numpy.dtype
+      args:
+      - f8
+      - false
+      - true
+      state: !!python/tuple
+      - 3
+      - <
+      - null
+      - null
+      - null
+      - -1
+      - -1
+      - 0
+    - !!binary |
+      MzMzMzMzN0A=
+    beta: 1.2
     dividend_yield: 0.005
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        16NwPQrXPkA=
+      avg_daily_volume: 28679484
+      avg_daily_dollar_volume: 5019043673
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   MSFT:
-    name: "Microsoft Corporation"
-    sector: "technology"
-    market_cap: "large"
+    name: Microsoft Corporation
+    sector: technology
+    market_cap: large
     avg_volume: 25000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      mpmZmZmZNUA=
     beta: 0.95
     dividend_yield: 0.008
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        MzMzMzNzPEA=
+      avg_daily_volume: 9544226
+      avg_daily_dollar_volume: 3189097352
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   GOOGL:
-    name: "Alphabet Inc."
-    sector: "technology"
-    market_cap: "large"
+    name: Alphabet Inc.
+    sector: technology
+    market_cap: large
     avg_volume: 20000000
     spread_bps: 2
-    beta: 1.10
-    dividend_yield: 0.000
+    beta: 1.1
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        CtejcD0KQUA=
+      avg_daily_volume: 12533028
+      avg_daily_dollar_volume: 1703956200
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   NVDA:
-    name: "NVIDIA Corporation"
-    sector: "technology"
-    market_cap: "large"
+    name: NVIDIA Corporation
+    sector: technology
+    market_cap: large
     avg_volume: 50000000
     spread_bps: 2
-    beta: 1.70
+    beta: 1.7
     dividend_yield: 0.001
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        FK5H4Xr0S0A=
+      avg_daily_volume: 198313741
+      avg_daily_dollar_volume: 10666115241
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   META:
-    name: "Meta Platforms Inc."
-    sector: "technology"
-    market_cap: "large"
+    name: Meta Platforms Inc.
+    sector: technology
+    market_cap: large
     avg_volume: 15000000
     spread_bps: 2
-    beta: 1.30
-    dividend_yield: 0.000
+    beta: 1.3
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        ZmZmZmaGQ0A=
+      avg_daily_volume: 8124210
+      avg_daily_dollar_volume: 2685110659
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   ADBE:
-    name: "Adobe Inc."
-    sector: "technology"
-    market_cap: "large"
+    name: Adobe Inc.
+    sector: technology
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 3
     beta: 1.15
-    dividend_yield: 0.000
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        KVyPwvUIRUA=
+      avg_daily_volume: 1138806
+      avg_daily_dollar_volume: 542003643
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   CRM:
-    name: "Salesforce Inc."
-    sector: "technology"
-    market_cap: "large"
+    name: Salesforce Inc.
+    sector: technology
+    market_cap: large
     avg_volume: 5000000
     spread_bps: 3
     beta: 1.25
-    dividend_yield: 0.000
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        7FG4HoWrREA=
+      avg_daily_volume: 2503961
+      avg_daily_dollar_volume: 588561297
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   INTC:
-    name: "Intel Corporation"
-    sector: "technology"
-    market_cap: "large"
+    name: Intel Corporation
+    sector: technology
+    market_cap: large
     avg_volume: 30000000
-    spread_bps: 1
-    beta: 0.90
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MzMzMzMzQEA=
+    beta: 0.9
     dividend_yield: 0.015
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        MzMzMzNzRUA=
+      avg_daily_volume: 18750029
+      avg_daily_dollar_volume: 705859492
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   CSCO:
-    name: "Cisco Systems Inc."
-    sector: "technology"
-    market_cap: "large"
+    name: Cisco Systems Inc.
+    sector: technology
+    market_cap: large
     avg_volume: 15000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MzMzMzMzN0A=
     beta: 0.85
-    dividend_yield: 0.030
+    dividend_yield: 0.03
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        4XoUrkfhO0A=
+      avg_daily_volume: 5735855
+      avg_daily_dollar_volume: 300105872
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   AVGO:
-    name: "Broadcom Inc."
-    sector: "technology"
-    market_cap: "large"
+    name: Broadcom Inc.
+    sector: technology
+    market_cap: large
     avg_volume: 2000000
-    spread_bps: 5
-    beta: 1.10
-    dividend_yield: 0.020
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MzMzMzPzQ0A=
+    beta: 1.1
+    dividend_yield: 0.02
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        mpmZmZn5R0A=
+      avg_daily_volume: 8019411
+      avg_daily_dollar_volume: 813721451
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   UNH:
-    name: "UnitedHealth Group"
-    sector: "healthcare"
-    market_cap: "large"
+    name: UnitedHealth Group
+    sector: healthcare
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 3
     beta: 0.75
     dividend_yield: 0.013
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        mpmZmZk5Q0A=
+      avg_daily_volume: 1627354
+      avg_daily_dollar_volume: 778449536
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   JNJ:
-    name: "Johnson & Johnson"
-    sector: "healthcare"
-    market_cap: "large"
+    name: Johnson & Johnson
+    sector: healthcare
+    market_cap: large
     avg_volume: 7000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      mpmZmZkZNkA=
     beta: 0.55
-    dividend_yield: 0.030
+    dividend_yield: 0.03
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        w/UoXI/COUA=
+      avg_daily_volume: 2484391
+      avg_daily_dollar_volume: 403691322
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   LLY:
-    name: "Eli Lilly and Company"
-    sector: "healthcare"
-    market_cap: "large"
+    name: Eli Lilly and Company
+    sector: healthcare
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 3
-    beta: 0.50
-    dividend_yield: 0.010
+    beta: 0.5
+    dividend_yield: 0.01
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SOF6FK7HRUA=
+      avg_daily_volume: 1165737
+      avg_daily_dollar_volume: 577903484
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   MRK:
-    name: "Merck & Co."
-    sector: "healthcare"
-    market_cap: "large"
+    name: Merck & Co.
+    sector: healthcare
+    market_cap: large
     avg_volume: 10000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MzMzMzOzOUA=
     beta: 0.45
     dividend_yield: 0.028
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        hetRuB4FP0A=
+      avg_daily_volume: 3351445
+      avg_daily_dollar_volume: 324544989
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   ABBV:
-    name: "AbbVie Inc."
-    sector: "healthcare"
-    market_cap: "large"
+    name: AbbVie Inc.
+    sector: healthcare
+    market_cap: large
     avg_volume: 6000000
     spread_bps: 2
-    beta: 0.70
-    dividend_yield: 0.040
+    beta: 0.7
+    dividend_yield: 0.04
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        hetRuB4lQUA=
+      avg_daily_volume: 1841171
+      avg_daily_dollar_volume: 280216944
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   TMO:
-    name: "Thermo Fisher Scientific"
-    sector: "healthcare"
-    market_cap: "large"
+    name: Thermo Fisher Scientific
+    sector: healthcare
+    market_cap: large
     avg_volume: 1500000
     spread_bps: 4
     beta: 0.85
     dividend_yield: 0.002
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        AAAAAAAAR0A=
+      avg_daily_volume: 526768
+      avg_daily_dollar_volume: 282736708
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   AMGN:
-    name: "Amgen Inc."
-    sector: "healthcare"
-    market_cap: "large"
+    name: Amgen Inc.
+    sector: healthcare
+    market_cap: large
     avg_volume: 2500000
     spread_bps: 3
-    beta: 0.60
+    beta: 0.6
     dividend_yield: 0.032
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pHA9CtcjQ0A=
+      avg_daily_volume: 765764
+      avg_daily_dollar_volume: 200443101
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   JPM:
-    name: "JPMorgan Chase & Co."
-    sector: "financials"
-    market_cap: "large"
+    name: JPMorgan Chase & Co.
+    sector: financials
+    market_cap: large
     avg_volume: 10000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      ZmZmZmZmOUA=
     beta: 1.15
     dividend_yield: 0.025
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        7FG4HoXrPkA=
+      avg_daily_volume: 4089007
+      avg_daily_dollar_volume: 700015013
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   BAC:
-    name: "Bank of America Corp"
-    sector: "financials"
-    market_cap: "large"
+    name: Bank of America Corp
+    sector: financials
+    market_cap: large
     avg_volume: 40000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MzMzMzOzOkA=
     beta: 1.35
     dividend_yield: 0.025
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        exSuR+HaQEA=
+      avg_daily_volume: 17129664
+      avg_daily_dollar_volume: 645163202
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   GS:
-    name: "Goldman Sachs Group"
-    sector: "financials"
-    market_cap: "large"
+    name: Goldman Sachs Group
+    sector: financials
+    market_cap: large
     avg_volume: 2500000
     spread_bps: 3
-    beta: 1.40
+    beta: 1.4
     dividend_yield: 0.025
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        hetRuB7lQkA=
+      avg_daily_volume: 895497
+      avg_daily_dollar_volume: 363303757
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   V:
-    name: "Visa Inc."
-    sector: "financials"
-    market_cap: "large"
+    name: Visa Inc.
+    sector: financials
+    market_cap: large
     avg_volume: 6000000
     spread_bps: 2
     beta: 0.95
     dividend_yield: 0.008
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        j8L1KFxPPkA=
+      avg_daily_volume: 2261846
+      avg_daily_dollar_volume: 564949471
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   MA:
-    name: "Mastercard Inc."
-    sector: "financials"
-    market_cap: "large"
+    name: Mastercard Inc.
+    sector: financials
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 2
     beta: 1.05
     dividend_yield: 0.006
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        MzMzMzMzQkA=
+      avg_daily_volume: 1006506
+      avg_daily_dollar_volume: 412395439
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   AXP:
-    name: "American Express"
-    sector: "financials"
-    market_cap: "large"
+    name: American Express
+    sector: financials
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 2
     beta: 1.25
     dividend_yield: 0.012
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        PQrXo3BdQ0A=
+      avg_daily_volume: 1027517
+      avg_daily_dollar_volume: 200694388
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   AMZN:
-    name: "Amazon.com Inc."
-    sector: "consumer_discretionary"
-    market_cap: "large"
+    name: Amazon.com Inc.
+    sector: consumer_discretionary
+    market_cap: large
     avg_volume: 45000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MzMzMzOzO0A=
     beta: 1.25
-    dividend_yield: 0.000
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        mpmZmZmZQkA=
+      avg_daily_volume: 24920912
+      avg_daily_dollar_volume: 3924183026
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   TSLA:
-    name: "Tesla Inc."
-    sector: "consumer_discretionary"
-    market_cap: "large"
+    name: Tesla Inc.
+    sector: consumer_discretionary
+    market_cap: large
     avg_volume: 100000000
     spread_bps: 2
-    beta: 2.00
-    dividend_yield: 0.000
+    beta: 2.0
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        SOF6FK4nUEA=
+      avg_daily_volume: 50230438
+      avg_daily_dollar_volume: 12645973653
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   HD:
-    name: "Home Depot Inc."
-    sector: "consumer_discretionary"
-    market_cap: "large"
+    name: Home Depot Inc.
+    sector: consumer_discretionary
+    market_cap: large
     avg_volume: 4000000
     spread_bps: 2
     beta: 1.05
     dividend_yield: 0.025
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        H4XrUbg+QUA=
+      avg_daily_volume: 1197333
+      avg_daily_dollar_volume: 400554240
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   MCD:
-    name: "McDonald's Corporation"
-    sector: "consumer_discretionary"
-    market_cap: "large"
+    name: McDonald's Corporation
+    sector: consumer_discretionary
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 2
     beta: 0.65
     dividend_yield: 0.022
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        uB6F61F4OkA=
+      avg_daily_volume: 937729
+      avg_daily_dollar_volume: 250848754
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   NKE:
-    name: "Nike Inc."
-    sector: "consumer_discretionary"
-    market_cap: "large"
+    name: Nike Inc.
+    sector: consumer_discretionary
+    market_cap: large
     avg_volume: 6000000
     spread_bps: 2
-    beta: 1.10
+    beta: 1.1
     dividend_yield: 0.012
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        pHA9CteDQUA=
+      avg_daily_volume: 3569083
+      avg_daily_dollar_volume: 395176372
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   DIS:
-    name: "Walt Disney Company"
-    sector: "consumer_discretionary"
-    market_cap: "large"
+    name: Walt Disney Company
+    sector: consumer_discretionary
+    market_cap: large
     avg_volume: 10000000
-    spread_bps: 1
-    beta: 1.20
-    dividend_yield: 0.000
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      zczMzMxMOUA=
+    beta: 1.2
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        H4XrUbieP0A=
+      avg_daily_volume: 4304441
+      avg_daily_dollar_volume: 514757474
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   PG:
-    name: "Procter & Gamble"
-    sector: "consumer_staples"
-    market_cap: "large"
+    name: Procter & Gamble
+    sector: consumer_staples
+    market_cap: large
     avg_volume: 7000000
-    spread_bps: 1
-    beta: 0.40
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      mpmZmZmZNkA=
+    beta: 0.4
     dividend_yield: 0.025
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        KVyPwvXoOUA=
+      avg_daily_volume: 2197720
+      avg_daily_dollar_volume: 333577460
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   KO:
-    name: "Coca-Cola Company"
-    sector: "consumer_staples"
-    market_cap: "large"
+    name: Coca-Cola Company
+    sector: consumer_staples
+    market_cap: large
     avg_volume: 12000000
-    spread_bps: 1
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      AAAAAACAMEA=
     beta: 0.55
-    dividend_yield: 0.030
+    dividend_yield: 0.03
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        H4XrUbheNEA=
+      avg_daily_volume: 4720276
+      avg_daily_dollar_volume: 288187423
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   PEP:
-    name: "PepsiCo Inc."
-    sector: "consumer_staples"
-    market_cap: "large"
+    name: PepsiCo Inc.
+    sector: consumer_staples
+    market_cap: large
     avg_volume: 5000000
     spread_bps: 2
-    beta: 0.60
+    beta: 0.6
     dividend_yield: 0.028
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        7FG4HoUrO0A=
+      avg_daily_volume: 1588689
+      avg_daily_dollar_volume: 260238269
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   COST:
-    name: "Costco Wholesale"
-    sector: "consumer_staples"
-    market_cap: "large"
+    name: Costco Wholesale
+    sector: consumer_staples
+    market_cap: large
     avg_volume: 2000000
     spread_bps: 3
     beta: 0.75
     dividend_yield: 0.007
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        FK5H4XpUP0A=
+      avg_daily_volume: 718548
+      avg_daily_dollar_volume: 448228186
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   WMT:
-    name: "Walmart Inc."
-    sector: "consumer_staples"
-    market_cap: "large"
+    name: Walmart Inc.
+    sector: consumer_staples
+    market_cap: large
     avg_volume: 8000000
-    spread_bps: 1
-    beta: 0.50
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      AAAAAAAANUA=
+    beta: 0.5
     dividend_yield: 0.015
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        16NwPQqXOUA=
+      avg_daily_volume: 7202436
+      avg_daily_dollar_volume: 423857772
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   WBA:
-    name: "Walgreens Boots Alliance"
-    sector: "consumer_staples"
-    market_cap: "large"
+    name: Walgreens Boots Alliance
+    sector: consumer_staples
+    market_cap: large
     avg_volume: 8000000
     spread_bps: 2
-    beta: 0.80
-    dividend_yield: 0.050
+    beta: 0.8
+    dividend_yield: 0.05
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        exSuR+H6REA=
+      avg_daily_volume: 3787255
+      avg_daily_dollar_volume: 117331774
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   CAT:
-    name: "Caterpillar Inc."
-    sector: "industrials"
-    market_cap: "large"
+    name: Caterpillar Inc.
+    sector: industrials
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 2
-    beta: 1.10
-    dividend_yield: 0.020
+    beta: 1.1
+    dividend_yield: 0.02
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        7FG4HoUrQ0A=
+      avg_daily_volume: 1046367
+      avg_daily_dollar_volume: 279293605
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   BA:
-    name: "Boeing Company"
-    sector: "industrials"
-    market_cap: "large"
+    name: Boeing Company
+    sector: industrials
+    market_cap: large
     avg_volume: 8000000
     spread_bps: 2
-    beta: 1.50
-    dividend_yield: 0.000
+    beta: 1.5
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        4XoUrkdBRUA=
+      avg_daily_volume: 4117762
+      avg_daily_dollar_volume: 800020260
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   HON:
-    name: "Honeywell International"
-    sector: "industrials"
-    market_cap: "large"
+    name: Honeywell International
+    sector: industrials
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 2
     beta: 1.05
     dividend_yield: 0.022
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        zczMzMxMQEA=
+      avg_daily_volume: 844791
+      avg_daily_dollar_volume: 173505181
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   MMM:
-    name: "3M Company"
-    sector: "industrials"
-    market_cap: "large"
+    name: 3M Company
+    sector: industrials
+    market_cap: large
     avg_volume: 3000000
     spread_bps: 2
     beta: 0.95
     dividend_yield: 0.055
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        j8L1KFwvQUA=
+      avg_daily_volume: 1376392
+      avg_daily_dollar_volume: 166292241
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   DOW:
-    name: "Dow Inc."
-    sector: "industrials"
-    market_cap: "large"
+    name: Dow Inc.
+    sector: industrials
+    market_cap: large
     avg_volume: 5000000
     spread_bps: 2
-    beta: 1.30
-    dividend_yield: 0.050
+    beta: 1.3
+    dividend_yield: 0.05
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        zczMzMxsREA=
+      avg_daily_volume: 1883059
+      avg_daily_dollar_volume: 99688659
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   XOM:
-    name: "Exxon Mobil Corporation"
-    sector: "energy"
-    market_cap: "large"
+    name: Exxon Mobil Corporation
+    sector: energy
+    market_cap: large
     avg_volume: 15000000
-    spread_bps: 1
-    beta: 0.90
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      mpmZmZkZO0A=
+    beta: 0.9
     dividend_yield: 0.035
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        CtejcD2qQEA=
+      avg_daily_volume: 7390436
+      avg_daily_dollar_volume: 701885728
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   CVX:
-    name: "Chevron Corporation"
-    sector: "energy"
-    market_cap: "large"
+    name: Chevron Corporation
+    sector: energy
+    market_cap: large
     avg_volume: 8000000
     spread_bps: 2
-    beta: 1.00
-    dividend_yield: 0.040
+    beta: 1.0
+    dividend_yield: 0.04
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        KVyPwvVIQEA=
+      avg_daily_volume: 3394348
+      avg_daily_dollar_volume: 491246445
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   VZ:
-    name: "Verizon Communications"
-    sector: "communication_services"
-    market_cap: "large"
+    name: Verizon Communications
+    sector: communication_services
+    market_cap: large
     avg_volume: 15000000
-    spread_bps: 1
-    beta: 0.40
+    spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      MzMzMzOzM0A=
+    beta: 0.4
     dividend_yield: 0.065
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        KVyPwvWoOEA=
+      avg_daily_volume: 6920685
+      avg_daily_dollar_volume: 308189867
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   BRK.B:
-    name: "Berkshire Hathaway"
-    sector: "conglomerates"
-    market_cap: "large"
+    name: Berkshire Hathaway
+    sector: conglomerates
+    market_cap: large
     avg_volume: 4000000
     spread_bps: 2
     beta: 0.85
-    dividend_yield: 0.000
+    dividend_yield: 0.0
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        j8L1KFxPNkA=
+      avg_daily_volume: 1301061
+      avg_daily_dollar_volume: 461683346
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   TRV:
-    name: "Travelers Companies"
-    sector: "insurance"
-    market_cap: "large"
+    name: Travelers Companies
+    sector: insurance
+    market_cap: large
     avg_volume: 1500000
     spread_bps: 3
-    beta: 0.80
+    beta: 0.8
     dividend_yield: 0.022
     options_liquid: true
-
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        KVyPwvXIQkA=
+      avg_daily_volume: 330499
+      avg_daily_dollar_volume: 63037983
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   IBM:
-    name: "International Business Machines"
-    sector: "technology"
-    market_cap: "large"
+    name: International Business Machines
+    sector: technology
+    market_cap: large
     avg_volume: 4000000
     spread_bps: 2
     beta: 0.75
     dividend_yield: 0.045
     options_liquid: true
-
-# Trading restrictions
+    calculated_params:
+      spread_bps: !!python/object/apply:numpy._core.multiarray.scalar
+      - *id001
+      - !!binary |
+        cT0K16PwO0A=
+      avg_daily_volume: 1571468
+      avg_daily_dollar_volume: 255065510
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
 restrictions:
-  # Symbols with trading restrictions
   restricted: []
-
-  # Symbols requiring special handling
   special_handling:
-    - symbol: "BRK.B"
-      reason: "Non-standard ticker format"
-      handling: "Use BRK-B for some APIs"
-
-  # Earnings blackout periods (auto-updated)
+  - symbol: BRK.B
+    reason: Non-standard ticker format
+    handling: Use BRK-B for some APIs
   earnings_blackout_days_before: 2
   earnings_blackout_days_after: 1
-
-# Correlation pairs for pairs trading
 correlation_pairs:
-  - pair: ["AAPL", "MSFT"]
-    sector: "technology"
-    historical_correlation: 0.85
-
-  - pair: ["JPM", "BAC"]
-    sector: "financials"
-    historical_correlation: 0.90
-
-  - pair: ["XOM", "CVX"]
-    sector: "energy"
-    historical_correlation: 0.92
-
-  - pair: ["V", "MA"]
-    sector: "financials"
-    historical_correlation: 0.88
-
-  - pair: ["PG", "KO"]
-    sector: "consumer_staples"
-    historical_correlation: 0.75
-
-  - pair: ["HD", "WMT"]
-    sector: "retail"
-    historical_correlation: 0.70
+- pair:
+  - AAPL
+  - MSFT
+  sector: technology
+  historical_correlation: 0.85
+- pair:
+  - JPM
+  - BAC
+  sector: financials
+  historical_correlation: 0.9
+- pair:
+  - XOM
+  - CVX
+  sector: energy
+  historical_correlation: 0.92
+- pair:
+  - V
+  - MA
+  sector: financials
+  historical_correlation: 0.88
+- pair:
+  - PG
+  - KO
+  sector: consumer_staples
+  historical_correlation: 0.75
+- pair:
+  - HD
+  - WMT
+  sector: retail
+  historical_correlation: 0.7
+calculated_params_metadata:
+  last_updated: '2025-12-12T19:53:44.605793'
+  data_source: OHLCV bar data
+  notes: Spread estimated from High-Low range. Beta calculated vs SPY.
