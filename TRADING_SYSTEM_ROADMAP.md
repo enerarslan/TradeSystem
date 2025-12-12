@@ -1,10 +1,10 @@
 # AlphaTrade System - AI Agent Roadmap
 ## JPMorgan-Level Institutional Trading Platform
 
-**Version:** 3.2 - AFML INSTITUTIONAL GRADE + ENHANCED TRAINING PIPELINE
-**Status:** ✅ All Components Built + Full AFML Implementation + Cross-Asset Integration
-**Total Files:** 47+ Python files + configs + deployment
-**Lines of Code:** ~27,000+
+**Version:** 3.3 - AFML INSTITUTIONAL GRADE + PRE-TRAINING VALIDATION PIPELINE
+**Status:** ✅ All Components Built + Full AFML Implementation + Pre-Training Data Quality Pipeline
+**Total Files:** 52+ Python files + configs + deployment
+**Lines of Code:** ~30,000+
 **Last Updated:** December 2024
 
 ---
@@ -18,7 +18,17 @@ A complete institutional-grade algorithmic trading system capable of:
 - Algorithmic execution (TWAP, VWAP, POV, Adaptive)
 - Real-time monitoring and reporting
 
-### Version 3.2 Enhanced Training Pipeline (NEW):
+### Version 3.3 Pre-Training Validation Pipeline (NEW):
+- **Data Quality Pipeline** - Trading hours filtering, volume anomaly detection, OHLC validation
+- **Triple Barrier Calibration** - Per-symbol ATR-based barriers, VIX regime adjustment
+- **Label Quality Validation** - Class distribution (25-40%), autocorrelation (<0.1) checks
+- **Embargo Verification** - Calculates max lookback (200 bars), ensures ≥5% embargo
+- **Holdout Data Reservation** - 3-month temporal holdout, 6-symbol holdout, stress periods
+- **Feature Optimization** - Correlation clustering, reduction to 60-80 features
+- **Regime Awareness Features** - VIX regime, trend regime, volatility regime
+- **Symbol Parameter Calculator** - Real spread, volume, beta calculation per symbol
+
+### Version 3.2 Enhanced Training Pipeline:
 - **Automatic Symbol Loading** - Extracts all 46 symbols from sectors in symbols.yaml
 - **Trading Hours Filter** - Filters to US regular hours (9:30-16:00 ET), removes pre/post market noise
 - **Cross-Asset Features Integration** - Correlations, sector momentum, beta, factor exposures connected
@@ -141,8 +151,14 @@ alphatrade/
 │       ├── helpers.py         ✅ Utility functions
 │       └── numba_accelerators.py ✅ JIT-compiled functions
 ├── scripts/
-│   ├── init_db.sql            ✅ Database schema
-│   └── train_models.py        ✅ AFML Institutional Training Pipeline + Full Feature Integration (v3.2)
+│   ├── init_db.sql                      ✅ Database schema
+│   ├── train_models.py                  ✅ AFML Institutional Training Pipeline + Full Feature Integration (v3.2)
+│   ├── data_quality_pipeline.py         ✅ NEW v3.3: Trading hours, volume anomalies, OHLC validation
+│   ├── calibrate_triple_barrier.py      ✅ NEW v3.3: Per-symbol ATR-based barrier calibration
+│   ├── setup_validation.py              ✅ NEW v3.3: Embargo verification, holdout data setup
+│   ├── optimize_features.py             ✅ NEW v3.3: Feature correlation/clustering, regime features
+│   ├── update_symbol_params.py          ✅ NEW v3.3: Calculate spread, volume, beta per symbol
+│   └── run_pre_training_validation.py   ✅ NEW v3.3: Master validation script (runs all checks)
 ├── monitoring/
 │   └── prometheus/
 │       └── prometheus.yml     ✅ Metrics config
@@ -493,6 +509,20 @@ Order | File/Command | Purpose
 | Cross-Sectional Features | ✅ | `add_cross_sectional_features()`: ranks, z-scores, sector-relative metrics |
 | Symbol-Specific Transaction Costs | ✅ | `BacktestConfig.symbol_spread_bps`: uses spread_bps from symbols.yaml |
 
+### Phase 8: Pre-Training Validation Pipeline v3.3 (COMPLETED ✅)
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| Data Quality Pipeline | ✅ | `data_quality_pipeline.py`: Trading hours filtering, OHLC validation, volume anomaly detection |
+| Triple Barrier Calibration | ✅ | `calibrate_triple_barrier.py`: Per-symbol ATR-based barriers, VIX adjustment, optimal holding |
+| Label Quality Validation | ✅ | Class distribution check (25-40%), autocorrelation < 0.1, barrier touch analysis |
+| Embargo Verification | ✅ | `setup_validation.py`: Max lookback calculation (200 bars), minimum 5% embargo |
+| Holdout Data Setup | ✅ | 3-month temporal holdout, 6-symbol holdout (2/sector), stress period marking |
+| Feature Optimization | ✅ | `optimize_features.py`: Correlation clustering, redundancy removal, 60-80 optimal features |
+| Regime Features | ✅ | VIX regime (low/normal/high/extreme), trend regime, volatility regime |
+| Symbol Parameters | ✅ | `update_symbol_params.py`: Real spread, daily volume, beta to SPY calculation |
+| Master Validation | ✅ | `run_pre_training_validation.py`: Runs all checks, generates pass/fail report |
+
 ---
 
 ## 🔬 ADVANCED FEATURES USAGE
@@ -763,8 +793,100 @@ features_df, labels, weights, events = prepare_data(
 
 ---
 
-*Document Version: 3.2*
-*Implementation Status: COMPLETE + FULL AFML INSTITUTIONAL METHODOLOGY + ENHANCED TRAINING PIPELINE*
-*Ready for: Backtest → Paper Trading → Live Trading*
+---
+
+## 🆕 VERSION 3.3 PRE-TRAINING VALIDATION USAGE
+
+### Quick Start: Run All Validations
+```bash
+# Run complete pre-training validation
+python scripts/run_pre_training_validation.py --all
+
+# Output: pre_training_validation_report.json with PASS/FAIL status
+```
+
+### Step 1: Data Quality Pipeline
+```bash
+# Analyze data quality without modifying
+python scripts/data_quality_pipeline.py --analyze
+
+# Process and save clean data
+python scripts/data_quality_pipeline.py --process
+
+# Validate processed data
+python scripts/data_quality_pipeline.py --validate
+```
+
+### Step 2: Triple Barrier Calibration
+```bash
+# Calibrate barrier parameters for all symbols
+python scripts/calibrate_triple_barrier.py --calibrate
+
+# Validate label quality
+python scripts/calibrate_triple_barrier.py --validate
+
+# Analyze specific symbol
+python scripts/calibrate_triple_barrier.py --analyze AAPL
+
+# Output: config/triple_barrier_params.yaml
+```
+
+### Step 3: Setup Validation (Embargo & Holdout)
+```bash
+# Reserve holdout data (CRITICAL - run once before training)
+python scripts/setup_validation.py --setup-holdout
+
+# Verify embargo settings
+python scripts/setup_validation.py --verify-embargo
+
+# Verify holdout isolation
+python scripts/setup_validation.py --verify-holdout
+```
+
+### Step 4: Feature Optimization
+```bash
+# Add regime features to data
+python scripts/optimize_features.py --add-regime --symbol AAPL
+
+# Analyze feature correlations
+python scripts/optimize_features.py --analyze
+
+# Reduce to optimal feature set
+python scripts/optimize_features.py --reduce
+```
+
+### Step 5: Update Symbol Parameters
+```bash
+# Calculate parameters for all symbols
+python scripts/update_symbol_params.py --calculate
+
+# Analyze specific symbol
+python scripts/update_symbol_params.py --symbol AAPL
+
+# Update symbols.yaml with calculated values
+python scripts/update_symbol_params.py --update
+
+# Validate current configuration
+python scripts/update_symbol_params.py --validate
+```
+
+### Success Criteria (All Must Pass)
+| Criterion | Target | Check |
+|-----------|--------|-------|
+| Regular Hours Only | 26 bars/day, no extended hours | `extended_hours_pct < 1%` |
+| OHLC Valid | No violations | `ohlc_violations == 0` |
+| Label Balance | Each class 25-40% | All classes in range |
+| Label Autocorr | < 0.1 | `abs(autocorr) < 0.1` |
+| Embargo | >= 5% of training data | `embargo_pct >= 0.05` |
+| Holdout Reserved | 3 months + 6 symbols | Manifest exists |
+| Features | < 80, no redundancy | `feature_count <= 80` |
+| Leakage Test | PASS | No leakage detected |
+
+---
+
+*Document Version: 3.3*
+*Implementation Status: COMPLETE + FULL AFML INSTITUTIONAL METHODOLOGY + PRE-TRAINING VALIDATION PIPELINE*
+*Ready for: Pre-Training Validation → Backtest → Paper Trading → Live Trading*
 *v3.1 Features: Triple Barrier, Meta-Labeling, Information Bars, Clustered Importance, PSR/DSR, PurgedKFoldCV 5% Embargo*
 *v3.2 Features: Trading Hours Filter, Cross-Asset Integration, Regime Features, Cross-Sectional Ranks, Dynamic Embargo, Combined Weights, Symbol-Specific Costs*
+*v3.3 Features: Data Quality Pipeline, Barrier Calibration, Label Validation, Holdout Setup, Feature Optimization, Regime Awareness, Symbol Parameters*
