@@ -650,6 +650,208 @@ class DataPreprocessor:
 
         return df
 
+    def filter_trading_hours(
+        self,
+        df: pd.DataFrame,
+        market_open: str = "09:30",
+        market_close: str = "16:00",
+        timezone: str = "America/New_York",
+        include_extended_hours: bool = False,
+        pre_market_start: str = "04:00",
+        after_hours_end: str = "20:00"
+    ) -> pd.DataFrame:
+        """
+        Filter data to US regular trading hours only.
+
+        Pre-market and after-hours data have different statistical properties
+        (lower liquidity, higher spreads, different participants) and will
+        contaminate models trained on regular hours data.
+
+        Args:
+            df: DataFrame with DatetimeIndex (should be timezone-aware or naive UTC)
+            market_open: Market open time in HH:MM format (default: 09:30 ET)
+            market_close: Market close time in HH:MM format (default: 16:00 ET)
+            timezone: Timezone for the market (default: America/New_York for US markets)
+            include_extended_hours: If True, include pre-market and after-hours
+            pre_market_start: Pre-market start time (default: 04:00 ET)
+            after_hours_end: After-hours end time (default: 20:00 ET)
+
+        Returns:
+            DataFrame filtered to trading hours only
+        """
+        if df.empty:
+            return df
+
+        df = df.copy()
+
+        # Ensure index is DatetimeIndex
+        if not isinstance(df.index, pd.DatetimeIndex):
+            logger.warning("Index is not DatetimeIndex, attempting conversion")
+            df.index = pd.to_datetime(df.index)
+
+        # Localize or convert to target timezone
+        try:
+            if df.index.tz is None:
+                # Assume UTC if not specified, convert to Eastern
+                df.index = df.index.tz_localize('UTC').tz_convert(timezone)
+            elif str(df.index.tz) != timezone:
+                df.index = df.index.tz_convert(timezone)
+        except Exception as e:
+            logger.warning(f"Timezone conversion failed: {e}. Proceeding with local time parsing.")
+
+        # Parse time boundaries
+        if include_extended_hours:
+            start_time = pd.to_datetime(pre_market_start).time()
+            end_time = pd.to_datetime(after_hours_end).time()
+        else:
+            start_time = pd.to_datetime(market_open).time()
+            end_time = pd.to_datetime(market_close).time()
+
+        # Filter by time of day
+        time_filter = (df.index.time >= start_time) & (df.index.time <= end_time)
+        df_filtered = df[time_filter]
+
+        # Log filtering results
+        rows_removed = len(df) - len(df_filtered)
+        if rows_removed > 0:
+            logger.info(
+                f"Trading hours filter: removed {rows_removed} rows "
+                f"({rows_removed/len(df)*100:.1f}%), "
+                f"retained {len(df_filtered)} rows in {start_time}-{end_time} window"
+            )
+
+        return df_filtered
+
+
+class TradingHoursFilter:
+    """
+    Standalone trading hours filter for flexible use.
+
+    Can be used independently or integrated into preprocessing pipeline.
+    Filters data to US regular trading hours (9:30 AM - 4:00 PM Eastern).
+    """
+
+    def __init__(
+        self,
+        market_open: str = "09:30",
+        market_close: str = "16:00",
+        timezone: str = "America/New_York",
+        include_extended_hours: bool = False,
+        pre_market_start: str = "04:00",
+        after_hours_end: str = "20:00"
+    ):
+        """
+        Initialize TradingHoursFilter.
+
+        Args:
+            market_open: Market open time (default: 09:30 ET)
+            market_close: Market close time (default: 16:00 ET)
+            timezone: Market timezone (default: America/New_York)
+            include_extended_hours: Include pre/post market (default: False)
+            pre_market_start: Extended hours start (default: 04:00 ET)
+            after_hours_end: Extended hours end (default: 20:00 ET)
+        """
+        self.market_open = market_open
+        self.market_close = market_close
+        self.timezone = timezone
+        self.include_extended_hours = include_extended_hours
+        self.pre_market_start = pre_market_start
+        self.after_hours_end = after_hours_end
+
+        logger.info(
+            f"TradingHoursFilter initialized: "
+            f"{'Extended' if include_extended_hours else 'Regular'} hours "
+            f"({self._get_start_time()}-{self._get_end_time()} {timezone})"
+        )
+
+    def _get_start_time(self) -> str:
+        return self.pre_market_start if self.include_extended_hours else self.market_open
+
+    def _get_end_time(self) -> str:
+        return self.after_hours_end if self.include_extended_hours else self.market_close
+
+    def filter(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Filter DataFrame to trading hours.
+
+        Args:
+            df: DataFrame with DatetimeIndex
+
+        Returns:
+            Filtered DataFrame
+        """
+        if df.empty:
+            return df
+
+        df = df.copy()
+
+        # Ensure DatetimeIndex
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+
+        # Handle timezone conversion
+        try:
+            if df.index.tz is None:
+                df.index = df.index.tz_localize('UTC').tz_convert(self.timezone)
+            elif str(df.index.tz) != self.timezone:
+                df.index = df.index.tz_convert(self.timezone)
+        except Exception as e:
+            logger.warning(f"Timezone conversion issue: {e}")
+
+        # Get time boundaries
+        start_time = pd.to_datetime(self._get_start_time()).time()
+        end_time = pd.to_datetime(self._get_end_time()).time()
+
+        # Apply filter
+        mask = (df.index.time >= start_time) & (df.index.time <= end_time)
+        filtered_df = df[mask]
+
+        # Statistics
+        removed = len(df) - len(filtered_df)
+        logger.debug(
+            f"Filtered {removed}/{len(df)} rows outside trading hours "
+            f"({removed/len(df)*100:.1f}% removed)"
+        )
+
+        return filtered_df
+
+    def filter_multi(self, data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+        """
+        Filter multiple DataFrames.
+
+        Args:
+            data: Dict of {symbol: DataFrame}
+
+        Returns:
+            Dict of filtered DataFrames
+        """
+        return {symbol: self.filter(df) for symbol, df in data.items()}
+
+    def is_trading_hours(self, timestamp: datetime) -> bool:
+        """
+        Check if a timestamp is within trading hours.
+
+        Args:
+            timestamp: Datetime to check
+
+        Returns:
+            True if within trading hours
+        """
+        try:
+            import pytz
+            tz = pytz.timezone(self.timezone)
+            if timestamp.tzinfo is None:
+                timestamp = tz.localize(timestamp)
+            else:
+                timestamp = timestamp.astimezone(tz)
+        except Exception:
+            pass
+
+        start_time = pd.to_datetime(self._get_start_time()).time()
+        end_time = pd.to_datetime(self._get_end_time()).time()
+
+        return start_time <= timestamp.time() <= end_time
+
 
 class CorporateActionsAdjuster:
     """

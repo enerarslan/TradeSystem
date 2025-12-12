@@ -135,10 +135,22 @@ class AlphaTradeSystem:
         logger.info("=" * 60)
 
         try:
-            # Get symbols
-            self.symbols = self.symbols_config.get('universe', {}).get('symbols', [])
+            # Get symbols - extract from all sectors in the YAML structure
+            self.symbols = []
+            sectors = self.symbols_config.get('sectors', {})
+            for sector_name, sector_data in sectors.items():
+                sector_symbols = sector_data.get('symbols', [])
+                self.symbols.extend(sector_symbols)
+
+            # If no symbols found in sectors, fall back to symbols dict keys
+            if not self.symbols:
+                symbols_dict = self.symbols_config.get('symbols', {})
+                self.symbols = list(symbols_dict.keys())
+
+            # Final fallback to default symbols
             if not self.symbols:
                 self.symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META']
+                logger.warning("No symbols found in config, using default 5 symbols")
 
             logger.info(f"Trading universe: {len(self.symbols)} symbols")
 

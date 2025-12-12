@@ -33,6 +33,101 @@ from ..utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def load_symbol_spreads_from_config(symbols_config: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Extract symbol-specific bid-ask spreads from symbols.yaml configuration.
+
+    The symbols.yaml file contains spread_bps for each symbol which represents
+    the typical bid-ask spread in basis points. This data is used for realistic
+    transaction cost modeling in backtesting.
+
+    Args:
+        symbols_config: Loaded symbols.yaml configuration dict
+
+    Returns:
+        Dict mapping symbol -> spread in basis points
+    """
+    spread_map = {}
+
+    # Extract from symbols section (detailed symbol info)
+    symbols_section = symbols_config.get('symbols', {})
+    for symbol, symbol_info in symbols_section.items():
+        if isinstance(symbol_info, dict):
+            spread_bps = symbol_info.get('spread_bps')
+            if spread_bps is not None:
+                spread_map[symbol] = float(spread_bps)
+
+    # Also check sectors section in case spread is defined there
+    sectors_section = symbols_config.get('sectors', {})
+    for sector_name, sector_data in sectors_section.items():
+        sector_symbols = sector_data.get('symbols', [])
+        # If sector has a default spread, apply to all symbols without individual spread
+        default_spread = sector_data.get('default_spread_bps')
+        if default_spread is not None:
+            for symbol in sector_symbols:
+                if symbol not in spread_map:
+                    spread_map[symbol] = float(default_spread)
+
+    if spread_map:
+        logger.info(
+            f"Loaded symbol-specific spreads for {len(spread_map)} symbols "
+            f"(range: {min(spread_map.values()):.1f}-{max(spread_map.values()):.1f} bps)"
+        )
+    else:
+        logger.warning("No symbol-specific spreads found in config, using default slippage")
+
+    return spread_map
+
+
+def create_backtest_config_from_yaml(
+    settings_config: Dict[str, Any],
+    symbols_config: Dict[str, Any],
+    **overrides
+) -> 'BacktestConfig':
+    """
+    Create BacktestConfig from YAML configuration files.
+
+    This factory function loads configuration from settings.yaml and symbols.yaml
+    to create a properly configured BacktestConfig with symbol-specific
+    transaction costs.
+
+    Args:
+        settings_config: Loaded settings.yaml configuration
+        symbols_config: Loaded symbols.yaml configuration
+        **overrides: Override specific config values
+
+    Returns:
+        Configured BacktestConfig instance
+    """
+    # Extract symbol spreads
+    symbol_spreads = load_symbol_spreads_from_config(symbols_config)
+
+    # Get backtest settings from config
+    backtest_settings = settings_config.get('backtest', {})
+    trading_settings = settings_config.get('trading', {})
+
+    # Build config
+    config = BacktestConfig(
+        initial_capital=trading_settings.get('initial_capital', 1000000),
+        slippage_bps=backtest_settings.get('slippage_bps', 5),
+        symbol_spread_bps=symbol_spreads,
+        commission_per_share=backtest_settings.get('commission_per_share', 0.005),
+        commission_min=backtest_settings.get('commission_min', 1.0),
+        commission_pct=backtest_settings.get('commission_pct', 0.0),
+        max_position_pct=backtest_settings.get('max_position_pct', 0.10),
+        max_drawdown_stop=backtest_settings.get('max_drawdown_stop', 0.20),
+        warmup_period=backtest_settings.get('warmup_period', 100),
+        verbose=backtest_settings.get('verbose', True)
+    )
+
+    # Apply overrides
+    for key, value in overrides.items():
+        if hasattr(config, key):
+            setattr(config, key, value)
+
+    return config
+
+
 class FillModel(Enum):
     """Order fill models"""
     IMMEDIATE = "immediate"  # Fill at signal price
@@ -64,10 +159,14 @@ class BacktestConfig:
     # Execution settings
     fill_model: FillModel = FillModel.NEXT_OPEN
     slippage_model: SlippageModel = SlippageModel.FIXED
-    slippage_bps: float = 5  # 5 basis points
+    slippage_bps: float = 5  # 5 basis points (default fallback)
     commission_per_share: float = 0.005
     commission_min: float = 1.0
     commission_pct: float = 0.0
+
+    # Symbol-specific transaction costs (spread_bps from symbols.yaml)
+    # Maps symbol -> spread in basis points
+    symbol_spread_bps: Dict[str, float] = field(default_factory=dict)
 
     # Risk settings
     enable_risk_checks: bool = True
@@ -82,6 +181,18 @@ class BacktestConfig:
     save_trades: bool = True
     save_daily_stats: bool = True
     verbose: bool = True
+
+    def get_symbol_spread(self, symbol: str) -> float:
+        """
+        Get spread for a specific symbol.
+
+        Args:
+            symbol: Trading symbol
+
+        Returns:
+            Spread in basis points (symbol-specific or default)
+        """
+        return self.symbol_spread_bps.get(symbol, self.slippage_bps)
 
 
 @dataclass
@@ -539,23 +650,41 @@ class BacktestEngine:
         bar: pd.Series,
         fill_price: float
     ) -> float:
-        """Calculate slippage"""
+        """
+        Calculate slippage using symbol-specific spreads when available.
+
+        This method uses the bid-ask spread data from symbols.yaml for realistic
+        transaction cost modeling. Different symbols have different liquidity
+        profiles and spread characteristics.
+        """
+        symbol = order['symbol']
+
+        # Get symbol-specific spread (or default)
+        spread_bps = self.config.get_symbol_spread(symbol)
+
         if self.config.slippage_model == SlippageModel.FIXED:
-            return fill_price * self.config.slippage_bps / 10000
+            # Use symbol-specific spread
+            return fill_price * spread_bps / 10000
         elif self.config.slippage_model == SlippageModel.VOLUME_BASED:
-            # Impact proportional to order size vs volume
-            participation = abs(order['quantity']) * fill_price / (bar['volume'] * fill_price)
-            return fill_price * participation * 100 / 10000  # Scale factor
+            # Base slippage on symbol spread + volume impact
+            base_slippage = fill_price * spread_bps / 10000
+            participation = abs(order['quantity']) * fill_price / (bar['volume'] * fill_price + 1e-10)
+            volume_impact = fill_price * participation * 100 / 10000
+            return base_slippage + volume_impact
         elif self.config.slippage_model == SlippageModel.VOLATILITY_BASED:
-            # Use bar range as volatility proxy
+            # Combine symbol spread with volatility impact
+            base_slippage = fill_price * spread_bps / 10000
             bar_range = (bar['high'] - bar['low']) / fill_price
-            return fill_price * bar_range * 0.1  # 10% of bar range
+            vol_impact = fill_price * bar_range * 0.1
+            return base_slippage + vol_impact
         elif self.config.slippage_model == SlippageModel.SQRT_VOLUME:
-            # Square root impact model
-            participation = abs(order['quantity']) * fill_price / (bar['volume'] * fill_price)
-            return fill_price * np.sqrt(participation) * 50 / 10000
+            # Square root impact model with symbol-specific base spread
+            base_slippage = fill_price * spread_bps / 10000
+            participation = abs(order['quantity']) * fill_price / (bar['volume'] * fill_price + 1e-10)
+            sqrt_impact = fill_price * np.sqrt(participation) * 50 / 10000
+            return base_slippage + sqrt_impact
         else:
-            return fill_price * self.config.slippage_bps / 10000
+            return fill_price * spread_bps / 10000
 
     def _calculate_commission(
         self,

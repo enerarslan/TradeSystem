@@ -21,6 +21,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import joblib
+from typing import Dict, List, Optional, Tuple
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -32,16 +33,21 @@ from src.data.preprocessor import (
     InformationDrivenBars,
     convert_time_bars_to_information_bars,
     FeatureNeutralizer,
-    OutlierMethod
+    OutlierMethod,
+    TradingHoursFilter
 )
 from src.data.labeling import (
     TripleBarrierLabeler,
     TripleBarrierConfig,
     MetaLabeler,
     CUSUMFilter,
-    get_sample_weights
+    get_sample_weights,
+    get_time_decay_weights,
+    combine_weights
 )
 from src.features.builder import FeatureBuilder
+from src.features.cross_asset import CrossAssetFeatures
+from src.features.regime import RegimeDetector
 from src.models.ml_model import XGBoostModel, LightGBMModel, CatBoostModel
 from src.models.ensemble import StackingEnsemble, VotingEnsemble
 from src.models.training import (
@@ -304,18 +310,43 @@ def prepare_data(
     lookback_days: int = 500,
     use_information_bars: bool = True,
     use_triple_barrier: bool = True,
-    neutralize: bool = True
+    neutralize: bool = True,
+    filter_trading_hours: bool = True,
+    include_extended_hours: bool = False,
+    use_cross_asset_features: bool = True,
+    use_regime_features: bool = True,
+    use_time_decay_weights: bool = True,
+    time_decay_factor: float = 0.5,
+    symbols_config: dict = None
 ) -> tuple:
     """
     Load and prepare data for institutional-grade training.
 
     Pipeline:
-    1. Load raw OHLCV data
-    2. Convert to information-driven bars (optional)
-    3. Apply Triple Barrier labeling (optional)
-    4. Generate features
-    5. Neutralize features (optional)
-    6. Create sample weights
+    1. Load raw OHLCV data for all symbols
+    2. Filter to US regular trading hours (optional)
+    3. Convert to information-driven bars (optional)
+    4. Apply Triple Barrier labeling (optional)
+    5. Generate technical features
+    6. Add cross-asset features (correlations, sector momentum, beta)
+    7. Add regime detection features (HMM, volatility regime)
+    8. Neutralize features (optional)
+    9. Create combined sample weights (uniqueness + time decay)
+
+    Args:
+        symbols: List of symbols to load
+        data_dir: Directory containing raw data
+        lookback_days: Number of days of history to use
+        use_information_bars: Convert time bars to dollar bars
+        use_triple_barrier: Use Triple Barrier labeling method
+        neutralize: Apply feature neutralization
+        filter_trading_hours: Filter to US regular trading hours only (9:30-16:00 ET)
+        include_extended_hours: Include pre-market and after-hours data
+        use_cross_asset_features: Add cross-asset correlation and sector features
+        use_regime_features: Add HMM regime detection features
+        use_time_decay_weights: Combine uniqueness weights with time decay
+        time_decay_factor: Factor for time decay (0=no decay, 1=full linear decay)
+        symbols_config: Symbol configuration dict for sector mapping
 
     Returns:
         Tuple of (features_df, labels, sample_weights, events_df)
@@ -326,10 +357,38 @@ def prepare_data(
     preprocessor = DataPreprocessor()
     feature_builder = FeatureBuilder()
 
-    all_features = []
-    all_labels = []
-    all_weights = []
-    all_events = []
+    # Initialize trading hours filter if enabled
+    trading_hours_filter = None
+    if filter_trading_hours:
+        trading_hours_filter = TradingHoursFilter(
+            include_extended_hours=include_extended_hours
+        )
+        logger.info(
+            f"Trading hours filter enabled: "
+            f"{'Extended' if include_extended_hours else 'Regular'} hours only"
+        )
+
+    # Initialize cross-asset feature generator
+    cross_asset_generator = None
+    sector_mapping = {}
+    if use_cross_asset_features and symbols_config:
+        # Build sector mapping from config
+        sectors = symbols_config.get('sectors', {})
+        for sector_name, sector_data in sectors.items():
+            sector_mapping[sector_name] = sector_data.get('symbols', [])
+
+        cross_asset_generator = CrossAssetFeatures(sector_mapping=sector_mapping)
+        logger.info(f"Cross-asset features enabled with {len(sector_mapping)} sectors")
+
+    # Initialize regime detector
+    regime_detector = None
+    if use_regime_features:
+        regime_detector = RegimeDetector()
+        logger.info("Regime detection features enabled")
+
+    # First pass: Load and preprocess all symbol data
+    symbol_data = {}
+    symbol_prices = {}
 
     for symbol in symbols:
         try:
@@ -339,8 +398,15 @@ def prepare_data(
                 logger.warning(f"Insufficient data for {symbol}")
                 continue
 
-            # 2. Preprocess with Winsorization (not dropping outliers)
+            # 2. Preprocess with Winsorization
             df_clean, _ = preprocessor.preprocess(df, symbol)
+
+            # 2b. Filter to trading hours
+            if trading_hours_filter is not None:
+                df_clean = trading_hours_filter.filter(df_clean)
+                if len(df_clean) < 100:
+                    logger.warning(f"{symbol}: Too few bars after trading hours filter ({len(df_clean)})")
+                    continue
 
             # 3. Convert to information-driven bars (optional)
             if use_information_bars:
@@ -349,62 +415,162 @@ def prepare_data(
                     bar_type="dollar",
                     target_bars_per_day=50
                 )
-                # Use original data if bar conversion fails
                 if len(df_bars) < 50:
                     logger.warning(f"{symbol}: Too few bars after conversion, using time bars")
                     df_bars = df_clean
             else:
                 df_bars = df_clean
 
-            # 4. Apply Triple Barrier labeling (optional)
+            symbol_data[symbol] = df_bars
+            symbol_prices[symbol] = df_bars['close']
+            logger.debug(f"Loaded {len(df_bars)} bars for {symbol}")
+
+        except Exception as e:
+            logger.warning(f"Error loading {symbol}: {e}")
+
+    if not symbol_data:
+        raise ValueError("No data loaded for any symbols")
+
+    logger.info(f"Successfully loaded data for {len(symbol_data)} symbols")
+
+    # Add cross-sectional features (relative rankings across symbols)
+    if len(symbol_data) > 1:
+        symbol_data = add_cross_sectional_features(
+            symbol_data,
+            sector_mapping=sector_mapping if sector_mapping else None
+        )
+
+    # Build cross-asset price matrix for cross-asset features
+    cross_asset_features = None
+    if cross_asset_generator and len(symbol_data) > 1:
+        try:
+            # Create aligned price DataFrame
+            prices_df = pd.DataFrame(symbol_prices)
+            prices_df = prices_df.dropna(how='all')
+
+            if len(prices_df) > 100:
+                # Get pairs for pairs trading from config
+                pairs = []
+                if symbols_config:
+                    correlation_pairs = symbols_config.get('correlation_pairs', [])
+                    for pair_info in correlation_pairs:
+                        pair = pair_info.get('pair', [])
+                        if len(pair) == 2:
+                            pairs.append((pair[0], pair[1]))
+
+                # Generate cross-asset features
+                cross_asset_features = cross_asset_generator.generate_all_features(
+                    prices=prices_df,
+                    pairs=pairs if pairs else None,
+                    window=60
+                )
+                logger.info(f"Generated {len(cross_asset_features.columns)} cross-asset features")
+        except Exception as e:
+            logger.warning(f"Cross-asset feature generation failed: {e}")
+
+    # Second pass: Generate features and labels for each symbol
+    all_features = []
+    all_labels = []
+    all_weights = []
+    all_events = []
+
+    for symbol, df_bars in symbol_data.items():
+        try:
+            # 4. Apply Triple Barrier labeling
             if use_triple_barrier:
                 df_labeled = apply_triple_barrier_labels(
                     df_bars,
-                    pt_sl_ratio=(1.0, 1.0),  # Symmetric barriers
+                    pt_sl_ratio=(1.0, 1.0),
                     max_holding_period=10,
                     volatility_lookback=20
                 )
                 label_col = 'tb_bin_label'
             else:
-                # Fall back to simple forward returns (not recommended)
                 logger.warning("Using simple forward returns (not recommended)")
                 df_labeled = df_bars.copy()
                 forward_returns = df_labeled['close'].pct_change(5).shift(-5)
                 df_labeled['simple_label'] = (forward_returns > 0).astype(int)
                 label_col = 'simple_label'
 
-            # 5. Generate features
+            # 5. Generate technical features
             features = feature_builder.build_features(df_labeled)
 
-            # 6. Neutralize features (optional)
+            # 6. Add regime features
+            if regime_detector is not None:
+                try:
+                    regime_features = regime_detector.generate_regime_features(
+                        df_labeled['close'],
+                        window=20
+                    )
+                    # Align indices and merge
+                    common_idx = features.index.intersection(regime_features.index)
+                    features = features.loc[common_idx]
+                    regime_features = regime_features.loc[common_idx]
+                    features = pd.concat([features, regime_features], axis=1)
+                    logger.debug(f"{symbol}: Added {len(regime_features.columns)} regime features")
+                except Exception as e:
+                    logger.warning(f"{symbol}: Regime feature generation failed: {e}")
+
+            # 7. Add cross-asset features
+            if cross_asset_features is not None:
+                try:
+                    common_idx = features.index.intersection(cross_asset_features.index)
+                    if len(common_idx) > 0:
+                        features = features.loc[common_idx]
+                        ca_features = cross_asset_features.loc[common_idx]
+                        features = pd.concat([features, ca_features], axis=1)
+                        logger.debug(f"{symbol}: Added {len(ca_features.columns)} cross-asset features")
+                except Exception as e:
+                    logger.warning(f"{symbol}: Cross-asset feature merge failed: {e}")
+
+            # 8. Neutralize features (optional)
             if neutralize:
                 features = neutralize_features(
                     features,
                     prices=df_labeled,
-                    market_prices=None  # Could load SPY here
+                    market_prices=None
                 )
 
-            # 7. Create labels
+            # 9. Create labels
             labels = df_labeled[label_col].reindex(features.index)
 
-            # 8. Calculate sample weights (for overlapping labels)
+            # 10. Calculate sample weights with time decay
             if use_triple_barrier and 'tb_t1' in df_labeled.columns:
                 events_for_weights = df_labeled[['tb_t1']].rename(columns={'tb_t1': 't1'})
                 events_for_weights = events_for_weights.reindex(features.index).dropna()
 
                 if len(events_for_weights) > 0:
-                    weights = get_sample_weights(
+                    # Get uniqueness weights
+                    uniqueness_weights = get_sample_weights(
                         events_for_weights,
                         df_labeled['close'],
                         num_threads=1
                     )
-                    weights = weights.reindex(features.index).fillna(1.0 / len(features))
+                    uniqueness_weights = uniqueness_weights.reindex(features.index).fillna(1.0 / len(features))
+
+                    # Get time decay weights if enabled
+                    if use_time_decay_weights:
+                        time_weights = get_time_decay_weights(
+                            events_for_weights,
+                            c=time_decay_factor
+                        )
+                        time_weights = time_weights.reindex(features.index).fillna(1.0 / len(features))
+
+                        # Combine weights (50% uniqueness, 50% time decay by default)
+                        weights = combine_weights(
+                            uniqueness_weights,
+                            time_weights,
+                            alpha=0.5  # Equal weight to uniqueness and time decay
+                        )
+                        weights = weights.reindex(features.index).fillna(1.0 / len(features))
+                    else:
+                        weights = uniqueness_weights
                 else:
                     weights = pd.Series(1.0 / len(features), index=features.index)
             else:
                 weights = pd.Series(1.0 / len(features), index=features.index)
 
-            # 9. Align and drop NaN
+            # 11. Align and drop NaN
             valid_idx = features.dropna().index.intersection(labels.dropna().index)
             features = features.loc[valid_idx]
             labels = labels.loc[valid_idx]
@@ -415,7 +581,7 @@ def prepare_data(
             all_labels.append(labels)
             all_weights.append(weights)
 
-            logger.info(f"Prepared {len(features)} samples for {symbol}")
+            logger.info(f"Prepared {len(features)} samples with {len(features.columns)} features for {symbol}")
 
         except Exception as e:
             logger.warning(f"Error processing {symbol}: {e}")
@@ -423,7 +589,7 @@ def prepare_data(
     if not all_features:
         raise ValueError("No data prepared")
 
-    # Combine
+    # Combine all symbols
     features_df = pd.concat(all_features, axis=0)
     labels = pd.concat(all_labels, axis=0)
     weights = pd.concat(all_weights, axis=0)
@@ -431,9 +597,232 @@ def prepare_data(
     # Normalize weights
     weights = weights / weights.sum()
 
-    logger.info(f"Total samples: {len(features_df)}")
+    logger.info(f"Total samples: {len(features_df)}, Total features: {len(features_df.columns)}")
 
     return features_df, labels, weights, None
+
+
+def add_cross_sectional_features(
+    symbol_data: Dict[str, pd.DataFrame],
+    sector_mapping: Dict[str, List[str]] = None
+) -> Dict[str, pd.DataFrame]:
+    """
+    Add cross-sectional features that rank each symbol relative to others.
+
+    Cross-sectional features capture relative value signals across the universe.
+    These are critical for strategies that exploit divergences between symbols.
+
+    Features added:
+    - Return rank vs all symbols
+    - Return rank vs sector
+    - Volume rank vs all symbols
+    - Momentum rank vs sector average
+    - Volatility percentile
+    - Z-score vs cross-sectional mean
+
+    Args:
+        symbol_data: Dict mapping symbol to DataFrame with price data
+        sector_mapping: Dict mapping sector names to list of symbols
+
+    Returns:
+        Dict with cross-sectional features added to each DataFrame
+    """
+    if len(symbol_data) < 2:
+        logger.warning("Need at least 2 symbols for cross-sectional features")
+        return symbol_data
+
+    logger.info(f"Generating cross-sectional features for {len(symbol_data)} symbols...")
+
+    # Calculate returns and other metrics for all symbols
+    returns_dict = {}
+    volume_dict = {}
+    volatility_dict = {}
+    momentum_dict = {}
+
+    for symbol, df in symbol_data.items():
+        if 'close' in df.columns:
+            returns_dict[symbol] = df['close'].pct_change()
+            volatility_dict[symbol] = df['close'].pct_change().rolling(20).std()
+            momentum_dict[symbol] = df['close'].pct_change(20)  # 20-period momentum
+        if 'volume' in df.columns:
+            volume_dict[symbol] = df['volume']
+
+    # Create aligned DataFrames
+    returns_df = pd.DataFrame(returns_dict)
+    volume_df = pd.DataFrame(volume_dict) if volume_dict else None
+    volatility_df = pd.DataFrame(volatility_dict)
+    momentum_df = pd.DataFrame(momentum_dict)
+
+    # Calculate cross-sectional stats at each timestamp
+    returns_mean = returns_df.mean(axis=1)
+    returns_std = returns_df.std(axis=1)
+    volatility_mean = volatility_df.mean(axis=1)
+
+    # Build sector mapping lookup
+    symbol_to_sector = {}
+    if sector_mapping:
+        for sector, symbols in sector_mapping.items():
+            for s in symbols:
+                symbol_to_sector[s] = sector
+
+    # Add cross-sectional features to each symbol's DataFrame
+    result = {}
+
+    for symbol, df in symbol_data.items():
+        df_new = df.copy()
+
+        # Return rank (1 = best, 0 = worst)
+        returns_rank = returns_df.rank(axis=1, pct=True)
+        if symbol in returns_rank.columns:
+            df_new['cs_return_rank'] = returns_rank[symbol].reindex(df_new.index)
+
+        # Z-score vs cross-sectional mean
+        if symbol in returns_df.columns:
+            symbol_return = returns_df[symbol]
+            z_score = (symbol_return - returns_mean) / (returns_std + 1e-10)
+            df_new['cs_return_zscore'] = z_score.reindex(df_new.index)
+
+        # Volume rank
+        if volume_df is not None and symbol in volume_df.columns:
+            volume_rank = volume_df.rank(axis=1, pct=True)
+            df_new['cs_volume_rank'] = volume_rank[symbol].reindex(df_new.index)
+
+        # Volatility percentile
+        volatility_rank = volatility_df.rank(axis=1, pct=True)
+        if symbol in volatility_rank.columns:
+            df_new['cs_volatility_pctl'] = volatility_rank[symbol].reindex(df_new.index)
+
+        # Momentum rank
+        momentum_rank = momentum_df.rank(axis=1, pct=True)
+        if symbol in momentum_rank.columns:
+            df_new['cs_momentum_rank'] = momentum_rank[symbol].reindex(df_new.index)
+
+        # Sector-relative features
+        if symbol in symbol_to_sector:
+            sector = symbol_to_sector[symbol]
+            sector_symbols = [s for s in sector_mapping.get(sector, []) if s in returns_df.columns]
+
+            if len(sector_symbols) > 1:
+                # Sector average return
+                sector_returns = returns_df[sector_symbols].mean(axis=1)
+                if symbol in returns_df.columns:
+                    # Return vs sector
+                    df_new['cs_vs_sector_return'] = (
+                        returns_df[symbol] - sector_returns
+                    ).reindex(df_new.index)
+
+                    # Rank within sector
+                    sector_rank = returns_df[sector_symbols].rank(axis=1, pct=True)
+                    df_new['cs_sector_rank'] = sector_rank[symbol].reindex(df_new.index)
+
+                # Sector momentum
+                sector_momentum = momentum_df[sector_symbols].mean(axis=1) if sector_symbols else None
+                if sector_momentum is not None and symbol in momentum_df.columns:
+                    df_new['cs_vs_sector_momentum'] = (
+                        momentum_df[symbol] - sector_momentum
+                    ).reindex(df_new.index)
+
+        # Distance from cross-sectional extremes
+        if symbol in returns_df.columns:
+            cs_max = returns_df.max(axis=1)
+            cs_min = returns_df.min(axis=1)
+            cs_range = cs_max - cs_min + 1e-10
+
+            df_new['cs_distance_from_max'] = (
+                (cs_max - returns_df[symbol]) / cs_range
+            ).reindex(df_new.index)
+
+            df_new['cs_distance_from_min'] = (
+                (returns_df[symbol] - cs_min) / cs_range
+            ).reindex(df_new.index)
+
+        result[symbol] = df_new
+
+    # Count features added
+    sample_symbol = list(result.keys())[0]
+    cs_features = [c for c in result[sample_symbol].columns if c.startswith('cs_')]
+    logger.info(f"Added {len(cs_features)} cross-sectional features: {cs_features}")
+
+    return result
+
+
+def calculate_dynamic_embargo(
+    feature_columns: list,
+    data_frequency_minutes: int = 15,
+    min_embargo_pct: float = 0.05
+) -> float:
+    """
+    Calculate dynamic embargo based on maximum feature lookback period.
+
+    Fixed 5% embargo may not be sufficient given 200-period feature lookbacks.
+    This function analyzes feature names to infer lookback periods and
+    calculates an appropriate embargo.
+
+    Args:
+        feature_columns: List of feature column names
+        data_frequency_minutes: Frequency of data bars in minutes
+        min_embargo_pct: Minimum embargo percentage (AFML recommends >= 5%)
+
+    Returns:
+        Calculated embargo percentage (at least min_embargo_pct)
+    """
+    max_lookback = 0
+
+    # Parse feature names to infer lookback periods
+    # Common patterns: sma_20, ema_50, rsi_14, close_pct_200, etc.
+    import re
+
+    lookback_patterns = [
+        r'_(\d+)$',           # suffix number: sma_20, ema_50
+        r'(\d+)_',            # prefix number: 14_rsi
+        r'_(\d+)_',           # middle number: close_20_ema
+        r'pct_(\d+)',         # percentage lookback: pct_20
+        r'rolling_(\d+)',     # rolling windows
+        r'window_(\d+)',      # window specification
+        r'period_(\d+)',      # period specification
+    ]
+
+    for col in feature_columns:
+        for pattern in lookback_patterns:
+            matches = re.findall(pattern, col.lower())
+            for match in matches:
+                try:
+                    lookback = int(match)
+                    if lookback > max_lookback and lookback < 1000:  # Sanity check
+                        max_lookback = lookback
+                except ValueError:
+                    continue
+
+    # If no lookback found, use default assumption
+    if max_lookback == 0:
+        max_lookback = 200  # Conservative default for SMA_200
+
+    # Calculate embargo as percentage
+    # Embargo should be at least as large as the longest feature lookback
+    # expressed as a percentage of typical dataset size
+
+    # Assuming ~26 bars per trading day (15-min bars, 6.5 hours)
+    bars_per_day = int(6.5 * 60 / data_frequency_minutes)
+
+    # Embargo should cover at least max_lookback periods
+    # Plus some buffer for serial correlation decay
+    embargo_periods = max_lookback + 10  # Add small buffer
+
+    # Calculate as percentage of 6-month training window
+    # 6 months = ~126 trading days
+    typical_train_size = 126 * bars_per_day  # ~3276 bars
+    calculated_embargo_pct = embargo_periods / typical_train_size
+
+    # Apply minimum constraint
+    final_embargo_pct = max(calculated_embargo_pct, min_embargo_pct)
+
+    logger.info(
+        f"Dynamic embargo calculation: "
+        f"max_lookback={max_lookback}, embargo_periods={embargo_periods}, "
+        f"embargo_pct={final_embargo_pct:.2%} (min={min_embargo_pct:.1%})"
+    )
+
+    return final_embargo_pct
 
 
 def train_with_purged_cv(
@@ -442,7 +831,8 @@ def train_with_purged_cv(
     y: pd.Series,
     sample_weight: pd.Series = None,
     n_splits: int = 5,
-    embargo_pct: float = 0.05
+    embargo_pct: float = None,
+    use_dynamic_embargo: bool = True
 ) -> dict:
     """
     Train model with PurgedKFoldCV.
@@ -457,11 +847,21 @@ def train_with_purged_cv(
         y: Labels
         sample_weight: Sample weights (optional)
         n_splits: Number of CV folds
-        embargo_pct: Embargo percentage (minimum 5%)
+        embargo_pct: Embargo percentage (None = use dynamic calculation)
+        use_dynamic_embargo: Calculate embargo based on feature lookbacks
 
     Returns:
         Dictionary with CV results
     """
+    # Calculate dynamic embargo if not specified
+    if embargo_pct is None and use_dynamic_embargo:
+        embargo_pct = calculate_dynamic_embargo(
+            feature_columns=X.columns.tolist(),
+            data_frequency_minutes=15
+        )
+    elif embargo_pct is None:
+        embargo_pct = 0.05  # Default minimum
+
     logger.info(f"Training with PurgedKFoldCV (embargo={embargo_pct:.1%})...")
 
     cv_trainer = CrossValidationTrainer(
@@ -597,6 +997,10 @@ def main():
     parser.add_argument("--use-information-bars", action="store_true", default=True)
     parser.add_argument("--use-triple-barrier", action="store_true", default=True)
     parser.add_argument("--neutralize", action="store_true", default=True)
+    parser.add_argument("--filter-trading-hours", action="store_true", default=True,
+                        help="Filter data to US regular trading hours (9:30-16:00 ET)")
+    parser.add_argument("--include-extended-hours", action="store_true", default=False,
+                        help="Include pre-market and after-hours data")
     parser.add_argument("--n-trials", type=int, default=1, help="Number of backtests for DSR")
     args = parser.parse_args()
 
@@ -612,11 +1016,23 @@ def main():
     config = load_config(args.config)
     symbols_config = load_config("config/symbols.yaml")
 
-    # Get symbols
+    # Get symbols - extract from all sectors
     if args.symbols:
         symbols = args.symbols
     else:
-        symbols = symbols_config.get('universe', {}).get('symbols', [])[:10]
+        # Extract symbols from all sectors in the YAML structure
+        symbols = []
+        sectors = symbols_config.get('sectors', {})
+        for sector_name, sector_data in sectors.items():
+            sector_symbols = sector_data.get('symbols', [])
+            symbols.extend(sector_symbols)
+
+        # If no symbols found in sectors, fall back to symbols dict keys
+        if not symbols:
+            symbols_dict = symbols_config.get('symbols', {})
+            symbols = list(symbols_dict.keys())
+
+        logger.info(f"Loaded {len(symbols)} symbols from {len(sectors)} sectors")
 
     logger.info(f"Training on {len(symbols)} symbols: {symbols}")
 
@@ -625,7 +1041,14 @@ def main():
         symbols,
         use_information_bars=args.use_information_bars,
         use_triple_barrier=args.use_triple_barrier,
-        neutralize=args.neutralize
+        neutralize=args.neutralize,
+        filter_trading_hours=args.filter_trading_hours,
+        include_extended_hours=args.include_extended_hours,
+        use_cross_asset_features=True,
+        use_regime_features=True,
+        use_time_decay_weights=True,
+        time_decay_factor=0.5,
+        symbols_config=symbols_config
     )
 
     # Remove symbol column for training
