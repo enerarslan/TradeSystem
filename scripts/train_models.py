@@ -958,7 +958,13 @@ def train_ensemble(
         models=base_models,
         voting='soft'
     )
-    voting.train(X_train, y_train, X_val, y_val)
+    # Try fit first, fall back to train
+    if hasattr(voting, 'fit'):
+        voting.fit(X_train, y_train, validation_data=(X_val, y_val))
+    elif hasattr(voting, 'train'):
+        voting.train(X_train, y_train, X_val, y_val)
+    else:
+        logger.warning("Ensemble has no train or fit method, models are already trained")
 
     # Evaluate
     val_pred = voting.predict(X_val)
@@ -1248,9 +1254,10 @@ def main():
     logger.info("Saving models...")
 
     for model in models:
-        model_path = output_dir / f"{model.name}.pkl"
+        model_name = getattr(model, 'model_id', getattr(model, 'name', 'model'))
+        model_path = output_dir / f"{model_name}.pkl"
         model.save(str(model_path))
-        logger.info(f"Saved {model.name} to {model_path}")
+        logger.info(f"Saved {model_name} to {model_path}")
 
     # Save ensemble
     ensemble_path = output_dir / "ensemble_model.pkl"

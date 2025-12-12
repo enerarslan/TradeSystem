@@ -1,0 +1,82 @@
+methodology:
+  bar_type: dollar
+  cv_method: purged_kfold
+  embargo_pct: 0.05
+  feature_neutralization: true
+  labeling: triple_barrier
+metrics:
+  catboost:
+    accuracy: 0.537525354969574
+    auc: 0.5204832455006463
+    f1: 0.40522625851219357
+    precision: 0.49676571415014886
+    recall: 0.537525354969574
+  ensemble:
+    accuracy: 0.5415821501014199
+    auc: 0.5058334161943588
+  lightgbm:
+    accuracy: 0.5415821501014199
+    auc: 0.5050545225547711
+    f1: 0.38053272125547133
+    precision: 0.29331122530847686
+    recall: 0.5415821501014199
+  sharpe_analysis:
+    dsr: !!python/object/apply:numpy._core.multiarray.scalar
+    - &id001 !!python/object/apply:numpy.dtype
+      args:
+      - f8
+      - false
+      - true
+      state: !!python/tuple
+      - 3
+      - <
+      - null
+      - null
+      - null
+      - -1
+      - -1
+      - 0
+    - !!binary |
+      9YCHmIoOxjE=
+    is_significant: !!python/object/apply:numpy._core.multiarray.scalar
+    - !!python/object/apply:numpy.dtype
+      args:
+      - b1
+      - false
+      - true
+      state: !!python/tuple
+      - 3
+      - '|'
+      - null
+      - null
+      - null
+      - -1
+      - -1
+      - 0
+    - !!binary |
+      AA==
+    psr: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      9YCHmIoOxjE=
+    sharpe_ratio: !!python/object/apply:numpy._core.multiarray.scalar
+    - *id001
+    - !!binary |
+      BynRH9FLNMA=
+  xgboost:
+    accuracy: 0.5456389452332657
+    auc: 0.5033310132246196
+    f1: 0.48929696026872876
+    precision: 0.5339268326840052
+    recall: 0.5456389452332657
+selected_features:
+- bb_upper_20
+- return_5
+- bb_width_10
+- volume_ratio_5
+symbols:
+- AAPL
+- MSFT
+train_size: 1970
+training_date: '2025-12-12T22:00:12.364193'
+val_size: 493

@@ -229,11 +229,25 @@ class BaseModel(ABC):
                 'hyperparameters': self.hyperparameters
             }, f)
 
-        # Save metadata
+        # Save metadata - convert numpy types to native Python types
+        def convert_to_serializable(obj):
+            if isinstance(obj, dict):
+                return {k: convert_to_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_to_serializable(item) for item in obj]
+            elif isinstance(obj, (np.integer, np.floating)):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            return obj
+
         metadata_dict = asdict(self.metadata)
         metadata_dict['created_at'] = metadata_dict['created_at'].isoformat()
         if metadata_dict['trained_at']:
             metadata_dict['trained_at'] = metadata_dict['trained_at'].isoformat()
+
+        # Convert any numpy types
+        metadata_dict = convert_to_serializable(metadata_dict)
 
         with open(metadata_path, 'w') as f:
             json.dump(metadata_dict, f, indent=2)

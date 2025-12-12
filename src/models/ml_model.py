@@ -390,12 +390,18 @@ class CatBoostModel(BaseModel):
 
     DEFAULT_PARAMS = {
         'iterations': 500,
-        'depth': 6,
+        'depth': 6,  # CatBoost uses 'depth', not 'max_depth'
         'learning_rate': 0.05,
         'l2_leaf_reg': 3.0,
         'random_seed': 42,
         'verbose': False,
         'allow_writing_files': False
+    }
+
+    # Parameters that CatBoost names differently
+    PARAM_MAPPING = {
+        'max_depth': 'depth',
+        'n_estimators': 'iterations',
     }
 
     def __init__(
@@ -414,6 +420,11 @@ class CatBoostModel(BaseModel):
             categorical_features: List of categorical feature names
             **hyperparameters: Model hyperparameters
         """
+        # Map common parameter names to CatBoost equivalents
+        for common_name, catboost_name in self.PARAM_MAPPING.items():
+            if common_name in hyperparameters:
+                hyperparameters[catboost_name] = hyperparameters.pop(common_name)
+
         params = {**self.DEFAULT_PARAMS, **hyperparameters}
 
         super().__init__(
