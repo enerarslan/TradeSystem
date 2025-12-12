@@ -357,8 +357,12 @@ class TripleBarrierLabeler:
         """
         out = events.copy()
 
-        # Determine first touch
-        out['first_touch'] = out[['t1', 'sl', 'pt']].min(axis=1)
+        # Determine first touch - handle NaN values by converting to datetime
+        # and using pd.NaT for missing values
+        touch_cols = out[['t1', 'sl', 'pt']].copy()
+        for col in touch_cols.columns:
+            touch_cols[col] = pd.to_datetime(touch_cols[col], errors='coerce')
+        out['first_touch'] = touch_cols.min(axis=1, skipna=True)
 
         # Determine touch type
         out['touch_type'] = 'vertical'  # Default

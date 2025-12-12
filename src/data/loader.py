@@ -168,7 +168,12 @@ class DataLoader:
         if parquet_path.exists():
             return "parquet"
 
-        # Check for CSV
+        # Check for clean/processed CSV first
+        csv_clean_path = self.data_path / f"{symbol}_{timeframe}_clean.csv"
+        if csv_clean_path.exists():
+            return "csv"
+
+        # Check for standard CSV
         csv_path = self.data_path / f"{symbol}_{timeframe}.csv"
         if csv_path.exists():
             return "csv"
@@ -178,7 +183,12 @@ class DataLoader:
 
     def _load_csv(self, symbol: str, timeframe: str) -> pd.DataFrame:
         """Load data from CSV file"""
-        file_path = self.data_path / f"{symbol}_{timeframe}.csv"
+        # Try processed/clean file first, then standard format
+        file_path = self.data_path / f"{symbol}_{timeframe}_clean.csv"
+
+        if not file_path.exists():
+            # Fall back to standard naming convention
+            file_path = self.data_path / f"{symbol}_{timeframe}.csv"
 
         if not file_path.exists():
             raise FileNotFoundError(f"CSV file not found: {file_path}")
@@ -187,7 +197,6 @@ class DataLoader:
 
         df = pd.read_csv(
             file_path,
-            parse_dates=[0],
             index_col=0,
             dtype={
                 'open': np.float64,
@@ -197,6 +206,8 @@ class DataLoader:
                 'volume': np.float64
             }
         )
+        # Parse index as datetime with UTC conversion for timezone-aware timestamps
+        df.index = pd.to_datetime(df.index, utc=True)
 
         return df
 

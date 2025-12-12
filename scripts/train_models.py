@@ -306,7 +306,7 @@ def apply_clustered_feature_selection(
 
 def prepare_data(
     symbols: list,
-    data_dir: str = "data/raw",
+    data_dir: str = "data/processed",
     lookback_days: int = 500,
     use_information_bars: bool = True,
     use_triple_barrier: bool = True,
@@ -317,7 +317,8 @@ def prepare_data(
     use_regime_features: bool = True,
     use_time_decay_weights: bool = True,
     time_decay_factor: float = 0.5,
-    symbols_config: dict = None
+    symbols_config: dict = None,
+    triple_barrier_config: dict = None
 ) -> tuple:
     """
     Load and prepare data for institutional-grade training.
@@ -353,7 +354,7 @@ def prepare_data(
     """
     logger.info(f"Loading data for {len(symbols)} symbols...")
 
-    loader = MultiAssetLoader(symbols=symbols, data_dir=data_dir)
+    loader = MultiAssetLoader(data_path=data_dir)
     preprocessor = DataPreprocessor()
     feature_builder = FeatureBuilder()
 
@@ -393,7 +394,7 @@ def prepare_data(
     for symbol in symbols:
         try:
             # 1. Load raw data
-            df = loader.load_symbol(symbol)
+            df = loader.loader.load(symbol)
             if df is None or len(df) < 100:
                 logger.warning(f"Insufficient data for {symbol}")
                 continue
@@ -478,11 +479,23 @@ def prepare_data(
         try:
             # 4. Apply Triple Barrier labeling
             if use_triple_barrier:
+                # Get symbol-specific params from calibrated config
+                tb_defaults = triple_barrier_config.get('default_params', {}) if triple_barrier_config else {}
+                tb_symbol_params = {}
+                if triple_barrier_config and 'symbols' in triple_barrier_config:
+                    tb_symbol_params = triple_barrier_config['symbols'].get(symbol, {})
+
+                # Use symbol-specific params if available, else defaults
+                pt_mult = tb_symbol_params.get('profit_target_atr_mult', tb_defaults.get('profit_target_atr_mult', 1.5))
+                sl_mult = tb_symbol_params.get('stop_loss_atr_mult', tb_defaults.get('stop_loss_atr_mult', 1.0))
+                max_hold = tb_symbol_params.get('max_holding_period', tb_defaults.get('max_holding_period', 10))
+                vol_lookback = tb_defaults.get('volatility_lookback', 20)
+
                 df_labeled = apply_triple_barrier_labels(
                     df_bars,
-                    pt_sl_ratio=(1.0, 1.0),
-                    max_holding_period=10,
-                    volatility_lookback=20
+                    pt_sl_ratio=(pt_mult, sl_mult),
+                    max_holding_period=max_hold,
+                    volatility_lookback=vol_lookback
                 )
                 label_col = 'tb_bin_label'
             else:
@@ -1002,10 +1015,16 @@ def main():
     parser.add_argument("--include-extended-hours", action="store_true", default=False,
                         help="Include pre-market and after-hours data")
     parser.add_argument("--n-trials", type=int, default=1, help="Number of backtests for DSR")
+    parser.add_argument("--use-optimal-features", action="store_true", default=True,
+                        help="Use pre-selected optimal features from config/optimal_features.yaml")
+    parser.add_argument("--optimal-features-config", type=str, default="config/optimal_features.yaml",
+                        help="Path to optimal features configuration")
+    parser.add_argument("--triple-barrier-config", type=str, default="config/triple_barrier_params.yaml",
+                        help="Path to calibrated triple barrier parameters")
     args = parser.parse_args()
 
     # Setup logging
-    setup_logging(log_dir="logs", level="INFO")
+    setup_logging(log_path="logs", level="INFO")
 
     logger.info("=" * 60)
     logger.info("Starting Institutional-Grade Model Training")
@@ -1015,6 +1034,15 @@ def main():
     # Load config
     config = load_config(args.config)
     symbols_config = load_config("config/symbols.yaml")
+
+    # Load calibrated triple barrier parameters
+    triple_barrier_config = None
+    try:
+        triple_barrier_config = load_config(args.triple_barrier_config)
+        logger.info(f"Loaded calibrated triple barrier params from {args.triple_barrier_config}")
+        logger.info(f"  - {len(triple_barrier_config.get('symbols', {}))} symbol-specific configs")
+    except Exception as e:
+        logger.warning(f"Could not load triple barrier config: {e}. Using defaults.")
 
     # Get symbols - extract from all sectors
     if args.symbols:
@@ -1048,12 +1076,36 @@ def main():
         use_regime_features=True,
         use_time_decay_weights=True,
         time_decay_factor=0.5,
-        symbols_config=symbols_config
+        symbols_config=symbols_config,
+        triple_barrier_config=triple_barrier_config
     )
 
     # Remove symbol column for training
     X = features_df.drop(columns=['symbol'], errors='ignore')
     y = labels.astype(int)
+
+    # Apply optimal feature selection if enabled
+    if args.use_optimal_features:
+        try:
+            optimal_config = load_config(args.optimal_features_config)
+            optimal_features = optimal_config.get('optimal_features', [])
+
+            if optimal_features:
+                # Find intersection with available features
+                available_features = set(X.columns)
+                selected_features = [f for f in optimal_features if f in available_features]
+                missing_features = [f for f in optimal_features if f not in available_features]
+
+                if missing_features:
+                    logger.warning(f"Missing optimal features: {missing_features[:10]}{'...' if len(missing_features) > 10 else ''}")
+
+                if selected_features:
+                    X = X[selected_features]
+                    logger.info(f"Using {len(selected_features)} optimal features from {args.optimal_features_config}")
+                else:
+                    logger.warning("No optimal features found in data, using all features")
+        except Exception as e:
+            logger.warning(f"Could not load optimal features config: {e}. Using all features.")
 
     # Train/validation split (time-based)
     split_idx = int(len(X) * 0.8)
