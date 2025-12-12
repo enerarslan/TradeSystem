@@ -1,0 +1,289 @@
+version: '1.0'
+created_at: '2025-12-12T18:34:37.230285'
+selection_summary:
+  original_count: 68
+  final_count: 36
+  redundancy_removed_pct: 47.06
+optimal_features:
+- bb_upper_20
+- price_vs_sma_5
+- return_5
+- return_10
+- price_vs_sma_50
+- return_60
+- price_vs_sma_200
+- return_1
+- return_20
+- volatility_5
+- volatility_10
+- volatility_20
+- volatility_60
+- rsi_7
+- rsi_14
+- rsi_21
+- macd
+- macd_hist
+- bb_width_10
+- bb_position_10
+- bb_width_20
+- cci_20
+- atr_7
+- atr_14
+- atr_21
+- volume_sma_5
+- volume_ratio_5
+- volume_sma_10
+- volume_ratio_20
+- volume_sma_20
+- range_5
+- range_10
+- range_20
+- stoch_k_14
+- stoch_d_14
+- williams_r_21
+removed_features:
+- sma_5
+- ema_5
+- sma_10
+- ema_10
+- price_vs_sma_10
+- sma_20
+- ema_20
+- price_vs_sma_20
+- sma_50
+- ema_50
+- sma_100
+- ema_100
+- price_vs_sma_100
+- sma_200
+- ema_200
+- macd_signal
+- bb_upper_10
+- bb_lower_10
+- bb_lower_20
+- bb_position_20
+- atr_pct_7
+- atr_pct_14
+- atr_pct_21
+- volume_ratio_10
+- momentum_5
+- momentum_10
+- momentum_20
+- momentum_60
+- stoch_k_21
+- stoch_d_21
+- williams_r_14
+- cci_14
+clusters:
+- cluster_id: 21
+  representative: bb_upper_20
+  members:
+  - sma_5
+  - ema_5
+  - sma_10
+  - ema_10
+  - sma_20
+  - ema_20
+  - sma_50
+  - ema_50
+  - sma_100
+  - ema_100
+  - sma_200
+  - ema_200
+  - bb_upper_10
+  - bb_lower_10
+  - bb_upper_20
+  - bb_lower_20
+  avg_correlation: 0.9987
+- cluster_id: 17
+  representative: price_vs_sma_5
+  members:
+  - price_vs_sma_5
+  avg_correlation: 1.0
+- cluster_id: 16
+  representative: return_5
+  members:
+  - price_vs_sma_10
+  - return_5
+  - momentum_5
+  avg_correlation: 0.9492
+- cluster_id: 14
+  representative: return_10
+  members:
+  - price_vs_sma_20
+  - return_10
+  - momentum_10
+  avg_correlation: 0.947
+- cluster_id: 5
+  representative: price_vs_sma_50
+  members:
+  - price_vs_sma_50
+  avg_correlation: 1.0
+- cluster_id: 1
+  representative: return_60
+  members:
+  - price_vs_sma_100
+  - return_60
+  - momentum_60
+  avg_correlation: 0.9571
+- cluster_id: 2
+  representative: price_vs_sma_200
+  members:
+  - price_vs_sma_200
+  avg_correlation: 1.0
+- cluster_id: 18
+  representative: return_1
+  members:
+  - return_1
+  avg_correlation: 1.0
+- cluster_id: 3
+  representative: return_20
+  members:
+  - return_20
+  - momentum_20
+  avg_correlation: 1.0
+- cluster_id: 35
+  representative: volatility_5
+  members:
+  - volatility_5
+  avg_correlation: 1.0
+- cluster_id: 34
+  representative: volatility_10
+  members:
+  - volatility_10
+  avg_correlation: 1.0
+- cluster_id: 29
+  representative: volatility_20
+  members:
+  - volatility_20
+  avg_correlation: 1.0
+- cluster_id: 36
+  representative: volatility_60
+  members:
+  - volatility_60
+  avg_correlation: 1.0
+- cluster_id: 7
+  representative: rsi_7
+  members:
+  - rsi_7
+  avg_correlation: 1.0
+- cluster_id: 12
+  representative: rsi_14
+  members:
+  - rsi_14
+  avg_correlation: 1.0
+- cluster_id: 13
+  representative: rsi_21
+  members:
+  - rsi_21
+  avg_correlation: 1.0
+- cluster_id: 4
+  representative: macd
+  members:
+  - macd
+  - macd_signal
+  avg_correlation: 0.953
+- cluster_id: 15
+  representative: macd_hist
+  members:
+  - macd_hist
+  avg_correlation: 1.0
+- cluster_id: 32
+  representative: bb_width_10
+  members:
+  - bb_width_10
+  avg_correlation: 1.0
+- cluster_id: 8
+  representative: bb_position_10
+  members:
+  - bb_position_10
+  avg_correlation: 1.0
+- cluster_id: 27
+  representative: bb_width_20
+  members:
+  - bb_width_20
+  avg_correlation: 1.0
+- cluster_id: 6
+  representative: cci_20
+  members:
+  - bb_position_20
+  - cci_14
+  - cci_20
+  avg_correlation: 0.9378
+- cluster_id: 30
+  representative: atr_7
+  members:
+  - atr_7
+  - atr_pct_7
+  avg_correlation: 0.9581
+- cluster_id: 25
+  representative: atr_14
+  members:
+  - atr_14
+  - atr_pct_14
+  avg_correlation: 0.9512
+- cluster_id: 26
+  representative: atr_21
+  members:
+  - atr_21
+  - atr_pct_21
+  avg_correlation: 0.945
+- cluster_id: 22
+  representative: volume_sma_5
+  members:
+  - volume_sma_5
+  avg_correlation: 1.0
+- cluster_id: 20
+  representative: volume_ratio_5
+  members:
+  - volume_ratio_5
+  avg_correlation: 1.0
+- cluster_id: 23
+  representative: volume_sma_10
+  members:
+  - volume_sma_10
+  avg_correlation: 1.0
+- cluster_id: 19
+  representative: volume_ratio_20
+  members:
+  - volume_ratio_10
+  - volume_ratio_20
+  avg_correlation: 0.9243
+- cluster_id: 24
+  representative: volume_sma_20
+  members:
+  - volume_sma_20
+  avg_correlation: 1.0
+- cluster_id: 31
+  representative: range_5
+  members:
+  - range_5
+  avg_correlation: 1.0
+- cluster_id: 33
+  representative: range_10
+  members:
+  - range_10
+  avg_correlation: 1.0
+- cluster_id: 28
+  representative: range_20
+  members:
+  - range_20
+  avg_correlation: 1.0
+- cluster_id: 10
+  representative: stoch_k_14
+  members:
+  - stoch_k_14
+  - williams_r_14
+  avg_correlation: 1.0
+- cluster_id: 11
+  representative: stoch_d_14
+  members:
+  - stoch_d_14
+  avg_correlation: 1.0
+- cluster_id: 9
+  representative: williams_r_21
+  members:
+  - stoch_k_21
+  - stoch_d_21
+  - williams_r_21
+  avg_correlation: 0.963

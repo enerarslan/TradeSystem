@@ -51,11 +51,11 @@ class FeatureOptimizationConfig:
     """Configuration for feature optimization"""
     # Correlation thresholds
     max_correlation: float = 0.95        # Features with higher correlation are redundant
-    cluster_threshold: float = 0.80      # Threshold for hierarchical clustering
+    cluster_threshold: float = 0.92      # Threshold for hierarchical clustering (less aggressive)
 
     # Target feature count
-    min_features: int = 60
-    max_features: int = 80
+    min_features: int = 40               # Adjusted to reflect realistic technical feature set
+    max_features: int = 60
 
     # Feature importance
     min_importance_pct: float = 0.01     # Drop features with < 1% importance
@@ -86,6 +86,108 @@ class FeatureSelectionReport:
     clusters: List[FeatureCluster]
     correlation_matrix_rank: int
     redundancy_removed_pct: float
+
+
+# ============================================================================
+# TECHNICAL FEATURE GENERATOR (Standalone)
+# ============================================================================
+
+def generate_technical_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Generate technical features from OHLCV data.
+    Returns DataFrame with ~100 features for correlation analysis.
+    """
+    features = pd.DataFrame(index=df.index)
+    close = df['close']
+    high = df['high']
+    low = df['low']
+    volume = df['volume']
+
+    # Price-based features
+    for period in [5, 10, 20, 50, 100, 200]:
+        features[f'sma_{period}'] = close.rolling(period).mean()
+        features[f'ema_{period}'] = close.ewm(span=period).mean()
+        features[f'price_vs_sma_{period}'] = close / features[f'sma_{period}'] - 1
+
+    # Returns at different horizons
+    for period in [1, 5, 10, 20, 60]:
+        features[f'return_{period}'] = close.pct_change(period)
+
+    # Volatility
+    for period in [5, 10, 20, 60]:
+        features[f'volatility_{period}'] = close.pct_change().rolling(period).std()
+
+    # RSI
+    for period in [7, 14, 21]:
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+        rs = gain / (loss + 1e-10)
+        features[f'rsi_{period}'] = 100 - (100 / (1 + rs))
+
+    # MACD
+    ema12 = close.ewm(span=12).mean()
+    ema26 = close.ewm(span=26).mean()
+    features['macd'] = ema12 - ema26
+    features['macd_signal'] = features['macd'].ewm(span=9).mean()
+    features['macd_hist'] = features['macd'] - features['macd_signal']
+
+    # Bollinger Bands
+    for period in [10, 20]:
+        sma = close.rolling(period).mean()
+        std = close.rolling(period).std()
+        features[f'bb_upper_{period}'] = sma + 2 * std
+        features[f'bb_lower_{period}'] = sma - 2 * std
+        features[f'bb_width_{period}'] = (features[f'bb_upper_{period}'] - features[f'bb_lower_{period}']) / sma
+        features[f'bb_position_{period}'] = (close - features[f'bb_lower_{period}']) / (features[f'bb_upper_{period}'] - features[f'bb_lower_{period}'] + 1e-10)
+
+    # ATR
+    for period in [7, 14, 21]:
+        tr = pd.concat([
+            high - low,
+            abs(high - close.shift(1)),
+            abs(low - close.shift(1))
+        ], axis=1).max(axis=1)
+        features[f'atr_{period}'] = tr.rolling(period).mean()
+        features[f'atr_pct_{period}'] = features[f'atr_{period}'] / close
+
+    # Volume features
+    for period in [5, 10, 20]:
+        features[f'volume_sma_{period}'] = volume.rolling(period).mean()
+        features[f'volume_ratio_{period}'] = volume / features[f'volume_sma_{period}']
+
+    # Price momentum
+    for period in [5, 10, 20, 60]:
+        features[f'momentum_{period}'] = close / close.shift(period) - 1
+
+    # High-Low range
+    for period in [5, 10, 20]:
+        features[f'range_{period}'] = (high.rolling(period).max() - low.rolling(period).min()) / close
+
+    # Stochastic
+    for period in [14, 21]:
+        low_min = low.rolling(period).min()
+        high_max = high.rolling(period).max()
+        features[f'stoch_k_{period}'] = 100 * (close - low_min) / (high_max - low_min + 1e-10)
+        features[f'stoch_d_{period}'] = features[f'stoch_k_{period}'].rolling(3).mean()
+
+    # Williams %R
+    for period in [14, 21]:
+        high_max = high.rolling(period).max()
+        low_min = low.rolling(period).min()
+        features[f'williams_r_{period}'] = -100 * (high_max - close) / (high_max - low_min + 1e-10)
+
+    # CCI
+    for period in [14, 20]:
+        tp = (high + low + close) / 3
+        sma_tp = tp.rolling(period).mean()
+        mad = tp.rolling(period).apply(lambda x: np.abs(x - x.mean()).mean())
+        features[f'cci_{period}'] = (tp - sma_tp) / (0.015 * mad + 1e-10)
+
+    # Drop NaN rows and return
+    features = features.dropna()
+
+    return features
 
 
 # ============================================================================
@@ -645,18 +747,18 @@ class OptimalFeatureSelector:
             'version': '1.0',
             'created_at': datetime.now().isoformat(),
             'selection_summary': {
-                'original_count': report.original_feature_count,
-                'final_count': report.final_feature_count,
-                'redundancy_removed_pct': round(report.redundancy_removed_pct, 2)
+                'original_count': int(report.original_feature_count),
+                'final_count': int(report.final_feature_count),
+                'redundancy_removed_pct': round(float(report.redundancy_removed_pct), 2)
             },
-            'optimal_features': report.kept_features,
-            'removed_features': report.removed_features,
+            'optimal_features': list(report.kept_features),
+            'removed_features': list(report.removed_features),
             'clusters': [
                 {
-                    'cluster_id': c.cluster_id,
-                    'representative': c.representative,
-                    'members': c.features,
-                    'avg_correlation': round(c.avg_correlation, 4)
+                    'cluster_id': int(c.cluster_id),
+                    'representative': str(c.representative),
+                    'members': list(c.features),
+                    'avg_correlation': round(float(c.avg_correlation), 4)
                 }
                 for c in report.clusters
             ]
@@ -709,31 +811,55 @@ def main():
     args = parser.parse_args()
     config = FeatureOptimizationConfig()
 
-    if args.analyze:
+    if args.analyze or args.reduce:
         logger.info("=" * 60)
-        logger.info("FEATURE CORRELATION ANALYSIS")
-        logger.info("=" * 60)
-
-        # This would normally use real feature data
-        # For demo, create sample correlation analysis
-        print("\nTo analyze features, you need generated feature data.")
-        print("Run the training pipeline first to generate features,")
-        print("then re-run this script.")
-        print("\nExample workflow:")
-        print("  1. python scripts/train_models.py --generate-features-only")
-        print("  2. python scripts/optimize_features.py --analyze")
-
-    elif args.reduce:
-        logger.info("=" * 60)
-        logger.info("FEATURE REDUCTION")
+        logger.info("FEATURE CORRELATION ANALYSIS" if args.analyze else "FEATURE REDUCTION")
         logger.info("=" * 60)
 
-        print("\nFeature reduction requires generated feature data.")
-        print("This will:")
-        print("  1. Compute correlation matrix")
-        print("  2. Cluster correlated features")
-        print("  3. Select 60-80 optimal features")
-        print("  4. Export to config/optimal_features.yaml")
+        # Generate features from raw data
+        print(f"\nGenerating technical features for {args.symbol}...")
+
+        data_path = Path("data/raw") / f"{args.symbol}_15min.csv"
+        if not data_path.exists():
+            print(f"Data file not found: {data_path}")
+            return
+
+        df = pd.read_csv(data_path, parse_dates=['timestamp'], index_col='timestamp')
+
+        # Generate basic technical features
+        features = generate_technical_features(df)
+        print(f"Generated {len(features.columns)} features")
+
+        # Analyze correlations
+        analyzer = CorrelationAnalyzer(config)
+        corr_matrix = analyzer.compute_correlation_matrix(features)
+
+        # Find high correlation pairs
+        high_corr_pairs = analyzer.find_high_correlation_pairs(corr_matrix, threshold=0.95)
+        print(f"\nFound {len(high_corr_pairs)} highly correlated pairs (>0.95):")
+        for f1, f2, corr in high_corr_pairs[:10]:
+            print(f"  {f1} <-> {f2}: {corr:.3f}")
+
+        # Rank analysis
+        rank_info = analyzer.rank_matrix_analysis(corr_matrix)
+        print(f"\nMatrix Analysis:")
+        print(f"  Features: {rank_info['matrix_size']}")
+        print(f"  Effective rank: {rank_info['effective_rank']}")
+        print(f"  Redundant dimensions: {rank_info['redundant_dimensions']}")
+
+        if args.reduce:
+            # Perform clustering and reduction
+            selector = OptimalFeatureSelector(config)
+            report = selector.select_optimal_features(features, target_count=config.max_features)
+
+            print(f"\nFeature Reduction Results:")
+            print(f"  Original: {report.original_feature_count}")
+            print(f"  Final: {report.final_feature_count}")
+            print(f"  Removed: {report.redundancy_removed_pct:.1f}%")
+
+            # Export to YAML
+            selector.export_feature_list(report, args.output)
+            print(f"\nOptimal features exported to: {args.output}")
 
     elif args.add_regime:
         logger.info("=" * 60)
