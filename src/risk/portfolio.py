@@ -906,6 +906,344 @@ class PortfolioOptimizer:
         return pd.DataFrame(frontier)
 
 
+class HierarchicalRiskParity:
+    """
+    Hierarchical Risk Parity (HRP) Portfolio Optimization.
+
+    Based on "Building Diversified Portfolios that Outperform Out-of-Sample"
+    by Marcos López de Prado.
+
+    HRP addresses key problems with traditional mean-variance optimization:
+    1. Doesn't require covariance matrix inversion (more stable)
+    2. Works well with singular covariance matrices
+    3. Better out-of-sample performance
+    4. More intuitive hierarchical structure
+
+    The algorithm works in three steps:
+    1. Tree Clustering: Hierarchical clustering of assets based on correlations
+    2. Quasi-Diagonalization: Reorder assets to place similar ones together
+    3. Recursive Bisection: Allocate weights based on cluster variance
+    """
+
+    def __init__(
+        self,
+        linkage_method: str = 'single',
+        distance_metric: str = 'correlation',
+        risk_measure: str = 'variance'
+    ):
+        """
+        Initialize HRP optimizer.
+
+        Args:
+            linkage_method: Hierarchical clustering linkage method
+                           ('single', 'complete', 'average', 'ward')
+            distance_metric: Distance metric for clustering
+                            ('correlation', 'euclidean')
+            risk_measure: Risk measure for allocation
+                         ('variance', 'cvar', 'mad')
+        """
+        self.linkage_method = linkage_method
+        self.distance_metric = distance_metric
+        self.risk_measure = risk_measure
+
+    def _compute_distance_matrix(
+        self,
+        returns: pd.DataFrame
+    ) -> np.ndarray:
+        """
+        Compute distance matrix from returns.
+
+        Uses correlation-based distance: d = sqrt(0.5 * (1 - corr))
+        This ensures distance is a proper metric (triangle inequality holds).
+        """
+        corr = returns.corr()
+
+        if self.distance_metric == 'correlation':
+            # Correlation-based distance
+            dist = np.sqrt(0.5 * (1 - corr.values))
+        elif self.distance_metric == 'euclidean':
+            # Euclidean distance of standardized returns
+            from scipy.spatial.distance import pdist, squareform
+            dist = squareform(pdist(returns.T.values, metric='euclidean'))
+        else:
+            dist = np.sqrt(0.5 * (1 - corr.values))
+
+        # Ensure diagonal is zero
+        np.fill_diagonal(dist, 0)
+
+        return dist
+
+    def _hierarchical_clustering(
+        self,
+        dist_matrix: np.ndarray
+    ) -> np.ndarray:
+        """
+        Perform hierarchical clustering on distance matrix.
+
+        Returns linkage matrix.
+        """
+        from scipy.cluster.hierarchy import linkage
+        from scipy.spatial.distance import squareform
+
+        # Convert to condensed form for linkage
+        condensed_dist = squareform(dist_matrix)
+
+        # Perform hierarchical clustering
+        link = linkage(condensed_dist, method=self.linkage_method)
+
+        return link
+
+    def _quasi_diagonalize(
+        self,
+        link: np.ndarray,
+        n_assets: int
+    ) -> List[int]:
+        """
+        Quasi-diagonalize the covariance matrix by reordering assets.
+
+        Places similar assets together based on hierarchical clustering.
+        """
+        from scipy.cluster.hierarchy import leaves_list
+
+        # Get leaf ordering from dendrogram
+        return list(leaves_list(link))
+
+    def _get_cluster_variance(
+        self,
+        cov: np.ndarray,
+        cluster_items: List[int]
+    ) -> float:
+        """
+        Calculate variance of minimum variance portfolio for cluster.
+        """
+        # Covariance submatrix for cluster
+        cov_slice = cov[np.ix_(cluster_items, cluster_items)]
+
+        # Inverse-variance weights (simplified MVP)
+        diag = np.diag(cov_slice)
+
+        # Avoid division by zero
+        diag = np.where(diag > 0, diag, 1e-10)
+
+        inv_var = 1 / diag
+        weights = inv_var / np.sum(inv_var)
+
+        # Cluster variance
+        cluster_var = np.dot(weights, np.dot(cov_slice, weights))
+
+        return cluster_var
+
+    def _recursive_bisection(
+        self,
+        cov: np.ndarray,
+        sorted_indices: List[int]
+    ) -> np.ndarray:
+        """
+        Recursively bisect portfolio and allocate weights.
+
+        This is the core HRP allocation step:
+        1. Start with all assets, weight = 1
+        2. Split into two clusters
+        3. Allocate weight to each cluster inversely proportional to variance
+        4. Recurse until each cluster has one asset
+        """
+        n = len(sorted_indices)
+        weights = np.zeros(n)
+
+        # Initialize with all items in one cluster
+        clusters = [sorted_indices]
+        cluster_weights = [1.0]
+
+        while len(clusters) > 0:
+            new_clusters = []
+            new_weights = []
+
+            for i, cluster in enumerate(clusters):
+                if len(cluster) == 1:
+                    # Single item - assign its weight
+                    idx = sorted_indices.index(cluster[0])
+                    weights[cluster[0]] = cluster_weights[i]
+                else:
+                    # Bisect cluster
+                    mid = len(cluster) // 2
+                    left = cluster[:mid]
+                    right = cluster[mid:]
+
+                    # Get variance of each sub-cluster
+                    left_var = self._get_cluster_variance(cov, left)
+                    right_var = self._get_cluster_variance(cov, right)
+
+                    # Allocate inversely proportional to variance
+                    total_inv_var = 1 / (left_var + 1e-10) + 1 / (right_var + 1e-10)
+                    left_weight = (1 / (left_var + 1e-10)) / total_inv_var
+                    right_weight = 1 - left_weight
+
+                    # Apply parent weight
+                    new_clusters.append(left)
+                    new_weights.append(cluster_weights[i] * left_weight)
+                    new_clusters.append(right)
+                    new_weights.append(cluster_weights[i] * right_weight)
+
+            clusters = new_clusters
+            cluster_weights = new_weights
+
+        return weights
+
+    def optimize(
+        self,
+        returns: pd.DataFrame,
+        constraints: Optional[Dict] = None
+    ) -> Dict[str, float]:
+        """
+        Compute HRP portfolio weights.
+
+        Args:
+            returns: DataFrame of asset returns (columns = assets)
+            constraints: Optional weight constraints
+                        - min_weight: minimum weight per asset
+                        - max_weight: maximum weight per asset
+
+        Returns:
+            Dictionary mapping asset names to weights
+        """
+        symbols = list(returns.columns)
+        n = len(symbols)
+
+        if n == 0:
+            return {}
+
+        if n == 1:
+            return {symbols[0]: 1.0}
+
+        # Step 1: Compute distance matrix
+        dist_matrix = self._compute_distance_matrix(returns)
+
+        # Step 2: Hierarchical clustering
+        link = self._hierarchical_clustering(dist_matrix)
+
+        # Step 3: Quasi-diagonalize (reorder assets)
+        sorted_indices = self._quasi_diagonalize(link, n)
+
+        # Step 4: Get covariance matrix
+        cov = returns.cov().values * 252  # Annualized
+
+        # Step 5: Recursive bisection
+        weights = self._recursive_bisection(cov, sorted_indices)
+
+        # Apply constraints
+        if constraints:
+            min_weight = constraints.get('min_weight', 0)
+            max_weight = constraints.get('max_weight', 1)
+
+            # Clip weights
+            weights = np.clip(weights, min_weight, max_weight)
+
+            # Renormalize
+            weights = weights / np.sum(weights)
+
+        # Map to symbols
+        return {symbols[i]: weights[i] for i in range(n)}
+
+    def get_dendrogram_order(
+        self,
+        returns: pd.DataFrame
+    ) -> Tuple[List[str], np.ndarray]:
+        """
+        Get the hierarchical clustering dendrogram order.
+
+        Useful for visualization and understanding asset relationships.
+
+        Returns:
+            Tuple of (ordered symbols, linkage matrix)
+        """
+        symbols = list(returns.columns)
+        dist_matrix = self._compute_distance_matrix(returns)
+        link = self._hierarchical_clustering(dist_matrix)
+        sorted_indices = self._quasi_diagonalize(link, len(symbols))
+
+        ordered_symbols = [symbols[i] for i in sorted_indices]
+
+        return ordered_symbols, link
+
+    def get_cluster_metrics(
+        self,
+        returns: pd.DataFrame,
+        weights: Dict[str, float]
+    ) -> Dict[str, Any]:
+        """
+        Get metrics about the HRP allocation.
+
+        Returns clustering statistics and risk contribution analysis.
+        """
+        symbols = list(returns.columns)
+        n = len(symbols)
+
+        cov = returns.cov().values * 252
+        w = np.array([weights.get(s, 0) for s in symbols])
+
+        # Portfolio variance
+        port_var = np.dot(w, np.dot(cov, w))
+        port_vol = np.sqrt(port_var)
+
+        # Marginal risk contribution
+        marginal_contrib = np.dot(cov, w)
+        risk_contrib = w * marginal_contrib / port_vol
+
+        # Effective number of assets (diversification measure)
+        # ENB = 1 / sum(w^2)
+        enb = 1 / np.sum(w ** 2)
+
+        # Herfindahl index of risk contributions
+        rc_normalized = risk_contrib / np.sum(risk_contrib)
+        hhi = np.sum(rc_normalized ** 2)
+
+        return {
+            'portfolio_volatility': port_vol,
+            'effective_num_assets': enb,
+            'risk_contribution_hhi': hhi,
+            'risk_contributions': {symbols[i]: risk_contrib[i] for i in range(n)},
+            'marginal_contributions': {symbols[i]: marginal_contrib[i] for i in range(n)},
+            'weight_entropy': -np.sum(w * np.log(w + 1e-10))
+        }
+
+    def rolling_optimize(
+        self,
+        returns: pd.DataFrame,
+        window: int = 252,
+        rebalance_freq: int = 21
+    ) -> pd.DataFrame:
+        """
+        Perform rolling HRP optimization.
+
+        Args:
+            returns: Full return series
+            window: Lookback window for estimation
+            rebalance_freq: Rebalancing frequency in periods
+
+        Returns:
+            DataFrame of weights over time
+        """
+        symbols = list(returns.columns)
+        dates = returns.index[window::rebalance_freq]
+
+        weight_history = []
+
+        for date in dates:
+            # Get lookback window
+            end_idx = returns.index.get_loc(date)
+            start_idx = end_idx - window
+
+            window_returns = returns.iloc[start_idx:end_idx]
+
+            # Optimize
+            weights = self.optimize(window_returns)
+
+            weights['date'] = date
+            weight_history.append(weights)
+
+        return pd.DataFrame(weight_history).set_index('date')
+
+
 class RebalancingEngine:
     """
     Portfolio rebalancing engine.

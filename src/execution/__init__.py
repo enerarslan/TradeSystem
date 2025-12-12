@@ -15,6 +15,10 @@ from .executor import (
     ExecutionEngine, ExecutionAlgo, TWAPExecutor,
     VWAPExecutor, POVExecutor, AdaptiveExecutor
 )
+from .async_pipeline import (
+    AsyncTradingPipeline, PipelineBuilder, PipelineConfig,
+    PipelineState, PipelineMetrics, run_async_pipeline
+)
 
 __all__ = [
     'BrokerAPI',
@@ -33,5 +37,11 @@ __all__ = [
     'TWAPExecutor',
     'VWAPExecutor',
     'POVExecutor',
-    'AdaptiveExecutor'
+    'AdaptiveExecutor',
+    'AsyncTradingPipeline',
+    'PipelineBuilder',
+    'PipelineConfig',
+    'PipelineState',
+    'PipelineMetrics',
+    'run_async_pipeline'
 ]

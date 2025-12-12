@@ -1034,6 +1034,449 @@ class EventDrivenBacktester(BacktestEngine):
         return result
 
 
+class DynamicTransactionCostModel:
+    """
+    Dynamic Transaction Cost Analysis (TCA) Model.
+
+    Implements sophisticated transaction cost modeling that accounts for:
+    1. Market Impact: Permanent and temporary price impact from trading
+    2. Spread Costs: Bid-ask spread as function of volatility and liquidity
+    3. Timing Risk: Cost of execution delay
+    4. Opportunity Cost: Cost of not trading
+
+    Based on institutional TCA frameworks including:
+    - Almgren-Chriss market impact model
+    - Kyle's lambda (price impact coefficient)
+    - Square-root market impact law
+    """
+
+    def __init__(
+        self,
+        base_spread_bps: float = 5.0,
+        permanent_impact_bps: float = 2.0,
+        temporary_impact_bps: float = 3.0,
+        volatility_spread_factor: float = 0.5,
+        volume_impact_exponent: float = 0.5,
+        urgency_factor: float = 1.0
+    ):
+        """
+        Initialize DynamicTransactionCostModel.
+
+        Args:
+            base_spread_bps: Base bid-ask spread in basis points
+            permanent_impact_bps: Permanent market impact coefficient
+            temporary_impact_bps: Temporary market impact coefficient
+            volatility_spread_factor: How much spread widens per unit volatility
+            volume_impact_exponent: Exponent for volume impact (0.5 = square root)
+            urgency_factor: Urgency multiplier (higher = more aggressive execution)
+        """
+        self.base_spread_bps = base_spread_bps
+        self.permanent_impact_bps = permanent_impact_bps
+        self.temporary_impact_bps = temporary_impact_bps
+        self.volatility_spread_factor = volatility_spread_factor
+        self.volume_impact_exponent = volume_impact_exponent
+        self.urgency_factor = urgency_factor
+
+        # Running statistics for adaptive estimation
+        self._realized_costs: List[Dict] = []
+        self._estimated_costs: List[Dict] = []
+
+    def estimate_spread(
+        self,
+        price: float,
+        volatility: float,
+        avg_volume: float,
+        current_volume: float
+    ) -> float:
+        """
+        Estimate effective bid-ask spread.
+
+        Spread widens with:
+        - Higher volatility
+        - Lower liquidity (volume)
+
+        Args:
+            price: Current price
+            volatility: Recent price volatility (e.g., 20-bar std of returns)
+            avg_volume: Average volume
+            current_volume: Current bar volume
+
+        Returns:
+            Estimated spread in dollars
+        """
+        # Base spread
+        spread_bps = self.base_spread_bps
+
+        # Volatility adjustment
+        vol_factor = 1 + self.volatility_spread_factor * volatility * 100
+        spread_bps *= vol_factor
+
+        # Liquidity adjustment (spread widens when volume is low)
+        if current_volume > 0 and avg_volume > 0:
+            liquidity_ratio = avg_volume / current_volume
+            liquidity_factor = 1 + 0.5 * max(0, liquidity_ratio - 1)
+            spread_bps *= min(liquidity_factor, 3.0)  # Cap at 3x
+
+        return price * spread_bps / 10000
+
+    def estimate_market_impact(
+        self,
+        order_value: float,
+        adv: float,
+        volatility: float,
+        side: str = 'buy'
+    ) -> Dict[str, float]:
+        """
+        Estimate market impact using Almgren-Chriss framework.
+
+        Total Impact = Permanent Impact + Temporary Impact
+
+        Permanent: Price change that persists after trading
+        Temporary: Price change that reverts after trading
+
+        Args:
+            order_value: Total order value in dollars
+            adv: Average daily volume in dollars
+            volatility: Daily volatility (annualized / sqrt(252))
+            side: 'buy' or 'sell'
+
+        Returns:
+            Dict with permanent, temporary, and total impact in dollars
+        """
+        if adv <= 0:
+            return {'permanent': 0, 'temporary': 0, 'total': 0}
+
+        # Participation rate (fraction of daily volume)
+        participation = order_value / adv
+
+        # Square-root impact model: impact ~ sigma * sqrt(participation)
+        impact_base = volatility * (participation ** self.volume_impact_exponent)
+
+        # Permanent impact (persistent price change)
+        permanent = order_value * impact_base * self.permanent_impact_bps / 10000
+
+        # Temporary impact (transient price change)
+        # Includes urgency factor - more urgent = higher temporary cost
+        temporary = order_value * impact_base * self.temporary_impact_bps / 10000
+        temporary *= self.urgency_factor
+
+        # Direction adjustment
+        sign = 1 if side.lower() == 'buy' else -1
+
+        return {
+            'permanent': permanent * sign,
+            'temporary': temporary * sign,
+            'total': (permanent + temporary) * sign,
+            'participation_rate': participation,
+            'impact_bps': (permanent + temporary) / order_value * 10000 if order_value > 0 else 0
+        }
+
+    def estimate_total_cost(
+        self,
+        order_value: float,
+        price: float,
+        adv: float,
+        volatility: float,
+        avg_volume: float,
+        current_volume: float,
+        side: str = 'buy',
+        commission_rate: float = 0.0001
+    ) -> Dict[str, float]:
+        """
+        Estimate total transaction cost for an order.
+
+        Total Cost = Spread Cost + Market Impact + Commission
+
+        Args:
+            order_value: Order value in dollars
+            price: Current price
+            adv: Average daily volume in dollars
+            volatility: Price volatility
+            avg_volume: Average bar volume
+            current_volume: Current bar volume
+            side: 'buy' or 'sell'
+            commission_rate: Commission as fraction of notional
+
+        Returns:
+            Dict with detailed cost breakdown
+        """
+        # Spread cost (half spread for crossing)
+        spread = self.estimate_spread(price, volatility, avg_volume, current_volume)
+        spread_cost = (spread / 2) * (order_value / price)
+
+        # Market impact
+        impact = self.estimate_market_impact(order_value, adv, volatility, side)
+        impact_cost = abs(impact['total'])
+
+        # Commission
+        commission = order_value * commission_rate
+
+        # Timing risk (opportunity cost of delayed execution)
+        # Estimated as half the volatility times order value
+        timing_risk = order_value * volatility * 0.5
+
+        total_cost = spread_cost + impact_cost + commission
+
+        return {
+            'spread_cost': spread_cost,
+            'spread_cost_bps': spread_cost / order_value * 10000 if order_value > 0 else 0,
+            'market_impact': impact_cost,
+            'market_impact_bps': impact_cost / order_value * 10000 if order_value > 0 else 0,
+            'permanent_impact': abs(impact['permanent']),
+            'temporary_impact': abs(impact['temporary']),
+            'commission': commission,
+            'timing_risk': timing_risk,
+            'total_cost': total_cost,
+            'total_cost_bps': total_cost / order_value * 10000 if order_value > 0 else 0,
+            'participation_rate': impact['participation_rate']
+        }
+
+    def estimate_optimal_execution(
+        self,
+        total_shares: int,
+        price: float,
+        adv: float,
+        volatility: float,
+        max_participation: float = 0.1,
+        time_horizon_bars: int = 26  # ~1 day in 15-min bars
+    ) -> Dict[str, Any]:
+        """
+        Calculate optimal execution schedule using Almgren-Chriss framework.
+
+        Minimizes: E[Cost] + lambda * Var[Cost]
+
+        Args:
+            total_shares: Total shares to execute
+            price: Current price
+            adv: Average daily volume in shares
+            volatility: Daily volatility
+            max_participation: Maximum participation rate per bar
+            time_horizon_bars: Number of bars to complete execution
+
+        Returns:
+            Optimal execution schedule and expected costs
+        """
+        order_value = total_shares * price
+
+        # Calculate bars needed given participation constraint
+        min_bars = int(np.ceil(total_shares / (adv / 26 * max_participation)))
+        n_bars = max(min_bars, time_horizon_bars)
+
+        # Optimal trajectory (Almgren-Chriss closed form)
+        # For risk-neutral trader: linear execution
+        # For risk-averse: front-loaded execution
+
+        # Risk aversion parameter (higher = more front-loaded)
+        risk_aversion = 1e-6
+
+        # Urgency rate
+        kappa = np.sqrt(risk_aversion * volatility ** 2 / self.temporary_impact_bps)
+
+        # Generate optimal trajectory
+        shares_per_bar = []
+        remaining = total_shares
+
+        for t in range(n_bars):
+            if remaining <= 0:
+                break
+
+            # Exponentially decaying execution for risk-averse
+            decay = np.exp(-kappa * t / n_bars)
+            shares_this_bar = int(remaining * decay / sum(
+                np.exp(-kappa * i / n_bars) for i in range(t, n_bars)
+            ))
+
+            # Apply participation constraint
+            max_shares = int(adv / 26 * max_participation)
+            shares_this_bar = min(shares_this_bar, max_shares, remaining)
+
+            shares_per_bar.append(shares_this_bar)
+            remaining -= shares_this_bar
+
+        # Add any remaining shares to last bar
+        if remaining > 0 and shares_per_bar:
+            shares_per_bar[-1] += remaining
+
+        # Calculate expected cost
+        avg_bar_volume = adv / 26
+        expected_impact = 0
+
+        for shares in shares_per_bar:
+            bar_participation = shares / avg_bar_volume if avg_bar_volume > 0 else 0
+            impact = volatility * (bar_participation ** self.volume_impact_exponent)
+            expected_impact += shares * price * impact * (
+                self.permanent_impact_bps + self.temporary_impact_bps
+            ) / 10000
+
+        return {
+            'schedule': shares_per_bar,
+            'n_bars': len(shares_per_bar),
+            'expected_impact_cost': expected_impact,
+            'expected_impact_bps': expected_impact / order_value * 10000 if order_value > 0 else 0,
+            'avg_participation': np.mean([s / avg_bar_volume for s in shares_per_bar]) if avg_bar_volume > 0 else 0,
+            'max_participation': max(s / avg_bar_volume for s in shares_per_bar) if shares_per_bar and avg_bar_volume > 0 else 0
+        }
+
+    def calculate_implementation_shortfall(
+        self,
+        decision_price: float,
+        avg_fill_price: float,
+        side: str,
+        shares: int,
+        benchmark_price: Optional[float] = None
+    ) -> Dict[str, float]:
+        """
+        Calculate implementation shortfall (IS).
+
+        IS = (Execution Price - Decision Price) for buys
+        IS = (Decision Price - Execution Price) for sells
+
+        Args:
+            decision_price: Price when decision was made
+            avg_fill_price: Average execution price
+            side: 'buy' or 'sell'
+            shares: Number of shares
+            benchmark_price: Optional benchmark (e.g., VWAP, arrival price)
+
+        Returns:
+            Dict with IS breakdown
+        """
+        benchmark = benchmark_price or decision_price
+
+        if side.lower() == 'buy':
+            is_per_share = avg_fill_price - decision_price
+            benchmark_shortfall = avg_fill_price - benchmark
+        else:
+            is_per_share = decision_price - avg_fill_price
+            benchmark_shortfall = benchmark - avg_fill_price
+
+        total_is = is_per_share * shares
+        total_benchmark = benchmark_shortfall * shares
+
+        return {
+            'implementation_shortfall': total_is,
+            'is_per_share': is_per_share,
+            'is_bps': is_per_share / decision_price * 10000,
+            'benchmark_shortfall': total_benchmark,
+            'decision_price': decision_price,
+            'avg_fill_price': avg_fill_price,
+            'benchmark_price': benchmark
+        }
+
+    def analyze_execution_quality(
+        self,
+        trades: List['Trade'],
+        market_data: pd.DataFrame
+    ) -> Dict[str, Any]:
+        """
+        Analyze execution quality for a list of trades.
+
+        Computes various TCA metrics including:
+        - Average spread captured
+        - Market impact analysis
+        - Implementation shortfall
+        - Comparison to benchmarks (VWAP, TWAP)
+
+        Args:
+            trades: List of Trade objects
+            market_data: OHLCV data for the period
+
+        Returns:
+            Comprehensive TCA analysis
+        """
+        if not trades:
+            return {'error': 'No trades to analyze'}
+
+        analysis = {
+            'total_trades': len(trades),
+            'total_volume': sum(t.quantity for t in trades),
+            'total_notional': sum(t.notional for t in trades),
+            'total_commission': sum(t.commission for t in trades),
+            'total_slippage': sum(abs(t.slippage) * t.quantity for t in trades),
+
+            # Per-trade metrics
+            'avg_slippage_bps': np.mean([
+                t.slippage / t.fill_price * 10000 for t in trades if t.fill_price > 0
+            ]),
+            'avg_commission_bps': np.mean([
+                t.commission / t.notional * 10000 for t in trades if t.notional > 0
+            ]),
+
+            # Implementation shortfall
+            'total_is': sum(
+                (t.fill_price - t.price) * t.quantity if t.side == 'buy'
+                else (t.price - t.fill_price) * t.quantity
+                for t in trades
+            ),
+
+            # Cost breakdown by side
+            'buy_trades': len([t for t in trades if t.side == 'buy']),
+            'sell_trades': len([t for t in trades if t.side == 'sell']),
+        }
+
+        # Add per-trade metrics
+        analysis['avg_is_bps'] = (
+            analysis['total_is'] / analysis['total_notional'] * 10000
+            if analysis['total_notional'] > 0 else 0
+        )
+
+        # Total effective cost
+        analysis['total_effective_cost'] = (
+            analysis['total_commission'] +
+            analysis['total_slippage'] +
+            analysis['total_is']
+        )
+        analysis['effective_cost_bps'] = (
+            analysis['total_effective_cost'] / analysis['total_notional'] * 10000
+            if analysis['total_notional'] > 0 else 0
+        )
+
+        return analysis
+
+    def update_from_realized(
+        self,
+        estimated: Dict[str, float],
+        realized: Dict[str, float]
+    ) -> None:
+        """
+        Update model parameters based on realized vs estimated costs.
+
+        Enables adaptive learning of transaction cost parameters.
+
+        Args:
+            estimated: Estimated costs before execution
+            realized: Realized costs after execution
+        """
+        self._estimated_costs.append(estimated)
+        self._realized_costs.append(realized)
+
+        # Keep last 100 observations
+        if len(self._realized_costs) > 100:
+            self._realized_costs = self._realized_costs[-100:]
+            self._estimated_costs = self._estimated_costs[-100:]
+
+    def get_estimation_accuracy(self) -> Dict[str, float]:
+        """Get accuracy metrics for cost estimation."""
+        if len(self._realized_costs) < 10:
+            return {'error': 'Insufficient data'}
+
+        estimated = np.array([e.get('total_cost_bps', 0) for e in self._estimated_costs])
+        realized = np.array([r.get('total_cost_bps', 0) for r in self._realized_costs])
+
+        mae = np.mean(np.abs(estimated - realized))
+        rmse = np.sqrt(np.mean((estimated - realized) ** 2))
+        bias = np.mean(estimated - realized)
+        correlation = np.corrcoef(estimated, realized)[0, 1] if len(estimated) > 1 else 0
+
+        return {
+            'mae_bps': mae,
+            'rmse_bps': rmse,
+            'bias_bps': bias,
+            'correlation': correlation,
+            'n_observations': len(realized)
+        }
+
+
 class WalkForwardOptimizer:
     """
     Walk-forward optimization framework.
