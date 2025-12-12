@@ -521,6 +521,336 @@ class CatBoostModel(BaseModel):
         return self._model.feature_importances_
 
 
+class MetaLabelingModel:
+    """
+    Meta-Labeling Framework for bet sizing and filtering.
+
+    Based on "Advances in Financial Machine Learning" by Marcos López de Prado.
+
+    Meta-labeling works in two stages:
+    1. Primary Model: Generates trading signals (side: long/short)
+    2. Secondary Model: Predicts probability of primary model being correct
+
+    Benefits:
+    - Transforms problem to binary classification (easier to solve)
+    - Provides bet sizing through prediction probabilities
+    - Allows filtering of low-confidence trades
+    - Can use different features for each model
+    """
+
+    def __init__(
+        self,
+        primary_model: BaseModel,
+        secondary_model: Optional[BaseModel] = None,
+        secondary_model_type: str = 'lightgbm',
+        prob_threshold: float = 0.5,
+        bet_sizing_method: str = 'linear',
+        max_bet_size: float = 1.0
+    ):
+        """
+        Initialize MetaLabelingModel.
+
+        Args:
+            primary_model: Model that generates trading signals (side)
+            secondary_model: Model that predicts if primary is correct
+                            (if None, creates default LightGBM)
+            secondary_model_type: Type for auto-created secondary model
+            prob_threshold: Minimum probability to take a trade
+            bet_sizing_method: 'linear', 'sigmoid', or 'kelly'
+            max_bet_size: Maximum position size (as fraction)
+        """
+        self.primary_model = primary_model
+        self.prob_threshold = prob_threshold
+        self.bet_sizing_method = bet_sizing_method
+        self.max_bet_size = max_bet_size
+
+        # Create secondary model if not provided
+        if secondary_model is None:
+            if secondary_model_type == 'lightgbm':
+                self.secondary_model = LightGBMModel(task='classification')
+            elif secondary_model_type == 'xgboost':
+                self.secondary_model = XGBoostModel(task='classification')
+            elif secondary_model_type == 'catboost':
+                self.secondary_model = CatBoostModel(task='classification')
+            else:
+                from sklearn.ensemble import RandomForestClassifier
+                self.secondary_model = RandomForestModel(task='classification')
+        else:
+            self.secondary_model = secondary_model
+
+        self._is_fitted = False
+        self._meta_labels = None
+
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        triple_barrier_events: Optional[pd.DataFrame] = None,
+        validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None,
+        **kwargs
+    ) -> 'MetaLabelingModel':
+        """
+        Fit the meta-labeling model.
+
+        Args:
+            X: Feature DataFrame
+            y: Target labels (from triple barrier or other labeling)
+            triple_barrier_events: Events DataFrame from triple barrier method
+                                   containing 't1', 'ret', 'label', 'barrier'
+            validation_data: Validation data tuple
+            **kwargs: Additional fit parameters
+
+        Returns:
+            Self for chaining
+        """
+        # Step 1: Get primary model predictions (sides)
+        if not self.primary_model._is_trained:
+            raise RuntimeError("Primary model must be trained first")
+
+        primary_pred = self.primary_model.predict(X)
+        primary_side = pd.Series(primary_pred, index=X.index)
+
+        # Convert to +1/-1 if needed
+        if set(primary_side.unique()) == {0, 1}:
+            primary_side = primary_side * 2 - 1  # Convert 0/1 to -1/+1
+
+        # Step 2: Create meta-labels
+        # Meta-label = 1 if primary prediction matches actual outcome
+        if triple_barrier_events is not None:
+            # Use triple barrier labels
+            actual_labels = triple_barrier_events['label']
+        else:
+            actual_labels = y
+
+        # Meta-label: 1 if primary was correct direction, 0 otherwise
+        # For a long prediction (+1), correct if actual return > 0
+        # For a short prediction (-1), correct if actual return < 0
+        meta_labels = (primary_side * actual_labels > 0).astype(int)
+
+        self._meta_labels = meta_labels
+
+        # Step 3: Train secondary model on meta-labels
+        # Prepare validation data for secondary model
+        val_data = None
+        if validation_data is not None:
+            X_val, y_val = validation_data
+            primary_pred_val = self.primary_model.predict(X_val)
+            primary_side_val = pd.Series(primary_pred_val, index=X_val.index)
+            if set(primary_side_val.unique()) == {0, 1}:
+                primary_side_val = primary_side_val * 2 - 1
+
+            if triple_barrier_events is not None and len(triple_barrier_events) == len(y_val):
+                actual_val = triple_barrier_events.loc[X_val.index, 'label']
+            else:
+                actual_val = y_val
+
+            meta_labels_val = (primary_side_val * actual_val > 0).astype(int)
+            val_data = (X_val, meta_labels_val)
+
+        # Train secondary model
+        self.secondary_model.fit(
+            X, meta_labels,
+            validation_data=val_data,
+            **kwargs
+        )
+
+        self._is_fitted = True
+        logger.info(
+            f"Meta-labeling model fitted. "
+            f"Positive rate: {meta_labels.mean():.2%}"
+        )
+
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Make predictions with meta-labeling.
+
+        Returns the primary model's signal, filtered by secondary model.
+
+        Args:
+            X: Feature DataFrame
+
+        Returns:
+            Filtered predictions (-1, 0, or 1)
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Model not fitted")
+
+        # Get primary predictions (sides)
+        primary_pred = self.primary_model.predict(X)
+        primary_side = np.array(primary_pred)
+
+        # Convert to +1/-1 if needed
+        if set(np.unique(primary_side)) <= {0, 1}:
+            primary_side = primary_side * 2 - 1
+
+        # Get secondary model probability
+        proba = self.secondary_model.predict_proba(X)
+
+        # Handle binary vs multi-class probability output
+        if proba.ndim == 2:
+            # Probability of class 1 (primary being correct)
+            confidence = proba[:, 1] if proba.shape[1] == 2 else proba[:, -1]
+        else:
+            confidence = proba
+
+        # Filter trades based on probability threshold
+        # Return 0 (no trade) if confidence is below threshold
+        filtered_signal = np.where(
+            confidence >= self.prob_threshold,
+            primary_side,
+            0
+        )
+
+        return filtered_signal
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Get prediction probabilities from secondary model.
+
+        Args:
+            X: Feature DataFrame
+
+        Returns:
+            Probability array
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Model not fitted")
+
+        return self.secondary_model.predict_proba(X)
+
+    def get_bet_sizes(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Calculate bet sizes based on meta-model confidence.
+
+        Args:
+            X: Feature DataFrame
+
+        Returns:
+            Array of bet sizes (0 to max_bet_size)
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Model not fitted")
+
+        # Get probabilities
+        proba = self.secondary_model.predict_proba(X)
+
+        if proba.ndim == 2:
+            confidence = proba[:, 1] if proba.shape[1] == 2 else proba[:, -1]
+        else:
+            confidence = proba
+
+        # Calculate bet size based on method
+        if self.bet_sizing_method == 'linear':
+            # Linear scaling: 0.5 prob -> 0, 1.0 prob -> max_bet
+            bet_sizes = np.maximum(0, (confidence - 0.5) * 2) * self.max_bet_size
+
+        elif self.bet_sizing_method == 'sigmoid':
+            # Sigmoid scaling for smoother bet sizing
+            # Map probability to bet size with steeper curve
+            z = (confidence - 0.5) * 10  # Scale and center
+            bet_sizes = (1 / (1 + np.exp(-z))) * self.max_bet_size
+
+        elif self.bet_sizing_method == 'kelly':
+            # Simplified Kelly criterion
+            # f = p - (1-p)/b where b=1 for equal payoffs
+            # f = 2p - 1
+            bet_sizes = np.maximum(0, 2 * confidence - 1) * self.max_bet_size
+
+        else:
+            bet_sizes = confidence * self.max_bet_size
+
+        # Apply threshold filter
+        bet_sizes = np.where(confidence >= self.prob_threshold, bet_sizes, 0)
+
+        return bet_sizes
+
+    def get_sized_positions(self, X: pd.DataFrame) -> pd.DataFrame:
+        """
+        Get full position recommendations with sides and sizes.
+
+        Args:
+            X: Feature DataFrame
+
+        Returns:
+            DataFrame with 'signal', 'probability', 'bet_size', 'position'
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Model not fitted")
+
+        signals = self.predict(X)
+        bet_sizes = self.get_bet_sizes(X)
+
+        proba = self.secondary_model.predict_proba(X)
+        if proba.ndim == 2:
+            confidence = proba[:, 1] if proba.shape[1] == 2 else proba[:, -1]
+        else:
+            confidence = proba
+
+        positions = pd.DataFrame({
+            'signal': signals,
+            'probability': confidence,
+            'bet_size': bet_sizes,
+            'position': signals * bet_sizes  # Signed position size
+        }, index=X.index)
+
+        return positions
+
+    def evaluate(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, float]:
+        """
+        Evaluate meta-labeling model.
+
+        Args:
+            X: Feature DataFrame
+            y: True labels
+
+        Returns:
+            Dictionary with evaluation metrics
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Model not fitted")
+
+        predictions = self.predict(X)
+
+        # Calculate metrics
+        # Accuracy on filtered trades only
+        active_mask = predictions != 0
+        if active_mask.sum() > 0:
+            active_preds = predictions[active_mask]
+            active_actual = y.values[active_mask]
+
+            correct = (np.sign(active_preds) == np.sign(active_actual))
+            filtered_accuracy = correct.mean()
+        else:
+            filtered_accuracy = 0.0
+
+        # Coverage: percentage of samples with non-zero prediction
+        coverage = active_mask.mean()
+
+        # Secondary model accuracy on meta-labels
+        meta_pred = self.secondary_model.predict(X)
+        primary_pred = self.primary_model.predict(X)
+        primary_side = np.array(primary_pred)
+        if set(np.unique(primary_side)) <= {0, 1}:
+            primary_side = primary_side * 2 - 1
+
+        actual_meta = (primary_side * y.values > 0).astype(int)
+        meta_accuracy = (meta_pred == actual_meta).mean()
+
+        return {
+            'filtered_accuracy': filtered_accuracy,
+            'coverage': coverage,
+            'meta_model_accuracy': meta_accuracy,
+            'n_trades': int(active_mask.sum()),
+            'n_samples': len(X)
+        }
+
+    def get_feature_importance(self) -> Dict[str, float]:
+        """Get feature importance from secondary model."""
+        return self.secondary_model.get_feature_importance()
+
+
 class RandomForestModel(BaseModel):
     """
     Random Forest classifier/regressor.

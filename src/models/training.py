@@ -613,3 +613,454 @@ class WalkForwardValidator:
             return 0.0
 
         return (correct.mean() - 0.5) / correct.std() * np.sqrt(252)
+
+
+class PurgedKFoldCV:
+    """
+    Purged K-Fold Cross-Validation for Financial Time Series.
+
+    Based on "Advances in Financial Machine Learning" by Marcos López de Prado.
+
+    Key Features:
+    1. Purging: Removes training samples that overlap with test samples
+       to prevent information leakage from labels that span multiple periods
+    2. Embargo: Adds a gap after each test set before training samples
+       to account for serial correlation
+
+    This is essential for financial ML where:
+    - Labels often look forward (e.g., triple barrier method)
+    - Features may have memory (e.g., rolling windows)
+    - Serial correlation exists in returns
+
+    Without purging and embargo, cross-validation scores are overly optimistic
+    due to information leakage.
+    """
+
+    def __init__(
+        self,
+        n_splits: int = 5,
+        purge_gap: int = 0,
+        embargo_pct: float = 0.01
+    ):
+        """
+        Initialize PurgedKFoldCV.
+
+        Args:
+            n_splits: Number of CV folds
+            purge_gap: Number of periods to purge before test set
+                      (accounts for label forward-looking window)
+            embargo_pct: Percentage of test set size to embargo after test set
+                        (accounts for serial correlation)
+        """
+        self.n_splits = n_splits
+        self.purge_gap = purge_gap
+        self.embargo_pct = embargo_pct
+
+    def split(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series = None,
+        t1: pd.Series = None
+    ):
+        """
+        Generate train/test indices for purged k-fold CV.
+
+        Args:
+            X: Feature DataFrame with DatetimeIndex
+            y: Labels (optional)
+            t1: Series mapping sample start time to end time
+                (e.g., entry time to barrier touch time from triple barrier)
+                If None, assumes samples don't overlap
+
+        Yields:
+            Tuple of (train_indices, test_indices)
+        """
+        n_samples = len(X)
+        indices = np.arange(n_samples)
+
+        # Calculate embargo size
+        test_size = n_samples // self.n_splits
+        embargo_size = int(test_size * self.embargo_pct)
+
+        for fold in range(self.n_splits):
+            # Calculate test set boundaries
+            test_start = fold * test_size
+            test_end = (fold + 1) * test_size if fold < self.n_splits - 1 else n_samples
+
+            test_indices = indices[test_start:test_end]
+
+            # Build train indices with purging and embargo
+            train_indices = []
+
+            for i in indices:
+                # Skip if in test set
+                if test_start <= i < test_end:
+                    continue
+
+                # Apply purging: skip if sample overlaps with test set
+                if t1 is not None:
+                    sample_end_time = t1.iloc[i]
+                    if pd.notna(sample_end_time):
+                        test_start_time = X.index[test_start]
+                        test_end_time = X.index[test_end - 1]
+
+                        # Sample ends after test starts -> potential leakage
+                        if sample_end_time >= test_start_time and i < test_start:
+                            continue
+
+                # Apply purge gap before test set
+                if test_start - self.purge_gap <= i < test_start:
+                    continue
+
+                # Apply embargo after test set
+                if test_end <= i < test_end + embargo_size:
+                    continue
+
+                train_indices.append(i)
+
+            yield np.array(train_indices), test_indices
+
+    def get_test_indices(self, X: pd.DataFrame) -> List[np.ndarray]:
+        """Get list of test indices for each fold."""
+        return [test_idx for _, test_idx in self.split(X)]
+
+
+class PurgedGroupTimeSeriesSplit:
+    """
+    Purged Group Time Series Split.
+
+    Combines group-aware splitting with purging/embargo for cases where
+    samples are grouped (e.g., multiple assets with same timestamp).
+
+    Based on AFML Chapter 7.
+    """
+
+    def __init__(
+        self,
+        n_splits: int = 5,
+        max_train_group_size: int = np.inf,
+        max_test_group_size: int = np.inf,
+        group_gap: int = 1,
+        embargo_pct: float = 0.01
+    ):
+        """
+        Initialize PurgedGroupTimeSeriesSplit.
+
+        Args:
+            n_splits: Number of CV folds
+            max_train_group_size: Maximum groups in training set
+            max_test_group_size: Maximum groups in test set
+            group_gap: Number of groups to gap between train/test
+            embargo_pct: Percentage of data to embargo
+        """
+        self.n_splits = n_splits
+        self.max_train_group_size = max_train_group_size
+        self.max_test_group_size = max_test_group_size
+        self.group_gap = group_gap
+        self.embargo_pct = embargo_pct
+
+    def split(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series = None,
+        groups: pd.Series = None
+    ):
+        """
+        Generate train/test indices with group-aware purging.
+
+        Args:
+            X: Feature DataFrame
+            y: Labels
+            groups: Group labels (e.g., dates for multi-asset data)
+
+        Yields:
+            Tuple of (train_indices, test_indices)
+        """
+        if groups is None:
+            # Use index as groups if not provided
+            groups = pd.Series(X.index, index=X.index)
+
+        unique_groups = groups.unique()
+        n_groups = len(unique_groups)
+
+        # Sort groups chronologically
+        unique_groups = np.sort(unique_groups)
+
+        # Calculate test set size in groups
+        test_group_size = min(
+            n_groups // self.n_splits,
+            self.max_test_group_size
+        )
+
+        # Calculate embargo in groups
+        embargo_groups = int(test_group_size * self.embargo_pct)
+
+        for fold in range(self.n_splits):
+            # Test group boundaries
+            test_group_start = fold * test_group_size
+            test_group_end = min(
+                test_group_start + test_group_size,
+                n_groups
+            )
+
+            # Train group boundaries (with gap and embargo)
+            train_group_end = max(0, test_group_start - self.group_gap)
+            train_group_start = max(
+                0,
+                train_group_end - self.max_train_group_size
+            )
+
+            # Get actual train groups
+            train_groups = unique_groups[train_group_start:train_group_end]
+            test_groups = unique_groups[test_group_start:test_group_end]
+
+            # Convert to indices
+            train_mask = groups.isin(train_groups)
+            test_mask = groups.isin(test_groups)
+
+            train_indices = np.where(train_mask)[0]
+            test_indices = np.where(test_mask)[0]
+
+            if len(train_indices) > 0 and len(test_indices) > 0:
+                yield train_indices, test_indices
+
+
+class CombinatorialPurgedCV:
+    """
+    Combinatorial Purged Cross-Validation (CPCV).
+
+    AFML Chapter 12 approach that generates more diverse train/test
+    combinations while respecting temporal structure.
+
+    This method:
+    1. Divides data into N groups
+    2. Uses combinatorial selection for test sets
+    3. Applies purging between groups
+    4. Generates more paths than standard k-fold
+    """
+
+    def __init__(
+        self,
+        n_groups: int = 6,
+        n_test_groups: int = 2,
+        purge_gap: int = 0,
+        embargo_pct: float = 0.01
+    ):
+        """
+        Initialize CombinatorialPurgedCV.
+
+        Args:
+            n_groups: Total number of groups to divide data into
+            n_test_groups: Number of groups to use for testing
+            purge_gap: Gap between train and test
+            embargo_pct: Embargo percentage
+        """
+        self.n_groups = n_groups
+        self.n_test_groups = n_test_groups
+        self.purge_gap = purge_gap
+        self.embargo_pct = embargo_pct
+
+    def split(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series = None,
+        t1: pd.Series = None
+    ):
+        """
+        Generate combinatorial train/test splits.
+
+        Args:
+            X: Feature DataFrame
+            y: Labels
+            t1: Label end times for purging
+
+        Yields:
+            Tuple of (train_indices, test_indices)
+        """
+        from itertools import combinations
+
+        n_samples = len(X)
+        indices = np.arange(n_samples)
+
+        # Divide into groups
+        group_size = n_samples // self.n_groups
+        groups = []
+
+        for i in range(self.n_groups):
+            start = i * group_size
+            end = (i + 1) * group_size if i < self.n_groups - 1 else n_samples
+            groups.append(indices[start:end])
+
+        # Generate all combinations of test groups
+        for test_group_indices in combinations(range(self.n_groups), self.n_test_groups):
+            test_indices = np.concatenate([groups[i] for i in test_group_indices])
+
+            # Determine train groups (non-test, with purging)
+            train_indices_list = []
+
+            for i in range(self.n_groups):
+                if i in test_group_indices:
+                    continue
+
+                # Check for purge gap
+                should_include = True
+                for test_i in test_group_indices:
+                    # Skip if adjacent to test group
+                    if abs(i - test_i) <= 1:  # Adjacent group check
+                        # Apply embargo
+                        embargo_size = int(len(groups[i]) * self.embargo_pct)
+                        if i < test_i:
+                            # Before test: potentially trim end
+                            train_indices_list.append(groups[i][:-embargo_size] if embargo_size > 0 else groups[i])
+                        else:
+                            # After test: potentially trim start
+                            train_indices_list.append(groups[i][embargo_size:] if embargo_size > 0 else groups[i])
+                        should_include = False
+                        break
+
+                if should_include:
+                    train_indices_list.append(groups[i])
+
+            if train_indices_list:
+                train_indices = np.concatenate(train_indices_list)
+                yield train_indices, test_indices
+
+    def get_n_splits(self) -> int:
+        """Get number of splits (combinations)."""
+        from math import comb
+        return comb(self.n_groups, self.n_test_groups)
+
+
+class CrossValidationTrainer:
+    """
+    Advanced cross-validation trainer with purging support.
+
+    Integrates PurgedKFoldCV with model training for proper
+    financial time series validation.
+    """
+
+    def __init__(
+        self,
+        cv_method: str = 'purged_kfold',
+        n_splits: int = 5,
+        purge_gap: int = 0,
+        embargo_pct: float = 0.01,
+        score_metric: str = 'accuracy'
+    ):
+        """
+        Initialize CrossValidationTrainer.
+
+        Args:
+            cv_method: 'purged_kfold', 'purged_group', 'combinatorial', or 'standard'
+            n_splits: Number of CV folds
+            purge_gap: Periods to purge
+            embargo_pct: Embargo percentage
+            score_metric: Metric to optimize
+        """
+        self.cv_method = cv_method
+        self.n_splits = n_splits
+        self.purge_gap = purge_gap
+        self.embargo_pct = embargo_pct
+        self.score_metric = score_metric
+
+        # Initialize CV splitter
+        if cv_method == 'purged_kfold':
+            self.cv = PurgedKFoldCV(n_splits, purge_gap, embargo_pct)
+        elif cv_method == 'purged_group':
+            self.cv = PurgedGroupTimeSeriesSplit(n_splits, embargo_pct=embargo_pct)
+        elif cv_method == 'combinatorial':
+            self.cv = CombinatorialPurgedCV(n_groups=n_splits * 2, n_test_groups=2)
+        else:
+            from sklearn.model_selection import TimeSeriesSplit
+            self.cv = TimeSeriesSplit(n_splits=n_splits)
+
+    def cross_validate(
+        self,
+        model: 'BaseModel',
+        X: pd.DataFrame,
+        y: pd.Series,
+        t1: pd.Series = None,
+        groups: pd.Series = None,
+        return_models: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Perform cross-validation with purging.
+
+        Args:
+            model: Model to validate
+            X: Features
+            y: Labels
+            t1: Label end times (for purged_kfold)
+            groups: Group labels (for purged_group)
+            return_models: Whether to return trained models
+
+        Returns:
+            Dictionary with CV results
+        """
+        fold_results = []
+        trained_models = []
+
+        # Get splits based on CV method
+        if self.cv_method == 'purged_kfold':
+            splits = self.cv.split(X, y, t1)
+        elif self.cv_method == 'purged_group':
+            splits = self.cv.split(X, y, groups)
+        elif self.cv_method == 'combinatorial':
+            splits = self.cv.split(X, y, t1)
+        else:
+            splits = self.cv.split(X, y)
+
+        for fold, (train_idx, test_idx) in enumerate(splits):
+            logger.info(
+                f"Fold {fold + 1}: Train size={len(train_idx)}, Test size={len(test_idx)}"
+            )
+
+            X_train = X.iloc[train_idx]
+            X_test = X.iloc[test_idx]
+            y_train = y.iloc[train_idx]
+            y_test = y.iloc[test_idx]
+
+            # Clone and train model
+            model_clone = model.clone()
+            model_clone.fit(X_train, y_train)
+
+            # Evaluate
+            metrics = model_clone.evaluate(X_test, y_test)
+            metrics['fold'] = fold
+            metrics['train_size'] = len(train_idx)
+            metrics['test_size'] = len(test_idx)
+
+            fold_results.append(metrics)
+
+            if return_models:
+                trained_models.append(model_clone)
+
+        # Aggregate results
+        results_df = pd.DataFrame(fold_results)
+
+        summary = {
+            'cv_method': self.cv_method,
+            'n_splits': len(fold_results),
+            'mean_score': results_df[self.score_metric].mean(),
+            'std_score': results_df[self.score_metric].std(),
+            'min_score': results_df[self.score_metric].min(),
+            'max_score': results_df[self.score_metric].max(),
+            'fold_results': fold_results
+        }
+
+        # Add all metric means
+        for col in results_df.columns:
+            if col not in ['fold', 'train_size', 'test_size']:
+                summary[f'mean_{col}'] = results_df[col].mean()
+                summary[f'std_{col}'] = results_df[col].std()
+
+        if return_models:
+            summary['trained_models'] = trained_models
+
+        logger.info(
+            f"CV complete ({self.cv_method}): "
+            f"Mean {self.score_metric}={summary['mean_score']:.4f} "
+            f"(+/- {summary['std_score']:.4f})"
+        )
+
+        return summary

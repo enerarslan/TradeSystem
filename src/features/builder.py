@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 import warnings
 
 from .technical import TechnicalIndicators, AdvancedTechnicals
+from .fracdiff import FractionalDifferentiation, FracDiffConfig, FracDiffFeatureTransformer
 from ..utils.logger import get_logger, get_performance_logger
 from ..utils.helpers import safe_divide, timer
 
@@ -46,6 +47,12 @@ class FeatureConfig:
     min_importance: float = 0.001
     correlation_threshold: float = 0.95
 
+    # Fractional differentiation
+    use_frac_diff: bool = True
+    frac_diff_auto_optimize: bool = True
+    frac_diff_default_d: float = 0.5
+    frac_diff_threshold: float = 1e-5
+
 
 class FeatureBuilder:
     """
@@ -71,6 +78,23 @@ class FeatureBuilder:
         self._feature_functions: Dict[str, Callable] = {}
         self._register_features()
 
+        # Initialize fractional differentiation
+        if self.config.use_frac_diff:
+            frac_config = FracDiffConfig(
+                threshold=self.config.frac_diff_threshold
+            )
+            self._frac_diff = FractionalDifferentiation(frac_config)
+            self._frac_diff_transformer = FracDiffFeatureTransformer(
+                d=None if self.config.frac_diff_auto_optimize else self.config.frac_diff_default_d,
+                auto_optimize=self.config.frac_diff_auto_optimize,
+                threshold=self.config.frac_diff_threshold
+            )
+        else:
+            self._frac_diff = None
+            self._frac_diff_transformer = None
+
+        self._fitted_frac_diff_d: Dict[str, float] = {}
+
         logger.info("FeatureBuilder initialized")
 
     def _register_features(self) -> None:
@@ -85,6 +109,66 @@ class FeatureBuilder:
         self._feature_functions['statistical'] = self._generate_statistical_features
         self._feature_functions['time'] = self._generate_time_features
         self._feature_functions['pattern'] = self._generate_pattern_features
+        self._feature_functions['fracdiff'] = self._generate_fracdiff_features
+
+    def _generate_fracdiff_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate fractionally differentiated features.
+
+        Uses fractional differentiation to achieve stationarity while
+        preserving memory in the time series.
+        """
+        features = pd.DataFrame(index=df.index)
+
+        if self._frac_diff is None:
+            return features
+
+        # Apply FFD to close price
+        try:
+            result = self._frac_diff.auto_frac_diff(
+                df['close'],
+                find_optimal=self.config.frac_diff_auto_optimize
+            )
+            features['close_ffd'] = result.series
+            self._fitted_frac_diff_d['close'] = result.d
+
+            # Apply FFD to volume (log volume first)
+            log_volume = np.log1p(df['volume'])
+            vol_result = self._frac_diff.auto_frac_diff(
+                log_volume,
+                find_optimal=self.config.frac_diff_auto_optimize
+            )
+            features['log_volume_ffd'] = vol_result.series
+            self._fitted_frac_diff_d['log_volume'] = vol_result.d
+
+            # Apply to high-low range
+            hl_range = np.log(df['high'] / df['low'])
+            range_result = self._frac_diff.auto_frac_diff(hl_range, find_optimal=False)
+            features['hl_range_ffd'] = range_result.series
+
+            # Generate features using FFD close
+            if 'close_ffd' in features.columns:
+                ffd_close = features['close_ffd'].dropna()
+                if len(ffd_close) > 20:
+                    # Moving averages of FFD close
+                    features['ffd_close_sma_5'] = TechnicalIndicators.sma(features['close_ffd'], 5)
+                    features['ffd_close_sma_20'] = TechnicalIndicators.sma(features['close_ffd'], 20)
+
+                    # Z-score of FFD close
+                    ffd_mean = features['close_ffd'].rolling(20).mean()
+                    ffd_std = features['close_ffd'].rolling(20).std()
+                    features['ffd_close_zscore'] = (features['close_ffd'] - ffd_mean) / ffd_std
+
+            logger.info(f"Generated FFD features with d={result.d:.4f}")
+
+        except Exception as e:
+            logger.warning(f"FFD feature generation failed: {e}")
+
+        return features
+
+    def get_frac_diff_d(self) -> Dict[str, float]:
+        """Get fitted fractional differentiation d values"""
+        return self._fitted_frac_diff_d.copy()
 
     def build_features(
         self,
@@ -627,7 +711,8 @@ class FeatureBuilder:
         df: pd.DataFrame,
         target_type: str = 'classification',
         lookahead: Optional[int] = None,
-        threshold: Optional[float] = None
+        threshold: Optional[float] = None,
+        method: str = 'simple'
     ) -> pd.Series:
         """
         Generate target variable for ML training.
@@ -637,12 +722,18 @@ class FeatureBuilder:
             target_type: 'classification' or 'regression'
             lookahead: Periods to look ahead
             threshold: Classification threshold
+            method: 'simple' for threshold-based or 'triple_barrier' for institutional labeling
 
         Returns:
             Target series
         """
         lookahead = lookahead or self.config.target_lookahead
         threshold = threshold or self.config.target_threshold
+
+        if method == 'triple_barrier':
+            return self._generate_triple_barrier_target(
+                df, lookahead, threshold, target_type
+            )
 
         # Forward returns
         future_return = df['close'].shift(-lookahead) / df['close'] - 1
@@ -664,6 +755,284 @@ class FeatureBuilder:
             raise ValueError(f"Unknown target type: {target_type}")
 
         return target
+
+    def _generate_triple_barrier_target(
+        self,
+        df: pd.DataFrame,
+        max_holding_period: int,
+        vol_multiplier: float,
+        target_type: str = 'classification'
+    ) -> pd.Series:
+        """
+        Generate labels using the Triple Barrier Method.
+
+        Based on "Advances in Financial Machine Learning" by Marcos López de Prado.
+
+        The method uses three barriers:
+        1. Upper Barrier: Dynamic profit-taking based on volatility
+        2. Lower Barrier: Dynamic stop-loss based on volatility
+        3. Vertical Barrier: Fixed time expiration (max holding period)
+
+        Labels:
+        - 1: Upper barrier touched first (profit-take)
+        - -1: Lower barrier touched first (stop-loss)
+        - 0: Vertical barrier reached (time expiration)
+
+        Args:
+            df: OHLCV DataFrame with 'close', 'high', 'low' columns
+            max_holding_period: Maximum bars to hold position (vertical barrier)
+            vol_multiplier: Multiplier for volatility to set barrier width
+            target_type: 'classification' or 'regression'
+
+        Returns:
+            Target series with labels
+        """
+        close = df['close']
+        high = df['high']
+        low = df['low']
+
+        # Calculate daily volatility (using 20-period rolling std of returns)
+        returns = close.pct_change()
+        daily_vol = returns.rolling(window=20).std()
+
+        # Initialize result arrays
+        labels = pd.Series(index=df.index, dtype=float)
+        returns_at_barrier = pd.Series(index=df.index, dtype=float)
+        barrier_touched = pd.Series(index=df.index, dtype=str)
+
+        for i in range(len(df) - max_holding_period):
+            idx = df.index[i]
+            entry_price = close.iloc[i]
+            vol = daily_vol.iloc[i]
+
+            # Skip if volatility is NaN or zero
+            if pd.isna(vol) or vol <= 0:
+                labels.iloc[i] = np.nan
+                continue
+
+            # Set dynamic barriers based on volatility
+            upper_barrier = entry_price * (1 + vol_multiplier * vol)
+            lower_barrier = entry_price * (1 - vol_multiplier * vol)
+
+            # Look forward within holding period
+            label = 0  # Default: vertical barrier (time expiration)
+            exit_return = 0.0
+            barrier_type = 'vertical'
+
+            for j in range(1, max_holding_period + 1):
+                future_idx = i + j
+                if future_idx >= len(df):
+                    break
+
+                future_high = high.iloc[future_idx]
+                future_low = low.iloc[future_idx]
+                future_close = close.iloc[future_idx]
+
+                # Check if upper barrier is touched (using high price)
+                if future_high >= upper_barrier:
+                    label = 1
+                    exit_return = (upper_barrier - entry_price) / entry_price
+                    barrier_type = 'upper'
+                    break
+
+                # Check if lower barrier is touched (using low price)
+                if future_low <= lower_barrier:
+                    label = -1
+                    exit_return = (lower_barrier - entry_price) / entry_price
+                    barrier_type = 'lower'
+                    break
+
+                # If last bar in holding period, use close price return
+                if j == max_holding_period:
+                    exit_return = (future_close - entry_price) / entry_price
+                    # For vertical barrier, label based on return direction
+                    if target_type == 'classification':
+                        label = 0  # Neutral - time ran out
+                    barrier_type = 'vertical'
+
+            labels.iloc[i] = label
+            returns_at_barrier.iloc[i] = exit_return
+            barrier_touched.iloc[i] = barrier_type
+
+        # Store metadata for analysis
+        self._triple_barrier_returns = returns_at_barrier
+        self._triple_barrier_types = barrier_touched
+
+        if target_type == 'regression':
+            return returns_at_barrier
+
+        return labels
+
+    def generate_triple_barrier_labels(
+        self,
+        df: pd.DataFrame,
+        pt_sl: Tuple[float, float] = (1.0, 1.0),
+        min_ret: float = None,
+        max_holding_period: int = None,
+        vol_window: int = 20,
+        side: Optional[pd.Series] = None
+    ) -> pd.DataFrame:
+        """
+        Advanced Triple Barrier Method with asymmetric barriers and side betting.
+
+        This is the full implementation supporting:
+        - Asymmetric profit-taking and stop-loss multipliers
+        - Minimum return threshold for filtering
+        - Side prediction for meta-labeling integration
+        - Detailed event metadata
+
+        Args:
+            df: OHLCV DataFrame
+            pt_sl: Tuple of (profit-taking multiplier, stop-loss multiplier)
+                   relative to daily volatility. Use None to disable a barrier.
+            min_ret: Minimum return to classify as non-zero label
+            max_holding_period: Maximum holding period in bars
+            vol_window: Window for volatility calculation
+            side: Optional series indicating predicted side (1=long, -1=short)
+                  If provided, enables meta-labeling mode
+
+        Returns:
+            DataFrame with columns:
+            - 't1': Time of first barrier touch
+            - 'ret': Return at barrier touch
+            - 'label': Label (-1, 0, 1)
+            - 'barrier': Which barrier was touched ('upper', 'lower', 'vertical')
+        """
+        max_holding_period = max_holding_period or self.config.target_lookahead
+        pt_multiplier, sl_multiplier = pt_sl
+
+        close = df['close']
+        high = df['high']
+        low = df['low']
+
+        # Calculate rolling volatility
+        returns = close.pct_change()
+        daily_vol = returns.rolling(window=vol_window).std()
+
+        # Initialize events DataFrame
+        events = pd.DataFrame(index=df.index)
+        events['t1'] = pd.NaT  # Exit timestamp
+        events['ret'] = np.nan  # Return at exit
+        events['label'] = np.nan  # Label
+        events['barrier'] = ''  # Barrier type
+        events['entry_price'] = close  # Entry price
+        events['upper_barrier'] = np.nan
+        events['lower_barrier'] = np.nan
+
+        for i in range(len(df) - max_holding_period):
+            idx = df.index[i]
+            entry_price = close.iloc[i]
+            vol = daily_vol.iloc[i]
+
+            if pd.isna(vol) or vol <= 0:
+                continue
+
+            # Set barriers (asymmetric if pt_sl values differ)
+            if pt_multiplier is not None:
+                upper_barrier = entry_price * (1 + pt_multiplier * vol)
+            else:
+                upper_barrier = np.inf
+
+            if sl_multiplier is not None:
+                lower_barrier = entry_price * (1 - sl_multiplier * vol)
+            else:
+                lower_barrier = -np.inf
+
+            events.loc[idx, 'upper_barrier'] = upper_barrier
+            events.loc[idx, 'lower_barrier'] = lower_barrier
+
+            # If side is provided (meta-labeling), swap barriers for short trades
+            if side is not None and idx in side.index:
+                trade_side = side.loc[idx]
+                if trade_side == -1:  # Short trade
+                    upper_barrier, lower_barrier = lower_barrier, upper_barrier
+
+            # Find first barrier touch
+            exit_time = None
+            exit_return = 0.0
+            barrier_type = 'vertical'
+            label = 0
+
+            for j in range(1, max_holding_period + 1):
+                future_idx = i + j
+                if future_idx >= len(df):
+                    break
+
+                future_time = df.index[future_idx]
+                future_high = high.iloc[future_idx]
+                future_low = low.iloc[future_idx]
+                future_close = close.iloc[future_idx]
+
+                # Check upper barrier (profit-taking for longs)
+                if pt_multiplier is not None and future_high >= upper_barrier:
+                    exit_time = future_time
+                    exit_return = (upper_barrier - entry_price) / entry_price
+                    barrier_type = 'upper'
+                    label = 1
+                    break
+
+                # Check lower barrier (stop-loss for longs)
+                if sl_multiplier is not None and future_low <= lower_barrier:
+                    exit_time = future_time
+                    exit_return = (lower_barrier - entry_price) / entry_price
+                    barrier_type = 'lower'
+                    label = -1
+                    break
+
+                # Vertical barrier (time expiration)
+                if j == max_holding_period:
+                    exit_time = future_time
+                    exit_return = (future_close - entry_price) / entry_price
+                    barrier_type = 'vertical'
+                    # Label based on return direction if min_ret threshold
+                    if min_ret is not None:
+                        if exit_return > min_ret:
+                            label = 1
+                        elif exit_return < -min_ret:
+                            label = -1
+                        else:
+                            label = 0
+                    else:
+                        label = 0
+
+            events.loc[idx, 't1'] = exit_time
+            events.loc[idx, 'ret'] = exit_return
+            events.loc[idx, 'label'] = label
+            events.loc[idx, 'barrier'] = barrier_type
+
+        # Apply side for meta-labeling (convert to binary)
+        if side is not None:
+            # In meta-labeling, we only care if the primary model's
+            # prediction was correct (1) or not (0)
+            events['label'] = (events['label'] * side).apply(
+                lambda x: 1 if x > 0 else 0
+            )
+
+        return events
+
+    def get_triple_barrier_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about the triple barrier labeling.
+
+        Returns:
+            Dictionary with barrier touch statistics
+        """
+        if not hasattr(self, '_triple_barrier_types'):
+            return {}
+
+        barrier_counts = self._triple_barrier_types.value_counts()
+        total = len(self._triple_barrier_types.dropna())
+
+        stats = {
+            'total_labels': total,
+            'upper_barrier_pct': barrier_counts.get('upper', 0) / total * 100 if total > 0 else 0,
+            'lower_barrier_pct': barrier_counts.get('lower', 0) / total * 100 if total > 0 else 0,
+            'vertical_barrier_pct': barrier_counts.get('vertical', 0) / total * 100 if total > 0 else 0,
+            'avg_return': self._triple_barrier_returns.mean(),
+            'return_std': self._triple_barrier_returns.std(),
+        }
+
+        return stats
 
 
 class FeaturePipeline:
