@@ -431,21 +431,21 @@ class SymbolConfigUpdater:
 
             symbol_config = config['symbols'][symbol]
 
-            # Update with calculated values
+            # Update with calculated values (convert numpy types to native Python)
             symbol_config['calculated_params'] = {
-                'spread_bps': round(metrics.avg_spread_bps, 2),
+                'spread_bps': float(round(metrics.avg_spread_bps, 2)),
                 'avg_daily_volume': int(metrics.avg_daily_volume),
                 'avg_daily_dollar_volume': int(metrics.avg_daily_dollar_volume),
-                'beta': round(metrics.beta_to_spy, 3),
-                'correlation_to_spy': round(metrics.correlation_to_spy, 3),
-                'annualized_volatility': round(metrics.annualized_volatility, 4),
-                'volatility_group': metrics.volatility_group,
-                'liquidity_group': metrics.liquidity_group
+                'beta': float(round(metrics.beta_to_spy, 3)),
+                'correlation_to_spy': float(round(metrics.correlation_to_spy, 3)),
+                'annualized_volatility': float(round(metrics.annualized_volatility, 4)),
+                'volatility_group': str(metrics.volatility_group),
+                'liquidity_group': str(metrics.liquidity_group)
             }
 
             # Update spread if it was placeholder
             if symbol_config.get('spread_bps') in [None, 0, 1, 5]:
-                symbol_config['spread_bps'] = round(metrics.median_spread_bps, 1)
+                symbol_config['spread_bps'] = float(round(metrics.median_spread_bps, 1))
 
         # Add metadata
         config['calculated_params_metadata'] = {
