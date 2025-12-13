@@ -254,12 +254,16 @@ def neutralize_features(
     )
 
     # Downweight microstructure features (scale by 0.5)
+    downweighted_count = 0
     for col in microstructure_features:
         if col in neutralized.columns:
             neutralized[col] = neutralized[col] * 0.5
-            logger.debug(f"Downweighted microstructure feature: {col}")
+            downweighted_count += 1
 
-    logger.info(f"Neutralized {len(features_to_neutralize)} features")
+    if downweighted_count > 0:
+        logger.debug(f"Downweighted {downweighted_count} microstructure features")
+
+    logger.info(f"Feature neutralization completed for {len(features_to_neutralize)} features")
 
     return neutralized
 

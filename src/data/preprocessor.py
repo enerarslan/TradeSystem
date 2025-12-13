@@ -1136,8 +1136,24 @@ class FeatureNeutralizer:
 
         # Align data
         common_idx = feature.index.intersection(market_returns.index)
+
+        # Check for sufficient data overlap
+        if len(common_idx) < self.min_periods:
+            raise ValueError(
+                f"Insufficient overlapping data: {len(common_idx)} samples "
+                f"(need at least {self.min_periods})"
+            )
+
         f = feature.loc[common_idx]
         m = market_returns.loc[common_idx]
+
+        # Check for valid (non-NaN) data
+        valid_mask = f.notna() & m.notna()
+        if valid_mask.sum() < self.min_periods:
+            raise ValueError(
+                f"Insufficient non-NaN data: {valid_mask.sum()} samples "
+                f"(need at least {self.min_periods})"
+            )
 
         if rolling:
             betas = self.calculate_rolling_beta(f, m)
@@ -1181,6 +1197,7 @@ class FeatureNeutralizer:
         if columns is None:
             columns = df.select_dtypes(include=[np.number]).columns.tolist()
 
+        failed_count = 0
         for col in columns:
             if col not in df.columns:
                 continue
@@ -1189,7 +1206,16 @@ class FeatureNeutralizer:
                 neutralized = self.neutralize(df[col], market_returns, rolling)
                 result[f'{col}{suffix}'] = neutralized
             except Exception as e:
-                logger.warning(f"Failed to neutralize {col}: {e}")
+                # Use original feature when neutralization fails
+                result[f'{col}{suffix}'] = df[col]
+                failed_count += 1
+                logger.debug(f"Using raw feature for {col} (neutralization failed: {e})")
+
+        if failed_count > 0:
+            logger.info(
+                f"Feature neutralization: {len(columns) - failed_count}/{len(columns)} succeeded, "
+                f"{failed_count} features used in raw form (insufficient data overlap)"
+            )
 
         return result
 
