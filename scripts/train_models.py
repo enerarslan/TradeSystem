@@ -339,7 +339,7 @@ def train_model(
     # Model-specific parameters
     model_params = {
         'catboost': {
-            'iterations': 500,
+            'iterations': 1500,
             'depth': 5,
             'learning_rate': 0.03,
             'l2_leaf_reg': 3.0,

@@ -1,4 +1,4 @@
-training_date: '2025-12-13T18:23:11.149693'
+training_date: '2025-12-13T19:13:37.810365'
 configuration:
   model_type: catboost
   meta_labeling: true
@@ -12,35 +12,80 @@ configuration:
 data:
   symbols:
   - AAPL
-  n_symbols_processed: 1
-  n_samples: 15181
-  n_features: 47
+  - ABBV
+  - ADBE
+  - AMGN
+  - AMZN
+  - AVGO
+  - AXP
+  - BA
+  - BAC
+  - BRK.B
+  - CAT
+  - COST
+  - CRM
+  - CSCO
+  - CVX
+  - DIS
+  - DOW
+  - GOOGL
+  - GS
+  - HD
+  - HON
+  - IBM
+  - INTC
+  - JNJ
+  - JPM
+  - KO
+  - LLY
+  - MA
+  - MCD
+  - META
+  - MMM
+  - MRK
+  - MSFT
+  - NKE
+  - NVDA
+  - PEP
+  - PG
+  - TMO
+  - TRV
+  - TSLA
+  - UNH
+  - V
+  - VZ
+  - WBA
+  - WMT
+  - XOM
+  n_symbols_processed: 46
+  n_samples: 449763
+  n_features: 51
 performance:
-  train_accuracy: 0.7489625189381464
-  train_precision: 0.7507305768300093
-  train_recall: 0.7489625189381464
-  train_f1: 0.7473945966173235
-  cv_accuracy: 0.5450238234371604
-  cv_accuracy_std: 0.0038424455487004855
+  train_accuracy: 0.5713231190649297
+  train_precision: 0.5714251880533225
+  train_recall: 0.5713231190649297
+  train_f1: 0.571046279690922
+  cv_accuracy: 0.566698455432507
+  cv_accuracy_std: 0.0022696690352126403
 top_features:
-  close_ffd: 9.735599363622208
-  vol_60: 7.07335869129472
-  micro_vpin_zscore: 5.54042724170074
-  micro_amihud_illiq: 4.877956993508042
-  regime_vol_percentile: 4.63855402982507
-  micro_vpin: 4.513147156726019
-  micro_kyle_lambda: 4.485736785232465
-  vol_20: 4.204116733682348
-  micro_ofi: 3.938964141443681
-  vol_gk: 3.82506986939372
-  log_return_60: 3.8045121356069855
-  micro_micro_score: 3.5255825290834806
-  return_60: 3.4854199201733276
-  micro_kyle_lambda_pct: 3.1779314261741334
-  vol_10: 3.011018220517623
-  primary_signal: 2.8579037687115845
-  log_return_20: 2.223051003720328
-  vol_parkinson: 2.0752985185570627
-  return_20: 1.9208077476304137
-  ffd_momentum: 1.7065086143897292
-training_time_seconds: 269.3098349571228
+  primary_signal: 32.15667573381399
+  close_ffd: 5.865792448873473
+  vol_60: 4.090201087660071
+  micro_amihud_illiq: 3.5585959067365445
+  micro_vpin: 3.466915846694905
+  vol_20: 3.385212851914401
+  micro_kyle_lambda: 2.773209967003014
+  log_return_20: 2.7090953201875068
+  vol_10: 2.633009497493556
+  micro_ofi: 2.265927184376102
+  return_60: 2.2412787566495513
+  micro_vpin_zscore: 2.150066974611473
+  return_20: 2.060159969301605
+  vol_gk: 2.0065919707438815
+  log_return_60: 1.9625161469237484
+  regime_vol_percentile: 1.9385697985403365
+  close_ffd_d: 1.8966628956792386
+  volume_ffd: 1.8482136529702757
+  signal_confidence: 1.8445398407860851
+  micro_ofi_momentum: 1.8345716219134809
+training_time_seconds: 1310.6729645729065
