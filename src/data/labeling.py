@@ -343,8 +343,38 @@ class TripleBarrierLabeler:
             if len(sl_touches) > 0:
                 out.loc[t0, 'sl'] = sl_touches.index[0]
 
-            # Store final return
-            out.loc[t0, 'ret'] = returns.iloc[-1]
+            # Store return at first touch (not at t1)
+            # Determine which barrier was touched first
+            first_touch_time = None
+            first_touch_return = returns.iloc[-1]  # Default to final return
+
+            pt_time = out.loc[t0, 'pt']
+            sl_time = out.loc[t0, 'sl']
+            t1_time = out.loc[t0, 't1']
+
+            # Find first touch
+            touch_times = []
+            if pd.notna(pt_time):
+                touch_times.append(('pt', pt_time, upper_barrier))
+            if pd.notna(sl_time):
+                touch_times.append(('sl', sl_time, lower_barrier))
+            if pd.notna(t1_time):
+                touch_times.append(('t1', t1_time, returns.iloc[-1]))
+
+            if touch_times:
+                # Sort by time and get first
+                touch_times.sort(key=lambda x: x[1])
+                first_type, first_time, barrier_val = touch_times[0]
+
+                # Get return at first touch
+                if first_type == 'pt':
+                    first_touch_return = barrier_val  # Upper barrier value
+                elif first_type == 'sl':
+                    first_touch_return = barrier_val  # Lower barrier value
+                else:  # vertical
+                    first_touch_return = returns.iloc[-1]
+
+            out.loc[t0, 'ret'] = first_touch_return
 
         return out
 
