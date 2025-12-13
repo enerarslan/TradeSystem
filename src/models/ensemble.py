@@ -56,6 +56,10 @@ class EnsembleModel(BaseModel):
             weights: Weight for each model
             voting: 'soft' (probability average) or 'hard' (majority vote)
         """
+        # Filter out model_type and version (may come from clone())
+        kwargs.pop('model_type', None)
+        kwargs.pop('version', None)
+
         super().__init__(model_type='ensemble', **kwargs)
 
         self.models = models or []
@@ -298,6 +302,10 @@ class StackingEnsemble(BaseModel):
             cv_folds: Number of CV folds for base predictions
             passthrough: Include original features in meta model
         """
+        # Filter out model_type and version (may come from clone())
+        kwargs.pop('model_type', None)
+        kwargs.pop('version', None)
+
         super().__init__(model_type='stacking', **kwargs)
 
         self.base_models = base_models or []
@@ -465,6 +473,10 @@ class BlendingEnsemble(BaseModel):
         use_proba: bool = True,
         **kwargs
     ):
+        # Filter out model_type and version (may come from clone())
+        kwargs.pop('model_type', None)
+        kwargs.pop('version', None)
+
         super().__init__(model_type='blending', **kwargs)
 
         self.base_models = base_models or []

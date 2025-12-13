@@ -290,19 +290,22 @@ class CrossAssetFeatures:
         """
         features = pd.DataFrame(index=returns.index)
 
-        # Average pairwise correlation
-        def avg_correlation(data):
-            corr_matrix = data.corr()
-            # Get upper triangle (excluding diagonal)
-            upper = corr_matrix.where(
-                np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-            )
-            return upper.stack().mean()
+        # Average pairwise correlation - calculated properly for multi-column DataFrame
+        avg_corr_values = []
+        for i in range(len(returns)):
+            if i < window - 1:
+                avg_corr_values.append(np.nan)
+            else:
+                window_data = returns.iloc[i - window + 1:i + 1]
+                corr_matrix = window_data.corr()
+                # Get upper triangle (excluding diagonal)
+                upper = corr_matrix.where(
+                    np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+                )
+                avg_corr = upper.stack().mean()
+                avg_corr_values.append(avg_corr)
 
-        features['avg_correlation'] = returns.rolling(window).apply(
-            lambda x: avg_correlation(pd.DataFrame(x)),
-            raw=False
-        )
+        features['avg_correlation'] = avg_corr_values
 
         # Correlation with first principal component
         def pca_correlation(data):

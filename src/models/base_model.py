@@ -232,10 +232,16 @@ class BaseModel(ABC):
         # Save metadata - convert numpy types to native Python types
         def convert_to_serializable(obj):
             if isinstance(obj, dict):
-                return {k: convert_to_serializable(v) for k, v in obj.items()}
+                # Convert both keys and values - numpy int64 keys cause JSON serialization errors
+                return {
+                    (int(k) if isinstance(k, np.integer) else k): convert_to_serializable(v)
+                    for k, v in obj.items()
+                }
             elif isinstance(obj, (list, tuple)):
                 return [convert_to_serializable(item) for item in obj]
-            elif isinstance(obj, (np.integer, np.floating)):
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
                 return float(obj)
             elif isinstance(obj, np.ndarray):
                 return obj.tolist()
@@ -376,11 +382,13 @@ class BaseModel(ABC):
 
     def clone(self) -> 'BaseModel':
         """Create a clone of this model with same hyperparameters"""
-        return self.__class__(
-            model_type=self.model_type,
-            version=self.version,
-            **self.hyperparameters
-        )
+        # Filter out model_type and version from hyperparameters to avoid duplicate kwargs
+        # when subclasses pass these explicitly to super().__init__()
+        filtered_params = {
+            k: v for k, v in self.hyperparameters.items()
+            if k not in ('model_type', 'version')
+        }
+        return self.__class__(**filtered_params)
 
     def __repr__(self) -> str:
         return (

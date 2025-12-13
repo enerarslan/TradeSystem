@@ -65,6 +65,10 @@ class XGBoostModel(BaseModel):
             use_gpu: Whether to use GPU acceleration
             **hyperparameters: Model hyperparameters
         """
+        # Filter out model_type and version (may come from clone())
+        hyperparameters.pop('model_type', None)
+        hyperparameters.pop('version', None)
+
         # Merge with defaults
         params = {**self.DEFAULT_PARAMS, **hyperparameters}
 
@@ -261,6 +265,10 @@ class LightGBMModel(BaseModel):
             categorical_features: List of categorical feature names
             **hyperparameters: Model hyperparameters
         """
+        # Filter out model_type and version (may come from clone())
+        hyperparameters.pop('model_type', None)
+        hyperparameters.pop('version', None)
+
         params = {**self.DEFAULT_PARAMS, **hyperparameters}
 
         super().__init__(
@@ -420,6 +428,10 @@ class CatBoostModel(BaseModel):
             categorical_features: List of categorical feature names
             **hyperparameters: Model hyperparameters
         """
+        # Filter out model_type and version (may come from clone())
+        hyperparameters.pop('model_type', None)
+        hyperparameters.pop('version', None)
+
         # Map common parameter names to CatBoost equivalents
         for common_name, catboost_name in self.PARAM_MAPPING.items():
             if common_name in hyperparameters:
@@ -888,6 +900,10 @@ class RandomForestModel(BaseModel):
         task: str = 'classification',
         **hyperparameters
     ):
+        # Filter out model_type and version (may come from clone())
+        hyperparameters.pop('model_type', None)
+        hyperparameters.pop('version', None)
+
         params = {**self.DEFAULT_PARAMS, **hyperparameters}
 
         super().__init__(

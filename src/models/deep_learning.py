@@ -71,6 +71,10 @@ class LSTMModel(BaseModel):
             num_layers: Number of LSTM layers
             use_attention: Add attention mechanism
         """
+        # Filter out model_type and version (may come from clone())
+        kwargs.pop('model_type', None)
+        kwargs.pop('version', None)
+
         super().__init__(model_type='lstm', **kwargs)
 
         self.config = config or NeuralNetConfig()
@@ -352,6 +356,10 @@ class TransformerModel(BaseModel):
             n_encoder_layers: Number of transformer encoder layers
             dim_feedforward: Feedforward dimension
         """
+        # Filter out model_type and version (may come from clone())
+        kwargs.pop('model_type', None)
+        kwargs.pop('version', None)
+
         super().__init__(model_type='transformer', **kwargs)
 
         self.config = config or NeuralNetConfig()
@@ -598,6 +606,10 @@ class AttentionModel(BaseModel):
         attention_dim: int = 64,
         **kwargs
     ):
+        # Filter out model_type and version (may come from clone())
+        kwargs.pop('model_type', None)
+        kwargs.pop('version', None)
+
         super().__init__(model_type='attention', **kwargs)
 
         self.config = config or NeuralNetConfig()
