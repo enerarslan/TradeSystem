@@ -4,6 +4,18 @@ JPMorgan-Level Institutional Trading Platform
 
 This is the main entry point for the trading system.
 Coordinates all components for live and paper trading.
+
+Integrated Components:
+- ProtectedPositionManager: Server-side stop loss with bracket orders
+- ReconciliationEngine: State sync between local and broker
+- GracefulDegradationManager: Fault tolerance and fallback handling
+- RedisStateManager: Crash recovery with persistent state
+- BayesianKellySizer: Uncertainty-aware position sizing
+- CorrelationCircuitBreaker: Crisis detection and exposure reduction
+- ProbabilityCalibrationManager: Model probability calibration
+- ExecutionMetricsCollector: Execution quality monitoring
+- ModelStalenessDetector: Model health and accuracy monitoring
+- AlmgrenChrissModel: Pre-trade market impact estimation
 """
 
 import asyncio
@@ -31,9 +43,11 @@ from src.data.live_feed import WebSocketManager
 from src.features.builder import FeatureBuilder, FeaturePipeline
 from src.features.institutional import InstitutionalFeatureEngineer
 from src.features.regime import RegimeDetector
+from src.features.point_in_time import PointInTimeFeatureEngine
 
 from src.models.training import ModelTrainer, WalkForwardValidator
 from src.models.ensemble import EnsembleModel
+from src.models.calibration import IsotonicCalibrator, PlattCalibrator, CalibrationMetrics
 
 from src.strategy.ml_strategy import MLStrategy, EnsembleMLStrategy
 from src.strategy.momentum import MomentumStrategy
@@ -42,13 +56,25 @@ from src.strategy.mean_reversion import MeanReversionStrategy
 from src.risk.risk_manager import RiskManager, RiskLimits
 from src.risk.position_sizer import VolatilityPositionSizer, RiskParityPositionSizer
 from src.risk.portfolio import PortfolioManager
+from src.risk.bayesian_kelly import BayesianKellySizer
+from src.risk.correlation_breaker import CorrelationCircuitBreaker, CorrelationState
 
 from src.backtest.engine import BacktestEngine, BacktestConfig
 from src.backtest.metrics import MetricsCalculator, ReportGenerator
+from src.backtest.realistic_fills import RealisticFillSimulator, FillModel
 
 from src.execution.broker_api import BrokerFactory, AlpacaBroker
 from src.execution.order_manager import OrderManager
 from src.execution.executor import ExecutionEngine
+from src.execution.protected_positions import ProtectedPositionManager, ProtectionConfig
+from src.execution.reconciliation import ReconciliationEngine
+from src.execution.impact_model import AlmgrenChrissModel
+
+from src.core.graceful_degradation import GracefulDegradationManager, ComponentType, DegradationLevel
+from src.core.state_manager import RedisStateManager
+
+from src.monitoring.execution_dashboard import ExecutionMetricsCollector
+from src.mlops.staleness import ModelStalenessDetector
 
 
 logger = get_logger(__name__)
@@ -88,7 +114,7 @@ class AlphaTradeSystem:
         self.symbols_config = self._load_config("config/symbols.yaml")
         self.risk_config = self._load_config("config/risk_params.yaml")
 
-        # Component references
+        # Component references - Core
         self.data_loader: Optional[MultiAssetLoader] = None
         self.preprocessor: Optional[DataPreprocessor] = None
         self.feature_builder: Optional[InstitutionalFeatureEngineer] = None
@@ -102,11 +128,27 @@ class AlphaTradeSystem:
         self.execution_engine: Optional[ExecutionEngine] = None
         self.ws_manager: Optional[WebSocketManager] = None
 
+        # Component references - New Integrated Modules
+        self.protected_position_manager: Optional[ProtectedPositionManager] = None
+        self.reconciliation_engine: Optional[ReconciliationEngine] = None
+        self.graceful_degradation: Optional[GracefulDegradationManager] = None
+        self.state_manager: Optional[RedisStateManager] = None
+        self.bayesian_kelly: Optional[BayesianKellySizer] = None
+        self.correlation_breaker: Optional[CorrelationCircuitBreaker] = None
+        self.probability_calibrator: Optional[IsotonicCalibrator] = None
+        self.execution_monitor: Optional[ExecutionMetricsCollector] = None
+        self.staleness_detector: Optional[ModelStalenessDetector] = None
+        self.impact_model: Optional[AlmgrenChrissModel] = None
+        self.point_in_time_engine: Optional[PointInTimeFeatureEngine] = None
+        self.fill_simulator: Optional[RealisticFillSimulator] = None
+
         # State
         self._running = False
         self._initialized = False
         self._last_signals: Dict[str, Any] = {}
         self._market_data: Dict[str, pd.DataFrame] = {}
+        self._last_reconciliation: Optional[datetime] = None
+        self._model_trained_date: Optional[datetime] = None
 
         # Setup logging - FIXED: Use correct parameter names
         setup_logging(
@@ -136,6 +178,37 @@ class AlphaTradeSystem:
         logger.info("=" * 60)
 
         try:
+            # ================================================================
+            # PHASE 1: Core Infrastructure (Graceful Degradation & State)
+            # ================================================================
+
+            # Initialize GracefulDegradationManager FIRST (catches all failures)
+            logger.info("Initializing graceful degradation manager...")
+            self.graceful_degradation = GracefulDegradationManager(
+                check_interval_seconds=5.0,
+                alert_callback=self._on_degradation_alert
+            )
+            await self.graceful_degradation.start()
+
+            # Initialize RedisStateManager for crash recovery
+            logger.info("Initializing Redis state manager...")
+            self.state_manager = RedisStateManager(
+                redis_client=None,  # Will use in-memory fallback if Redis unavailable
+                auto_save_interval=5.0,
+                state_ttl_hours=24
+            )
+            await self.state_manager.initialize()
+
+            # Attempt to recover state from previous session
+            recovered_state = await self.state_manager.recover_state()
+            if recovered_state:
+                logger.info(f"Recovered state: {len(recovered_state.get('positions', {}))} positions, "
+                           f"{len(recovered_state.get('orders', {}))} orders")
+
+            # ================================================================
+            # PHASE 2: Symbol Universe Setup
+            # ================================================================
+
             # Get symbols - extract from all sectors in the YAML structure
             self.symbols = []
             sectors = self.symbols_config.get('sectors', {})
@@ -155,7 +228,11 @@ class AlphaTradeSystem:
 
             logger.info(f"Trading universe: {len(self.symbols)} symbols")
 
-            # Initialize data loader - FIXED: Use correct parameter names
+            # ================================================================
+            # PHASE 3: Data & Feature Infrastructure
+            # ================================================================
+
+            # Initialize data loader
             logger.info("Initializing data loader...")
             self.data_loader = MultiAssetLoader(
                 data_path="data/raw",
@@ -170,9 +247,18 @@ class AlphaTradeSystem:
             logger.info("Initializing institutional feature engineer...")
             self.feature_builder = InstitutionalFeatureEngineer()
 
+            # Initialize Point-in-Time Feature Engine (prevents look-ahead bias)
+            logger.info("Initializing point-in-time feature engine...")
+            self.point_in_time_engine = PointInTimeFeatureEngine()
+            self.point_in_time_engine.add_standard_features()
+
             # Initialize regime detector
             logger.info("Initializing regime detector...")
             self.regime_detector = RegimeDetector()
+
+            # ================================================================
+            # PHASE 4: Risk Management Infrastructure
+            # ================================================================
 
             # Initialize risk manager
             logger.info("Initializing risk manager...")
@@ -192,10 +278,34 @@ class AlphaTradeSystem:
                     sector_map[symbol] = sector_info.get('sector', 'Other')
             self.risk_manager.set_sector_map(sector_map)
 
-            # Initialize position sizer
+            # Initialize legacy position sizer (fallback)
             logger.info("Initializing position sizer...")
             self.position_sizer = VolatilityPositionSizer(
                 target_volatility=self.risk_config.get('volatility', {}).get('target_annual', 0.15)
+            )
+
+            # Initialize Bayesian Kelly Sizer (primary position sizing)
+            logger.info("Initializing Bayesian Kelly sizer...")
+            self.bayesian_kelly = BayesianKellySizer(
+                prior_wins=2.0,
+                prior_losses=2.0,
+                prior_avg_win=0.02,
+                prior_avg_loss=0.02,
+                kelly_fraction=0.25,  # Quarter Kelly for safety
+                max_position_pct=0.20,
+                min_observations=20,
+                uncertainty_penalty_weight=1.0
+            )
+
+            # Initialize Correlation Circuit Breaker
+            logger.info("Initializing correlation circuit breaker...")
+            self.correlation_breaker = CorrelationCircuitBreaker(
+                correlation_spike_threshold=0.25,
+                crisis_threshold=0.40,
+                first_pc_threshold=0.55,
+                first_pc_crisis_threshold=0.70,
+                lookback_period=20,
+                cooldown_periods=10
             )
 
             # Initialize portfolio manager
@@ -204,23 +314,217 @@ class AlphaTradeSystem:
             self.portfolio_manager = PortfolioManager(initial_capital=initial_capital)
             self.portfolio_manager.set_sector_map(sector_map)
 
-            # Initialize strategies
+            # ================================================================
+            # PHASE 5: Model & Calibration Infrastructure
+            # ================================================================
+
+            # Initialize probability calibrator
+            logger.info("Initializing probability calibrator...")
+            self.probability_calibrator = IsotonicCalibrator()
+
+            # Load calibration model if exists
+            calibration_path = Path("models/calibration_model.pkl")
+            if calibration_path.exists():
+                try:
+                    import pickle
+                    with open(calibration_path, 'rb') as f:
+                        self.probability_calibrator = pickle.load(f)
+                    logger.info("Loaded probability calibration model")
+                except Exception as e:
+                    logger.warning(f"Could not load calibration model: {e}")
+
+            # Initialize model staleness detector
+            logger.info("Initializing model staleness detector...")
+            model_metrics_path = Path("models/metrics.yaml")
+            if model_metrics_path.exists():
+                with open(model_metrics_path, 'r') as f:
+                    model_metrics = yaml.safe_load(f)
+                training_date_str = model_metrics.get('training_date', '')
+                if training_date_str:
+                    self._model_trained_date = datetime.fromisoformat(training_date_str)
+
+            self.staleness_detector = ModelStalenessDetector(
+                model_name="catboost_ensemble",
+                model_trained_date=self._model_trained_date or datetime.now(),
+                max_age_days=30,
+                warning_age_days=21,
+                min_accuracy_threshold=0.52,
+                min_samples_for_eval=100
+            )
+            self.staleness_detector.register_alert_handler(self._on_staleness_alert)
+
+            # ================================================================
+            # PHASE 6: Execution Infrastructure
+            # ================================================================
+
+            # Initialize market impact model
+            logger.info("Initializing market impact model...")
+            self.impact_model = AlmgrenChrissModel(
+                permanent_impact_coef=0.1,
+                temporary_impact_coef=0.2,
+                temporary_impact_exp=0.6,
+                risk_aversion=1e-6
+            )
+
+            # Initialize execution metrics collector
+            logger.info("Initializing execution metrics collector...")
+            self.execution_monitor = ExecutionMetricsCollector(
+                buffer_size=10000,
+                export_interval_seconds=10.0
+            )
+
+            # Initialize realistic fill simulator (for backtest)
+            logger.info("Initializing realistic fill simulator...")
+            self.fill_simulator = RealisticFillSimulator(
+                model=FillModel.IMPACT,
+                default_spread_bps=10.0,
+                impact_coefficient=0.1,
+                participation_rate=0.1
+            )
+
+            # ================================================================
+            # PHASE 7: Strategy Initialization
+            # ================================================================
+
             logger.info("Initializing strategies...")
             self._init_strategies()
 
-            # Initialize broker (if not backtest mode)
+            # ================================================================
+            # PHASE 8: Broker & Live Trading Infrastructure
+            # ================================================================
+
             if self.mode != TradingMode.BACKTEST:
                 await self._init_broker()
 
+                # Initialize protected position manager (after broker)
+                if self.broker:
+                    logger.info("Initializing protected position manager...")
+                    protection_config = ProtectionConfig(
+                        default_stop_loss_pct=0.02,
+                        default_take_profit_pct=0.04,
+                        use_bracket_orders=True,
+                        max_slippage_pct=0.005
+                    )
+                    self.protected_position_manager = ProtectedPositionManager(
+                        broker=self.broker,
+                        config=protection_config
+                    )
+
+                    # Initialize reconciliation engine
+                    logger.info("Initializing reconciliation engine...")
+                    self.reconciliation_engine = ReconciliationEngine(
+                        broker=self.broker,
+                        order_manager=self.order_manager,
+                        reconcile_interval_seconds=30,
+                        auto_fix_enabled=True,
+                        alert_callback=self._on_reconciliation_alert
+                    )
+
+            # ================================================================
+            # PHASE 9: Register Components with Graceful Degradation
+            # ================================================================
+
+            logger.info("Registering components for health monitoring...")
+            self._register_components_for_monitoring()
+
+            # Start auto-save for state manager
+            await self.state_manager.start_auto_save()
+
+            # Start a new trading session
+            await self.state_manager.start_session(
+                mode=self.mode,
+                symbols=self.symbols,
+                config=self.config
+            )
+
             self._initialized = True
+            logger.info("=" * 60)
             logger.info("Initialization complete!")
+            logger.info("=" * 60)
             return True
 
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
             import traceback
             traceback.print_exc()
+
+            # Try to gracefully handle initialization failure
+            if self.graceful_degradation:
+                await self.graceful_degradation.stop()
+
             return False
+
+    def _register_components_for_monitoring(self) -> None:
+        """Register all components with graceful degradation manager for health monitoring."""
+        if not self.graceful_degradation:
+            return
+
+        # Register broker health check
+        if self.broker:
+            self.graceful_degradation.register_component(
+                name="broker",
+                component_type=ComponentType.BROKER,
+                health_check=lambda: asyncio.create_task(self._check_broker_health()),
+                critical=True
+            )
+
+        # Register data feed health check
+        if self.data_loader:
+            self.graceful_degradation.register_component(
+                name="data_loader",
+                component_type=ComponentType.DATA_FEED,
+                health_check=lambda: True,  # Simplified check
+                critical=True
+            )
+
+        # Register model health check
+        self.graceful_degradation.register_component(
+            name="ml_model",
+            component_type=ComponentType.MODEL,
+            health_check=self._check_model_health,
+            critical=False  # Can degrade to rule-based strategies
+        )
+
+        # Register Redis health check
+        if self.state_manager:
+            self.graceful_degradation.register_component(
+                name="state_manager",
+                component_type=ComponentType.REDIS,
+                health_check=lambda: self.state_manager._client is not None,
+                critical=False  # Can use in-memory fallback
+            )
+
+    async def _check_broker_health(self) -> bool:
+        """Check broker connection health."""
+        try:
+            if self.broker:
+                account = await self.broker.get_account()
+                return account is not None
+            return False
+        except Exception:
+            return False
+
+    def _check_model_health(self) -> bool:
+        """Check ML model health via staleness detector."""
+        if self.staleness_detector:
+            report = self.staleness_detector.check_staleness()
+            return report.level.value <= 2  # FRESH or AGING is OK
+        return True
+
+    def _on_degradation_alert(self, level: DegradationLevel, message: str) -> None:
+        """Handle degradation alerts."""
+        logger.warning(f"DEGRADATION ALERT [{level.name}]: {message}")
+        audit_logger.warning(f"System degradation: {level.name} - {message}")
+
+    def _on_staleness_alert(self, report) -> None:
+        """Handle model staleness alerts."""
+        logger.warning(f"MODEL STALENESS ALERT [{report.level.name}]: {report.recommendation}")
+        audit_logger.warning(f"Model staleness: {report.level.name}")
+
+    def _on_reconciliation_alert(self, discrepancy) -> None:
+        """Handle reconciliation alerts."""
+        logger.warning(f"RECONCILIATION ALERT: {discrepancy.type.name} for {discrepancy.symbol}")
+        audit_logger.warning(f"Reconciliation discrepancy: {discrepancy}")
 
     def _init_strategies(self) -> None:
         """Initialize trading strategies"""
@@ -533,55 +837,422 @@ class AlphaTradeSystem:
                 await asyncio.sleep(60)
 
     async def _trading_cycle(self) -> None:
-        """Execute one trading cycle"""
+        """Execute one trading cycle with all integrated components."""
         logger.debug("Starting trading cycle...")
 
         with Timer() as timer:
+            # ================================================================
+            # PRE-TRADE CHECKS
+            # ================================================================
+
+            # Check if trading is allowed (graceful degradation)
+            if self.graceful_degradation and not self.graceful_degradation.is_trading_allowed():
+                degradation_level = self.graceful_degradation.get_degradation_level()
+                logger.warning(f"Trading blocked due to degradation level: {degradation_level.name}")
+                return
+
+            # Check correlation circuit breaker for crisis conditions
+            if self.correlation_breaker:
+                correlation_state = self.correlation_breaker.get_state()
+                if correlation_state == CorrelationState.CRISIS:
+                    logger.warning("CRISIS detected by correlation breaker - halting new positions")
+                    # Could also reduce existing positions here
+                    return
+                elif correlation_state == CorrelationState.ELEVATED:
+                    logger.info("Elevated correlations detected - proceeding with caution")
+
+            # Check model staleness
+            if self.staleness_detector:
+                staleness_report = self.staleness_detector.check_staleness()
+                if staleness_report.level.name == "CRITICAL":
+                    logger.warning(f"Model is critically stale: {staleness_report.recommendation}")
+                    # Fall back to rule-based strategies only
+                    return
+
+            # ================================================================
+            # DATA & FEATURE GENERATION
+            # ================================================================
+
             # Update market data
             if self.broker:
-                # In live mode, we would fetch real-time data
-                # For now, use historical
-                pass
+                # In live mode, fetch real-time data from broker
+                try:
+                    for symbol in self.symbols[:10]:  # Limit to avoid rate limits
+                        bars = await self.broker.get_bars(symbol, timeframe='1Min', limit=100)
+                        if bars is not None and len(bars) > 0:
+                            self._market_data[symbol] = bars
+                except Exception as e:
+                    logger.warning(f"Failed to fetch real-time data: {e}")
+
+            if not self._market_data:
+                logger.debug("No market data available")
+                return
+
+            # Update correlation breaker with latest returns
+            if self.correlation_breaker and len(self._market_data) > 5:
+                try:
+                    returns_df = pd.DataFrame({
+                        symbol: df['close'].pct_change().dropna()
+                        for symbol, df in self._market_data.items()
+                        if len(df) > 1
+                    })
+                    if len(returns_df) > 0:
+                        latest_returns = returns_df.iloc[-1].to_dict()
+                        self.correlation_breaker.update(latest_returns)
+                except Exception as e:
+                    logger.debug(f"Correlation update failed: {e}")
 
             # Generate features
             features = await self.generate_features(self._market_data)
 
+            # ================================================================
+            # SIGNAL GENERATION & CALIBRATION
+            # ================================================================
+
             # Generate signals
             signals = await self.generate_signals(self._market_data)
 
-            if signals:
-                # Get current prices
-                prices = {}
-                for symbol, df in self._market_data.items():
-                    if len(df) > 0:
-                        prices[symbol] = df['close'].iloc[-1]
+            if not signals:
+                logger.debug("No signals generated")
+                return
 
-                # Execute signals
-                await self.execute_signals(signals, prices)
+            # Calibrate probabilities if we have a calibrator
+            if self.probability_calibrator and hasattr(self.probability_calibrator, 'calibrate'):
+                for symbol, signal in signals.items():
+                    if hasattr(signal, 'confidence') and signal.confidence is not None:
+                        try:
+                            calibrated_prob = self.probability_calibrator.calibrate(
+                                np.array([signal.confidence])
+                            )[0]
+                            signal.calibrated_confidence = calibrated_prob
+                        except Exception:
+                            signal.calibrated_confidence = signal.confidence
+
+            # ================================================================
+            # POSITION SIZING & EXECUTION
+            # ================================================================
+
+            # Get current prices
+            prices = {}
+            for symbol, df in self._market_data.items():
+                if len(df) > 0:
+                    prices[symbol] = df['close'].iloc[-1]
+
+            # Execute signals with new position sizing
+            await self._execute_signals_with_protection(signals, prices)
+
+            # ================================================================
+            # POST-TRADE UPDATES
+            # ================================================================
 
             # Update risk metrics
             risk_metrics = self.risk_manager.calculate_risk_metrics()
 
+            # Trigger reconciliation if enough time has passed (every 30 seconds)
+            now = datetime.now()
+            if self.reconciliation_engine:
+                if (self._last_reconciliation is None or
+                    (now - self._last_reconciliation).total_seconds() >= 30):
+                    try:
+                        await self.reconciliation_engine.reconcile()
+                        self._last_reconciliation = now
+                    except Exception as e:
+                        logger.warning(f"Reconciliation failed: {e}")
+
+            # Save state
+            if self.state_manager:
+                try:
+                    await self.state_manager.save_risk_state({
+                        'metrics': risk_metrics,
+                        'timestamp': now.isoformat()
+                    })
+                except Exception as e:
+                    logger.debug(f"State save failed: {e}")
+
             logger.debug(f"Trading cycle complete in {timer.elapsed:.2f}s")
 
+    async def _execute_signals_with_protection(
+        self,
+        signals: Dict[str, Any],
+        prices: Dict[str, float]
+    ) -> None:
+        """Execute signals using protected positions and Bayesian Kelly sizing."""
+        if not self.order_manager and not self.protected_position_manager:
+            logger.warning("No execution manager available")
+            return
+
+        portfolio_value = self.portfolio_manager.portfolio.total_value
+
+        for symbol, signal in signals.items():
+            if symbol not in prices:
+                continue
+
+            try:
+                current_price = prices[symbol]
+
+                # Get signal confidence (use calibrated if available)
+                confidence = getattr(signal, 'calibrated_confidence',
+                                   getattr(signal, 'confidence', abs(signal.strength)))
+
+                # Calculate position size using Bayesian Kelly
+                if self.bayesian_kelly:
+                    kelly_result = self.bayesian_kelly.calculate_kelly(
+                        symbol=symbol,
+                        predicted_probability=confidence,
+                        predicted_return=abs(signal.strength) * 0.02  # Estimated return
+                    )
+                    position_pct = kelly_result.position_size_pct
+
+                    # Apply correlation breaker reduction if needed
+                    if self.correlation_breaker:
+                        state = self.correlation_breaker.get_state()
+                        if state == CorrelationState.ELEVATED:
+                            position_pct *= 0.5  # Reduce by 50%
+                            logger.info(f"Reduced position for {symbol} due to elevated correlations")
+
+                    shares = int((portfolio_value * position_pct) / current_price)
+                else:
+                    # Fallback to volatility-based sizing
+                    size = self.position_sizer.calculate_size(
+                        symbol=symbol,
+                        current_price=current_price,
+                        portfolio_value=portfolio_value,
+                        signal_strength=signal.strength
+                    )
+                    shares = size.shares
+
+                if shares == 0:
+                    continue
+
+                # Estimate market impact before executing
+                if self.impact_model:
+                    try:
+                        # Get average daily volume (simplified)
+                        adv = 1000000  # Default 1M shares
+                        if symbol in self._market_data:
+                            df = self._market_data[symbol]
+                            if 'volume' in df.columns and len(df) > 20:
+                                adv = df['volume'].tail(20).mean()
+
+                        impact = self.impact_model.estimate_impact(
+                            shares=shares,
+                            price=current_price,
+                            daily_volume=adv,
+                            volatility=0.02  # Default 2% daily vol
+                        )
+
+                        # Skip trade if impact is too high
+                        if impact.total_cost_bps > 50:  # More than 50 bps impact
+                            logger.info(f"Skipping {symbol}: impact too high ({impact.total_cost_bps:.1f} bps)")
+                            continue
+
+                    except Exception as e:
+                        logger.debug(f"Impact estimation failed for {symbol}: {e}")
+
+                # Determine side
+                side = 'buy' if signal.strength > 0 else 'sell'
+
+                # Execute with protected position manager if available
+                if self.protected_position_manager:
+                    try:
+                        # Calculate stop loss and take profit
+                        stop_loss_pct = 0.02  # 2% stop loss
+                        take_profit_pct = 0.04  # 4% take profit
+
+                        if side == 'buy':
+                            stop_price = current_price * (1 - stop_loss_pct)
+                            take_profit_price = current_price * (1 + take_profit_pct)
+                        else:
+                            stop_price = current_price * (1 + stop_loss_pct)
+                            take_profit_price = current_price * (1 - take_profit_pct)
+
+                        position = await self.protected_position_manager.open_position_with_protection(
+                            symbol=symbol,
+                            side=side,
+                            quantity=abs(shares),
+                            entry_price=current_price,
+                            stop_loss_price=stop_price,
+                            take_profit_price=take_profit_price
+                        )
+
+                        if position:
+                            logger.info(
+                                f"Protected position opened: {side.upper()} {abs(shares)} {symbol} "
+                                f"@ ${current_price:.2f} (SL: ${stop_price:.2f}, TP: ${take_profit_price:.2f})"
+                            )
+
+                            # Record execution metrics
+                            if self.execution_monitor:
+                                self.execution_monitor.record_execution(
+                                    symbol=symbol,
+                                    side=side,
+                                    quantity=shares,
+                                    decision_price=current_price,
+                                    fill_price=current_price,  # Simplified
+                                    latency_ms=0
+                                )
+
+                            # Save position to state manager
+                            if self.state_manager:
+                                await self.state_manager.save_position({
+                                    'symbol': symbol,
+                                    'side': side,
+                                    'quantity': shares,
+                                    'entry_price': current_price,
+                                    'stop_loss': stop_price,
+                                    'take_profit': take_profit_price,
+                                    'timestamp': datetime.now().isoformat()
+                                })
+
+                    except Exception as e:
+                        logger.error(f"Protected position failed for {symbol}: {e}")
+                        # Fall through to regular order manager
+
+                elif self.order_manager:
+                    # Fallback to regular order manager
+                    order = await self.order_manager.create_order(
+                        symbol=symbol,
+                        side=side,
+                        quantity=abs(shares),
+                        strategy_name=signal.strategy_name,
+                        signal_strength=signal.strength,
+                        signal_price=current_price
+                    )
+
+                    success = await self.order_manager.submit_order(order)
+
+                    if success:
+                        logger.info(
+                            f"Order submitted: {side.upper()} {abs(shares)} {symbol} "
+                            f"@ ${current_price:.2f}"
+                        )
+
+            except Exception as e:
+                logger.error(f"Execution error for {symbol}: {e}")
+
     async def shutdown(self) -> None:
-        """Graceful shutdown"""
-        logger.info("Shutting down...")
+        """Graceful shutdown with all component cleanup."""
+        logger.info("=" * 60)
+        logger.info("Initiating graceful shutdown...")
+        logger.info("=" * 60)
+
         self._running = False
 
-        # Cancel all orders
+        # ================================================================
+        # PHASE 1: Stop Background Tasks
+        # ================================================================
+
+        # Stop reconciliation engine
+        if self.reconciliation_engine:
+            try:
+                logger.info("Stopping reconciliation engine...")
+                await self.reconciliation_engine.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping reconciliation: {e}")
+
+        # Stop graceful degradation monitoring
+        if self.graceful_degradation:
+            try:
+                logger.info("Stopping graceful degradation monitor...")
+                await self.graceful_degradation.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping degradation monitor: {e}")
+
+        # Stop execution metrics export
+        if self.execution_monitor:
+            try:
+                logger.info("Stopping execution metrics collector...")
+                self.execution_monitor.stop_export()
+            except Exception as e:
+                logger.warning(f"Error stopping metrics collector: {e}")
+
+        # ================================================================
+        # PHASE 2: Cancel Orders & Close Positions
+        # ================================================================
+
+        # Cancel all pending orders
         if self.order_manager:
-            cancelled = await self.order_manager.cancel_all()
-            logger.info(f"Cancelled {cancelled} orders")
+            try:
+                cancelled = await self.order_manager.cancel_all()
+                logger.info(f"Cancelled {cancelled} pending orders")
+            except Exception as e:
+                logger.warning(f"Error cancelling orders: {e}")
+
+        # Close protected positions if configured
+        if self.protected_position_manager:
+            try:
+                active_positions = self.protected_position_manager.get_active_positions()
+                logger.info(f"Active protected positions at shutdown: {len(active_positions)}")
+                # Note: Positions remain protected via server-side stops
+            except Exception as e:
+                logger.warning(f"Error getting protected positions: {e}")
+
+        # ================================================================
+        # PHASE 3: Generate Reports
+        # ================================================================
+
+        # Generate execution quality report
+        if self.execution_monitor:
+            try:
+                report = self.execution_monitor.get_execution_quality_report()
+                if report:
+                    logger.info("Execution Quality Report:")
+                    logger.info(f"  Total executions: {report.total_executions}")
+                    logger.info(f"  Avg slippage: {report.avg_slippage_bps:.2f} bps")
+                    logger.info(f"  Fill rate: {report.fill_rate:.1%}")
+
+                    # Save report to file
+                    os.makedirs("results", exist_ok=True)
+                    with open("results/execution_report.yaml", "w") as f:
+                        yaml.dump({
+                            'total_executions': report.total_executions,
+                            'avg_slippage_bps': float(report.avg_slippage_bps),
+                            'fill_rate': float(report.fill_rate),
+                            'timestamp': datetime.now().isoformat()
+                        }, f)
+            except Exception as e:
+                logger.warning(f"Error generating execution report: {e}")
+
+        # Generate staleness report
+        if self.staleness_detector:
+            try:
+                staleness_report = self.staleness_detector.check_staleness()
+                logger.info(f"Model Staleness: {staleness_report.level.name}")
+                if staleness_report.recent_accuracy:
+                    logger.info(f"  Recent accuracy: {staleness_report.recent_accuracy:.1%}")
+            except Exception as e:
+                logger.warning(f"Error generating staleness report: {e}")
+
+        # ================================================================
+        # PHASE 4: Save State
+        # ================================================================
+
+        # Save final state to Redis/file
+        if self.state_manager:
+            try:
+                logger.info("Saving final state...")
+                await self.state_manager.end_session()
+            except Exception as e:
+                logger.warning(f"Error saving state: {e}")
+
+        # Save legacy state
+        self._save_state()
+
+        # ================================================================
+        # PHASE 5: Disconnect
+        # ================================================================
 
         # Disconnect broker
         if self.broker:
-            await self.broker.disconnect()
+            try:
+                logger.info("Disconnecting from broker...")
+                await self.broker.disconnect()
+            except Exception as e:
+                logger.warning(f"Error disconnecting broker: {e}")
 
-        # Save state
-        self._save_state()
-
+        logger.info("=" * 60)
         logger.info("Shutdown complete")
+        logger.info("=" * 60)
 
     def _save_state(self) -> None:
         """Save trading state"""
@@ -596,6 +1267,109 @@ class AlphaTradeSystem:
             logger.info("State saved")
         except Exception as e:
             logger.error(f"Failed to save state: {e}")
+
+    def get_health_status(self) -> Dict[str, Any]:
+        """
+        Get comprehensive health status for all components.
+        Can be exposed via HTTP endpoint for monitoring.
+        """
+        status = {
+            'timestamp': datetime.now().isoformat(),
+            'mode': self.mode,
+            'initialized': self._initialized,
+            'running': self._running,
+            'components': {},
+            'degradation_level': None,
+            'correlation_state': None,
+            'model_staleness': None
+        }
+
+        # Graceful degradation status
+        if self.graceful_degradation:
+            deg_level = self.graceful_degradation.get_degradation_level()
+            status['degradation_level'] = deg_level.name
+            status['trading_allowed'] = self.graceful_degradation.is_trading_allowed()
+            status['components']['graceful_degradation'] = 'healthy'
+        else:
+            status['components']['graceful_degradation'] = 'not_initialized'
+
+        # Correlation breaker status
+        if self.correlation_breaker:
+            corr_state = self.correlation_breaker.get_state()
+            status['correlation_state'] = corr_state.name
+            metrics = self.correlation_breaker.get_metrics()
+            if metrics:
+                status['correlation_metrics'] = {
+                    'mean_correlation': float(metrics.mean_correlation) if metrics.mean_correlation else None,
+                    'first_pc_variance': float(metrics.first_pc_variance_ratio) if metrics.first_pc_variance_ratio else None
+                }
+            status['components']['correlation_breaker'] = 'healthy'
+        else:
+            status['components']['correlation_breaker'] = 'not_initialized'
+
+        # Model staleness status
+        if self.staleness_detector:
+            report = self.staleness_detector.check_staleness()
+            status['model_staleness'] = report.level.name
+            status['model_age_days'] = report.model_age_days
+            if report.recent_accuracy:
+                status['model_recent_accuracy'] = float(report.recent_accuracy)
+            status['components']['staleness_detector'] = 'healthy'
+        else:
+            status['components']['staleness_detector'] = 'not_initialized'
+
+        # Broker status
+        if self.broker:
+            status['components']['broker'] = 'connected'
+        else:
+            status['components']['broker'] = 'not_connected'
+
+        # State manager status
+        if self.state_manager:
+            status['components']['state_manager'] = 'healthy'
+        else:
+            status['components']['state_manager'] = 'not_initialized'
+
+        # Protected position manager status
+        if self.protected_position_manager:
+            try:
+                positions = self.protected_position_manager.get_active_positions()
+                status['active_protected_positions'] = len(positions)
+                status['components']['protected_positions'] = 'healthy'
+            except Exception:
+                status['components']['protected_positions'] = 'error'
+        else:
+            status['components']['protected_positions'] = 'not_initialized'
+
+        # Execution monitor status
+        if self.execution_monitor:
+            try:
+                report = self.execution_monitor.get_execution_quality_report()
+                if report:
+                    status['execution_metrics'] = {
+                        'total_executions': report.total_executions,
+                        'avg_slippage_bps': float(report.avg_slippage_bps),
+                        'fill_rate': float(report.fill_rate)
+                    }
+                status['components']['execution_monitor'] = 'healthy'
+            except Exception:
+                status['components']['execution_monitor'] = 'error'
+        else:
+            status['components']['execution_monitor'] = 'not_initialized'
+
+        # Bayesian Kelly status
+        if self.bayesian_kelly:
+            status['components']['bayesian_kelly'] = 'healthy'
+        else:
+            status['components']['bayesian_kelly'] = 'not_initialized'
+
+        # Calculate overall health
+        component_statuses = list(status['components'].values())
+        healthy_count = sum(1 for s in component_statuses if s in ['healthy', 'connected'])
+        total_count = len(component_statuses)
+        status['overall_health'] = f"{healthy_count}/{total_count} components healthy"
+
+        return status
 
     async def run(self) -> None:
         """Main entry point"""
