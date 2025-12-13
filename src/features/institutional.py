@@ -561,12 +561,19 @@ class InstitutionalMicrostructure:
 
 
 # =============================================================================
-# HMM-BASED REGIME DETECTION
+# HMM-BASED REGIME DETECTION (LOOK-AHEAD BIAS FIX)
 # =============================================================================
 
 class HMMRegimeDetector:
     """
-    Hidden Markov Model based regime detection.
+    Hidden Markov Model based regime detection with EXPANDING WINDOW.
+
+    CRITICAL FIX: The original implementation fitted HMM on the ENTIRE series
+    which caused look-ahead bias in backtesting. This version:
+    1. Uses EXPANDING WINDOW - only fits on data available at each point
+    2. Retrains periodically as new data arrives
+    3. Caches models to avoid redundant computation
+    4. Provides point-in-time predictions
 
     Uses HMM to identify latent market states:
     - Bull (high mean, low vol)
@@ -577,6 +584,8 @@ class HMMRegimeDetector:
     - State transition probabilities
     - Observation distributions for each state
     - Provides regime probability, not just classification
+
+    Based on: ARCHITECTURAL_REVIEW_REPORT.md - CRITICAL-6
     """
 
     def __init__(self, config: InstitutionalFeatureConfig = None):
@@ -584,6 +593,33 @@ class HMMRegimeDetector:
         self._hmm_model = None
         self._state_means = None
         self._state_mapping = None
+
+        # Expanding window parameters
+        self._min_train_samples = 500  # Minimum samples to train HMM
+        self._retrain_frequency = 100  # Retrain every N bars
+        self._last_train_idx = 0
+
+        # Model cache for expanding window (index -> model)
+        self._model_cache: Dict[int, Any] = {}
+
+        # Mode: 'expanding' for point-in-time, 'full' for training only
+        self._mode = 'expanding'
+
+    def set_mode(self, mode: str) -> 'HMMRegimeDetector':
+        """
+        Set operating mode.
+
+        Args:
+            mode: 'expanding' for point-in-time (live/backtest),
+                  'full' for training feature extraction
+
+        Returns:
+            Self for chaining
+        """
+        if mode not in ['expanding', 'full']:
+            raise ValueError(f"Mode must be 'expanding' or 'full', got {mode}")
+        self._mode = mode
+        return self
 
     def fit(
         self,
@@ -593,6 +629,10 @@ class HMMRegimeDetector:
     ) -> 'HMMRegimeDetector':
         """
         Fit HMM to return series.
+
+        NOTE: This fits on the full series and is only for initial training
+        or when mode='full'. For point-in-time predictions, use predict()
+        with mode='expanding'.
 
         Args:
             returns: Return series
@@ -647,6 +687,208 @@ class HMMRegimeDetector:
 
         return self
 
+    def _fit_at_index(
+        self,
+        returns: pd.Series,
+        current_idx: int,
+        n_states: int = None
+    ) -> Optional[Any]:
+        """
+        Fit HMM using only data up to current_idx (point-in-time).
+
+        This is the CORRECT way to train HMM for backtesting.
+        """
+        n_states = n_states or self.config.hmm_n_states
+
+        try:
+            from hmmlearn import hmm
+
+            # Use only data UP TO current_idx (exclusive of current bar)
+            train_data = returns.iloc[:current_idx].dropna().values.reshape(-1, 1)
+
+            if len(train_data) < self._min_train_samples:
+                return None
+
+            model = hmm.GaussianHMM(
+                n_components=n_states,
+                covariance_type="full",
+                n_iter=100,
+                random_state=42
+            )
+
+            model.fit(train_data)
+
+            # Update state mapping based on this model
+            state_means = model.means_.flatten()
+            state_order = np.argsort(state_means)
+            state_mapping = {
+                state_order[0]: 'bear',
+                state_order[-1]: 'bull'
+            }
+            for i in state_order[1:-1]:
+                state_mapping[i] = 'neutral'
+
+            # Store both model and mapping
+            return {
+                'model': model,
+                'state_means': state_means,
+                'state_mapping': state_mapping,
+                'train_idx': current_idx,
+                'n_samples': len(train_data)
+            }
+
+        except Exception as e:
+            logger.warning(f"HMM fit at index {current_idx} failed: {e}")
+            return None
+
+    def predict_point_in_time(
+        self,
+        returns: pd.Series,
+        current_idx: int
+    ) -> Dict[str, float]:
+        """
+        Get regime prediction using only data up to current_idx.
+
+        This is the CORRECT way to predict for backtesting.
+        No look-ahead bias.
+
+        Args:
+            returns: Full return series (only data up to current_idx used)
+            current_idx: Current bar index (0-based)
+
+        Returns:
+            Dict with regime features for current bar
+        """
+        # Default result if insufficient data
+        default_result = {
+            'hmm_state': 1,
+            'hmm_confidence': 0.5,
+            'prob_bull': 0.33,
+            'prob_bear': 0.33,
+            'prob_neutral': 0.34,
+            'hmm_regime': 'neutral'
+        }
+
+        if current_idx < self._min_train_samples:
+            return default_result
+
+        # Check if we need to retrain
+        if (current_idx - self._last_train_idx >= self._retrain_frequency or
+            current_idx not in self._model_cache):
+
+            # Find most recent cached model before current_idx
+            valid_indices = [i for i in self._model_cache.keys() if i <= current_idx]
+
+            # If no recent model or time to retrain
+            if not valid_indices or current_idx - max(valid_indices) >= self._retrain_frequency:
+                # Train new model
+                model_data = self._fit_at_index(returns, current_idx)
+                if model_data:
+                    self._model_cache[current_idx] = model_data
+                    self._last_train_idx = current_idx
+
+        # Get most recent valid model
+        valid_indices = [i for i in self._model_cache.keys() if i <= current_idx]
+        if not valid_indices:
+            return default_result
+
+        model_data = self._model_cache[max(valid_indices)]
+        model = model_data['model']
+        state_mapping = model_data['state_mapping']
+
+        # Predict using data up to current point (inclusive)
+        try:
+            sequence = returns.iloc[:current_idx + 1].dropna().values.reshape(-1, 1)
+
+            if len(sequence) < 10:
+                return default_result
+
+            # Decode sequence to get current state
+            _, state_sequence = model.decode(sequence, algorithm='viterbi')
+            current_state = state_sequence[-1]
+
+            # Get state probabilities
+            posteriors = model.predict_proba(sequence)
+            current_probs = posteriors[-1]
+
+            return {
+                'hmm_state': current_state,
+                'hmm_confidence': float(np.max(current_probs)),
+                'prob_bull': float(current_probs[list(state_mapping.values()).index('bull')] if 'bull' in state_mapping.values() else 0.33),
+                'prob_bear': float(current_probs[list(state_mapping.values()).index('bear')] if 'bear' in state_mapping.values() else 0.33),
+                'prob_neutral': float(current_probs[list(state_mapping.values()).index('neutral')] if 'neutral' in state_mapping.values() else 0.34),
+                'hmm_regime': state_mapping.get(current_state, 'neutral')
+            }
+
+        except Exception as e:
+            logger.warning(f"HMM prediction failed at index {current_idx}: {e}")
+            return default_result
+
+    def build_features_expanding(
+        self,
+        df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Build regime features with expanding window (NO LOOK-AHEAD).
+
+        This is the CORRECT method for backtesting.
+        Each bar's features are computed using only past data.
+
+        Args:
+            df: OHLCV DataFrame
+
+        Returns:
+            DataFrame with regime features (point-in-time)
+        """
+        logger.info("Building regime features with expanding window (no look-ahead)...")
+
+        returns = df['close'].pct_change()
+        n_bars = len(returns)
+
+        # Pre-allocate result arrays
+        hmm_state = np.full(n_bars, 1, dtype=int)
+        hmm_confidence = np.full(n_bars, 0.5)
+        prob_bull = np.full(n_bars, 0.33)
+        prob_bear = np.full(n_bars, 0.33)
+        prob_neutral = np.full(n_bars, 0.34)
+        hmm_regime = ['neutral'] * n_bars
+
+        # Process each bar
+        for i in range(n_bars):
+            if i >= self._min_train_samples:
+                result = self.predict_point_in_time(returns, i)
+                hmm_state[i] = result['hmm_state']
+                hmm_confidence[i] = result['hmm_confidence']
+                prob_bull[i] = result['prob_bull']
+                prob_bear[i] = result['prob_bear']
+                prob_neutral[i] = result['prob_neutral']
+                hmm_regime[i] = result['hmm_regime']
+
+            # Progress log every 1000 bars
+            if i > 0 and i % 1000 == 0:
+                logger.debug(f"Processed {i}/{n_bars} bars for regime features")
+
+        # Build result DataFrame
+        result = pd.DataFrame(index=df.index)
+        result['hmm_state'] = hmm_state
+        result['hmm_confidence'] = hmm_confidence
+        result['prob_bull'] = prob_bull
+        result['prob_bear'] = prob_bear
+        result['prob_neutral'] = prob_neutral
+        result['hmm_regime'] = hmm_regime
+
+        # Regime change indicator
+        result['regime_change'] = (result['hmm_state'].diff() != 0).astype(int)
+
+        # Regime duration
+        regime_changes = result['hmm_state'].diff().fillna(0) != 0
+        regime_groups = regime_changes.cumsum()
+        result['regime_duration'] = regime_groups.groupby(regime_groups).cumcount() + 1
+
+        logger.info(f"Built {len(result.columns)} regime features with expanding window")
+
+        return result
+
     def predict(
         self,
         returns: pd.Series
@@ -654,12 +896,20 @@ class HMMRegimeDetector:
         """
         Predict regime using fitted HMM.
 
+        NOTE: If mode='expanding', uses point-in-time predictions.
+        If mode='full', uses full-series fit (for training only).
+
         Args:
             returns: Return series
 
         Returns:
             DataFrame with regime predictions and probabilities
         """
+        if self._mode == 'expanding':
+            # Use expanding window (correct for backtest/live)
+            df = pd.DataFrame({'close': returns.cumsum() + 100})  # Reconstruct prices
+            return self.build_features_expanding(df)
+
         result = pd.DataFrame(index=returns.index)
 
         if self._hmm_model is None:
@@ -759,25 +1009,38 @@ class HMMRegimeDetector:
 
     def generate_regime_features(
         self,
-        df: pd.DataFrame
+        df: pd.DataFrame,
+        use_expanding_window: bool = True
     ) -> pd.DataFrame:
         """
         Generate comprehensive regime features.
 
+        CRITICAL FIX: Now uses expanding window by default to prevent
+        look-ahead bias. Set use_expanding_window=False only for
+        training data where look-ahead is acceptable.
+
         Args:
             df: OHLCV DataFrame
+            use_expanding_window: If True, uses point-in-time HMM (correct for backtest)
+                                  If False, uses full-series HMM (only for training)
 
         Returns:
             DataFrame with regime features
         """
         returns = df['close'].pct_change()
 
-        # Fit HMM if not already fitted
-        if self._hmm_model is None:
-            self.fit(returns)
-
-        # Get HMM predictions
-        features = self.predict(returns)
+        if use_expanding_window:
+            # CORRECT: Use expanding window for backtest/live
+            features = self.build_features_expanding(df)
+        else:
+            # For training only: fit on full series
+            if self._hmm_model is None:
+                self.fit(returns)
+            # Use mode='full' for full-series prediction
+            old_mode = self._mode
+            self._mode = 'full'
+            features = self.predict(returns)
+            self._mode = old_mode
 
         # Add volatility regime
         vol = returns.rolling(20).std()
