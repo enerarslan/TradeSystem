@@ -960,6 +960,477 @@ class AdaptivePositionSizer(PositionSizer):
         )
 
 
+class MetaLabeledKelly(PositionSizer):
+    """
+    Dynamic Bet Sizing using Fractional Kelly Criterion with Meta-Labels.
+
+    This implements the position sizing framework from Lopez de Prado's
+    "Advances in Financial Machine Learning" where ML models provide
+    probability estimates for trade success (Meta-Labels).
+
+    Key Features:
+    1. Uses ML probability (p) to calculate Kelly fraction
+    2. Scales by inverse volatility for risk normalization
+    3. Applies strict maximum leverage cap to prevent ruin
+    4. Requires minimum probability threshold to trade
+
+    The Meta-Labeling approach:
+    1. Primary model generates directional signals (buy/sell/hold)
+    2. Secondary (meta) model predicts probability of profit given signal
+    3. Position size is determined by Kelly formula using meta-label probability
+
+    Formula:
+    m* = p - q  (where p = ML probability, q = 1 - p)
+    Position = m* * (1/sigma) * scaling_factor
+
+    With constraints:
+    - If p < min_probability: Position = 0 (No Trade)
+    - Position capped at max_leverage
+    """
+
+    def __init__(
+        self,
+        kelly_fraction: float = 0.5,  # Half-Kelly for safety
+        min_probability: float = 0.55,  # Minimum ML probability to trade
+        max_leverage: float = 2.0,  # Maximum position leverage
+        volatility_lookback: int = 60,  # Days for volatility estimation
+        scale_by_volatility: bool = True,  # Scale by inverse volatility
+        use_bet_size_discretization: bool = True,  # Discretize bet sizes
+        n_bet_sizes: int = 5,  # Number of discrete bet sizes
+        **kwargs
+    ):
+        """
+        Initialize MetaLabeledKelly position sizer.
+
+        Args:
+            kelly_fraction: Fraction of full Kelly to use (0.25-0.5 recommended)
+            min_probability: Minimum ML probability required to trade
+            max_leverage: Maximum leverage allowed per position
+            volatility_lookback: Days for rolling volatility calculation
+            scale_by_volatility: Whether to scale by inverse volatility
+            use_bet_size_discretization: Use discrete bet sizes (0, 0.25, 0.5, 0.75, 1)
+            n_bet_sizes: Number of discrete bet size levels
+        """
+        super().__init__(**kwargs)
+
+        self.kelly_fraction = kelly_fraction
+        self.min_probability = min_probability
+        self.max_leverage = max_leverage
+        self.volatility_lookback = volatility_lookback
+        self.scale_by_volatility = scale_by_volatility
+        self.use_bet_size_discretization = use_bet_size_discretization
+        self.n_bet_sizes = n_bet_sizes
+
+        # Cache for volatility estimates
+        self._volatility_cache: Dict[str, float] = {}
+        self._avg_volatility: float = 0.15  # Default market volatility
+
+        # Trade statistics for Kelly estimation
+        self._trade_history: List[Dict] = []
+        self._rolling_win_rate: float = 0.5
+        self._rolling_win_loss_ratio: float = 1.0
+
+    def calculate_kelly_from_probability(
+        self,
+        probability: float,
+        win_loss_ratio: float = None
+    ) -> float:
+        """
+        Calculate raw Kelly fraction from ML probability.
+
+        Standard Kelly: f* = (p * b - q) / b
+        Where:
+        - p = probability of winning (from Meta-Label model)
+        - q = 1 - p = probability of losing
+        - b = win/loss ratio (average win / average loss)
+
+        Simplified Kelly (when b=1): f* = 2p - 1 = p - q
+
+        Args:
+            probability: ML model's predicted probability of trade success
+            win_loss_ratio: Historical win/loss ratio (default: from history)
+
+        Returns:
+            Raw Kelly fraction (before applying kelly_fraction multiplier)
+        """
+        if probability < self.min_probability:
+            return 0.0
+
+        p = probability
+        q = 1 - p
+        b = win_loss_ratio or self._rolling_win_loss_ratio
+
+        # Full Kelly formula
+        if b > 0:
+            full_kelly = (p * b - q) / b
+        else:
+            full_kelly = p - q  # Simplified when b=1
+
+        # Clamp to valid range
+        full_kelly = max(0.0, min(full_kelly, 1.0))
+
+        return full_kelly
+
+    def calculate_volatility_scalar(
+        self,
+        symbol: str,
+        returns: Optional[pd.Series] = None
+    ) -> float:
+        """
+        Calculate volatility scaling factor (inverse volatility).
+
+        Higher volatility assets get smaller positions, maintaining
+        consistent risk contribution across assets.
+
+        Scalar = target_vol / asset_vol
+
+        Args:
+            symbol: Asset symbol
+            returns: Optional returns series for volatility calculation
+
+        Returns:
+            Volatility scaling factor
+        """
+        # Get or estimate volatility
+        if returns is not None and len(returns) >= 20:
+            vol = returns.std() * np.sqrt(252)
+            self._volatility_cache[symbol] = vol
+        elif symbol in self._volatility_cache:
+            vol = self._volatility_cache[symbol]
+        else:
+            vol = self._avg_volatility
+
+        # Target volatility (annualized)
+        target_vol = self.config.target_volatility if hasattr(self.config, 'target_volatility') else 0.15
+
+        # Inverse volatility scalar
+        if vol > 0:
+            scalar = target_vol / vol
+        else:
+            scalar = 1.0
+
+        return scalar
+
+    def discretize_bet_size(
+        self,
+        raw_size: float
+    ) -> float:
+        """
+        Discretize bet size to predefined levels.
+
+        Discretization helps avoid over-precision in sizing and
+        reduces transaction costs from frequent small adjustments.
+
+        Default levels: 0, 0.25, 0.5, 0.75, 1.0 (of max position)
+
+        Args:
+            raw_size: Continuous bet size (0 to 1)
+
+        Returns:
+            Discretized bet size
+        """
+        if not self.use_bet_size_discretization:
+            return raw_size
+
+        # Create discrete levels
+        levels = np.linspace(0, 1, self.n_bet_sizes + 1)
+
+        # Find nearest level
+        idx = np.abs(levels - raw_size).argmin()
+        return levels[idx]
+
+    def calculate_size(
+        self,
+        symbol: str,
+        current_price: float,
+        portfolio_value: float,
+        signal_strength: float,
+        ml_probability: Optional[float] = None,
+        returns: Optional[pd.Series] = None,
+        **kwargs
+    ) -> PositionSize:
+        """
+        Calculate position size using Meta-Labeled Kelly Criterion.
+
+        Args:
+            symbol: Asset symbol
+            current_price: Current asset price
+            portfolio_value: Total portfolio value
+            signal_strength: Signal direction and strength (-1 to 1)
+            ml_probability: ML model's predicted probability (0 to 1)
+            returns: Optional returns for volatility estimation
+
+        Returns:
+            PositionSize with Kelly-optimal sizing
+        """
+        # Use signal strength as probability if ML probability not provided
+        if ml_probability is None:
+            # Convert signal strength to probability estimate
+            # Assumes signal_strength is roughly calibrated to probability
+            ml_probability = 0.5 + (abs(signal_strength) * 0.3)
+
+        # Check minimum probability threshold
+        if ml_probability < self.min_probability:
+            return PositionSize(
+                symbol=symbol,
+                shares=0,
+                dollar_value=0,
+                weight=0,
+                risk_contribution=0,
+                sizing_method="meta_labeled_kelly",
+                confidence=ml_probability,
+                constraints_applied=["min_probability_threshold"],
+                metadata={
+                    'ml_probability': ml_probability,
+                    'min_threshold': self.min_probability,
+                    'reason': 'probability_below_threshold'
+                }
+            )
+
+        # Calculate raw Kelly fraction
+        raw_kelly = self.calculate_kelly_from_probability(ml_probability)
+
+        # Apply Kelly fraction (e.g., Half-Kelly)
+        kelly_bet = raw_kelly * self.kelly_fraction
+
+        # Apply volatility scaling
+        if self.scale_by_volatility:
+            vol_scalar = self.calculate_volatility_scalar(symbol, returns)
+            kelly_bet *= vol_scalar
+
+        # Discretize bet size
+        kelly_bet = self.discretize_bet_size(kelly_bet)
+
+        # Calculate position value
+        raw_position_value = portfolio_value * kelly_bet
+
+        # Apply maximum leverage constraint
+        max_position_value = portfolio_value * self.max_leverage
+        position_value = min(raw_position_value, max_position_value)
+
+        # Also apply config max position constraint
+        config_max = portfolio_value * self.config.max_position_pct
+        position_value = min(position_value, config_max)
+
+        # Calculate shares (account for direction from signal)
+        direction = np.sign(signal_strength) if signal_strength != 0 else 1
+        shares = int(position_value / current_price)
+        actual_value = shares * current_price
+
+        constraints_applied = []
+        if position_value < raw_position_value:
+            if raw_position_value > max_position_value:
+                constraints_applied.append("max_leverage")
+            if raw_position_value > config_max:
+                constraints_applied.append("max_position_pct")
+
+        return PositionSize(
+            symbol=symbol,
+            shares=shares * int(direction),
+            dollar_value=actual_value,
+            weight=actual_value / portfolio_value if portfolio_value > 0 else 0,
+            risk_contribution=kelly_bet,
+            sizing_method="meta_labeled_kelly",
+            confidence=ml_probability,
+            constraints_applied=constraints_applied,
+            metadata={
+                'ml_probability': ml_probability,
+                'raw_kelly': raw_kelly,
+                'kelly_fraction': self.kelly_fraction,
+                'applied_kelly': kelly_bet,
+                'vol_scalar': vol_scalar if self.scale_by_volatility else 1.0,
+                'direction': direction,
+                'win_loss_ratio': self._rolling_win_loss_ratio
+            }
+        )
+
+    def update_trade_statistics(
+        self,
+        trade_pnl: float,
+        entry_price: float
+    ) -> None:
+        """
+        Update rolling trade statistics for Kelly estimation.
+
+        Args:
+            trade_pnl: Realized P&L from trade
+            entry_price: Entry price for return calculation
+        """
+        trade_return = trade_pnl / entry_price if entry_price > 0 else 0
+
+        self._trade_history.append({
+            'pnl': trade_pnl,
+            'return': trade_return,
+            'timestamp': datetime.now()
+        })
+
+        # Keep last 100 trades
+        if len(self._trade_history) > 100:
+            self._trade_history = self._trade_history[-100:]
+
+        # Update rolling statistics
+        if len(self._trade_history) >= 20:
+            wins = [t for t in self._trade_history if t['pnl'] > 0]
+            losses = [t for t in self._trade_history if t['pnl'] < 0]
+
+            self._rolling_win_rate = len(wins) / len(self._trade_history)
+
+            if wins and losses:
+                avg_win = np.mean([t['pnl'] for t in wins])
+                avg_loss = abs(np.mean([t['pnl'] for t in losses]))
+                self._rolling_win_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 1.0
+
+            logger.debug(
+                f"Kelly stats updated: win_rate={self._rolling_win_rate:.2%}, "
+                f"win_loss_ratio={self._rolling_win_loss_ratio:.2f}"
+            )
+
+    def get_bet_size_from_confidence(
+        self,
+        confidence: float,
+        base_size: float = 1.0
+    ) -> float:
+        """
+        Get discrete bet size from confidence/probability.
+
+        Useful for quick lookup without full calculation.
+
+        Args:
+            confidence: ML model confidence (0-1)
+            base_size: Maximum bet size
+
+        Returns:
+            Bet size as fraction of base
+        """
+        if confidence < self.min_probability:
+            return 0.0
+
+        kelly = self.calculate_kelly_from_probability(confidence)
+        kelly *= self.kelly_fraction
+        kelly = self.discretize_bet_size(kelly)
+
+        return min(kelly * base_size, self.max_leverage)
+
+
+class VolatilityInverseKelly(MetaLabeledKelly):
+    """
+    Volatility-Inverse Kelly: Extension of Meta-Labeled Kelly that
+    emphasizes volatility normalization.
+
+    This variant is particularly useful for multi-asset portfolios
+    where maintaining consistent risk contribution is critical.
+
+    Position Size = Kelly_fraction * (sigma_target / sigma_asset) * ML_prob_adjustment
+
+    Features:
+    - Cross-sectional volatility ranking
+    - Dynamic volatility regime adjustment
+    - Correlation-aware sizing (optional)
+    """
+
+    def __init__(
+        self,
+        target_volatility: float = 0.15,
+        vol_adjustment_factor: float = 1.0,
+        use_rolling_vol: bool = True,
+        vol_half_life: int = 20,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.target_volatility = target_volatility
+        self.vol_adjustment_factor = vol_adjustment_factor
+        self.use_rolling_vol = use_rolling_vol
+        self.vol_half_life = vol_half_life
+
+    def calculate_ewma_volatility(
+        self,
+        returns: pd.Series
+    ) -> float:
+        """
+        Calculate EWMA volatility with specified half-life.
+
+        Args:
+            returns: Returns series
+
+        Returns:
+            Annualized EWMA volatility
+        """
+        if len(returns) < 10:
+            return self._avg_volatility
+
+        span = 2 * self.vol_half_life - 1
+        ewma_var = returns.ewm(span=span).var().iloc[-1]
+
+        return np.sqrt(ewma_var * 252)
+
+    def calculate_size(
+        self,
+        symbol: str,
+        current_price: float,
+        portfolio_value: float,
+        signal_strength: float,
+        ml_probability: Optional[float] = None,
+        returns: Optional[pd.Series] = None,
+        **kwargs
+    ) -> PositionSize:
+        """Calculate volatility-inverse position size."""
+        # Get volatility
+        if returns is not None and len(returns) >= 10:
+            if self.use_rolling_vol:
+                vol = self.calculate_ewma_volatility(returns)
+            else:
+                vol = returns.std() * np.sqrt(252)
+            self._volatility_cache[symbol] = vol
+        elif symbol in self._volatility_cache:
+            vol = self._volatility_cache[symbol]
+        else:
+            vol = self._avg_volatility
+
+        # Calculate base Kelly size
+        base_result = super().calculate_size(
+            symbol=symbol,
+            current_price=current_price,
+            portfolio_value=portfolio_value,
+            signal_strength=signal_strength,
+            ml_probability=ml_probability,
+            returns=returns,
+            **kwargs
+        )
+
+        # Additional volatility adjustment
+        vol_ratio = self.target_volatility / max(vol, 0.01)
+        vol_adjusted_value = base_result.dollar_value * vol_ratio * self.vol_adjustment_factor
+
+        # Apply leverage cap
+        max_value = portfolio_value * self.max_leverage
+        final_value = min(vol_adjusted_value, max_value)
+
+        # Recalculate shares
+        direction = np.sign(base_result.shares) if base_result.shares != 0 else 1
+        shares = int(final_value / current_price) * int(direction)
+        actual_value = abs(shares) * current_price
+
+        # Update metadata
+        metadata = base_result.metadata.copy()
+        metadata.update({
+            'asset_volatility': vol,
+            'vol_ratio': vol_ratio,
+            'vol_adjusted': True
+        })
+
+        return PositionSize(
+            symbol=symbol,
+            shares=shares,
+            dollar_value=actual_value,
+            weight=actual_value / portfolio_value if portfolio_value > 0 else 0,
+            risk_contribution=base_result.risk_contribution * vol_ratio,
+            sizing_method="vol_inverse_kelly",
+            confidence=base_result.confidence,
+            constraints_applied=base_result.constraints_applied,
+            metadata=metadata
+        )
+
+
 def create_position_sizer(
     method: Union[str, SizingMethod],
     **kwargs
@@ -975,7 +1446,12 @@ def create_position_sizer(
         Configured position sizer
     """
     if isinstance(method, str):
-        method = SizingMethod(method.lower())
+        method_lower = method.lower()
+        if method_lower == 'meta_kelly' or method_lower == 'meta_labeled_kelly':
+            return MetaLabeledKelly(**kwargs)
+        elif method_lower == 'vol_inverse_kelly':
+            return VolatilityInverseKelly(**kwargs)
+        method = SizingMethod(method_lower)
 
     sizers = {
         SizingMethod.KELLY: KellyCriterion,

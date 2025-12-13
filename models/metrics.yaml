@@ -1,4 +1,4 @@
-training_date: '2025-12-13T19:13:37.810365'
+training_date: '2025-12-13T21:08:35.058043'
 configuration:
   model_type: catboost
   meta_labeling: true
@@ -61,31 +61,31 @@ data:
   n_samples: 449763
   n_features: 51
 performance:
-  train_accuracy: 0.5713231190649297
-  train_precision: 0.5714251880533225
-  train_recall: 0.5713231190649297
-  train_f1: 0.571046279690922
-  cv_accuracy: 0.566698455432507
-  cv_accuracy_std: 0.0022696690352126403
+  train_accuracy: 0.5848280094182936
+  train_precision: 0.584967661812996
+  train_recall: 0.5848280094182936
+  train_f1: 0.5845528833035131
+  cv_accuracy: 0.5642216070533784
+  cv_accuracy_std: 0.0019144030857315756
 top_features:
-  primary_signal: 32.15667573381399
-  close_ffd: 5.865792448873473
-  vol_60: 4.090201087660071
-  micro_amihud_illiq: 3.5585959067365445
-  micro_vpin: 3.466915846694905
-  vol_20: 3.385212851914401
-  micro_kyle_lambda: 2.773209967003014
-  log_return_20: 2.7090953201875068
-  vol_10: 2.633009497493556
-  micro_ofi: 2.265927184376102
-  return_60: 2.2412787566495513
-  micro_vpin_zscore: 2.150066974611473
-  return_20: 2.060159969301605
-  vol_gk: 2.0065919707438815
-  log_return_60: 1.9625161469237484
-  regime_vol_percentile: 1.9385697985403365
-  close_ffd_d: 1.8966628956792386
-  volume_ffd: 1.8482136529702757
-  signal_confidence: 1.8445398407860851
-  micro_ofi_momentum: 1.8345716219134809
-training_time_seconds: 1310.6729645729065
+  primary_signal: 13.389779364490956
+  close_ffd: 7.721449364086454
+  vol_60: 6.767104326562368
+  micro_amihud_illiq: 5.71090132334825
+  vol_20: 5.046125869367175
+  micro_vpin: 4.850762565680499
+  micro_vpin_zscore: 3.7047499465692786
+  micro_kyle_lambda: 3.566894128297833
+  micro_ofi: 3.4540859010242757
+  vol_gk: 3.4482197232570617
+  regime_vol_percentile: 3.325126487000176
+  vol_10: 2.7988200125702973
+  vol_parkinson: 2.7625718212455572
+  return_60: 2.5936294764956487
+  log_return_60: 2.4530319278390156
+  signal_confidence: 2.1301075361089907
+  micro_micro_score: 2.129535511545832
+  micro_kyle_lambda_pct: 1.986519367364688
+  volume_ffd: 1.973659441608562
+  log_return_20: 1.8517957225959465
+training_time_seconds: 4399.402036905289

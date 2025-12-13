@@ -1469,3 +1469,551 @@ def calculate_dsr(
     """
     calc = SharpeRatioStatistics(periods_per_year=periods_per_year)
     return calc.deflated_sharpe_ratio(returns, n_trials, sr_benchmark=sr_benchmark)
+
+
+class DeflatedSharpeRatio:
+    """
+    Institutional-Grade Deflated Sharpe Ratio Implementation.
+
+    Implements the complete DSR framework from Marcos Lopez de Prado's
+    "The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest
+    Overfitting, and the Haircut Sharpe Ratio".
+
+    This class addresses the critical problem of selection bias in quantitative
+    finance, where researchers run many backtests and report only the best results.
+
+    Key Features:
+    1. Automatic estimation of independent trials from strategy variants
+    2. Proper adjustment for non-normality (skewness, kurtosis)
+    3. Haircut Sharpe Ratio calculation
+    4. Overfitting probability estimation
+    5. Integration with backtest reporting
+
+    The formula for DSR:
+    DSR = PSR(SR*, E[max(SR)]) where E[max(SR)] is the expected maximum
+    Sharpe ratio under the null hypothesis (random strategy).
+    """
+
+    def __init__(
+        self,
+        risk_free_rate: float = 0.0,
+        periods_per_year: int = 252
+    ):
+        """
+        Initialize DeflatedSharpeRatio calculator.
+
+        Args:
+            risk_free_rate: Annual risk-free rate (default: 0)
+            periods_per_year: Trading periods per year (252 for daily)
+        """
+        self.risk_free_rate = risk_free_rate
+        self.periods_per_year = periods_per_year
+        self._trials_history: List[Dict] = []
+
+    def calculate_sharpe_ratio(
+        self,
+        returns: pd.Series,
+        annualize: bool = True
+    ) -> float:
+        """
+        Calculate standard Sharpe Ratio.
+
+        SR = (E[R] - Rf) / std(R)
+
+        Args:
+            returns: Returns series
+            annualize: Whether to annualize (default: True)
+
+        Returns:
+            Sharpe ratio
+        """
+        if len(returns) < 2 or returns.std() == 0:
+            return 0.0
+
+        excess_returns = returns - self.risk_free_rate / self.periods_per_year
+        sr = excess_returns.mean() / returns.std()
+
+        if annualize:
+            sr *= np.sqrt(self.periods_per_year)
+
+        return sr
+
+    def calculate_sharpe_ratio_standard_error(
+        self,
+        returns: pd.Series
+    ) -> float:
+        """
+        Calculate standard error of Sharpe Ratio accounting for non-normality.
+
+        SE(SR*) = sqrt((1 - gamma3*SR* + (gamma4-1)/4*SR*^2) / (T-1))
+
+        Where:
+        - gamma3 = skewness
+        - gamma4 = kurtosis (excess)
+        - T = number of observations
+
+        This formula accounts for the fact that returns are typically
+        non-normal (fat tails, negative skew).
+
+        Args:
+            returns: Returns series
+
+        Returns:
+            Standard error of Sharpe ratio
+        """
+        n = len(returns)
+        if n < 4:
+            return float('inf')
+
+        sr = self.calculate_sharpe_ratio(returns, annualize=False)
+        skew = returns.skew()
+        kurt = returns.kurtosis()  # Excess kurtosis
+
+        # SE formula from Bailey & Lopez de Prado
+        sr_squared = sr ** 2
+        variance = (1 - skew * sr + (kurt / 4) * sr_squared) / (n - 1)
+
+        if variance < 0:
+            # Fallback to standard SE if formula gives negative variance
+            variance = 1 / (n - 1)
+
+        return np.sqrt(variance)
+
+    def probabilistic_sharpe_ratio(
+        self,
+        returns: pd.Series,
+        sr_benchmark: float = 0.0
+    ) -> float:
+        """
+        Calculate Probabilistic Sharpe Ratio (PSR).
+
+        PSR = Phi((SR* - SR_benchmark) / SE(SR*))
+
+        PSR gives the probability that the true Sharpe Ratio exceeds
+        the benchmark, accounting for estimation error and non-normality.
+
+        Args:
+            returns: Returns series
+            sr_benchmark: Benchmark SR to compare against
+
+        Returns:
+            PSR (probability between 0 and 1)
+        """
+        n = len(returns)
+        if n < 4:
+            return 0.5
+
+        sr = self.calculate_sharpe_ratio(returns, annualize=False)
+        se = self.calculate_sharpe_ratio_standard_error(returns)
+
+        if se <= 0 or se == float('inf'):
+            return 0.5
+
+        z_score = (sr - sr_benchmark) / se
+        return stats.norm.cdf(z_score)
+
+    def estimate_independent_trials(
+        self,
+        strategy_returns: List[pd.Series],
+        correlation_threshold: float = 0.5
+    ) -> int:
+        """
+        Estimate the number of independent trials from correlated strategies.
+
+        When researchers test multiple strategy variants, these are often
+        highly correlated. This method estimates the effective number of
+        independent trials using the eigenvalue decomposition approach.
+
+        N_independent = T / (1 + (N-1) * avg_correlation)
+
+        Or using eigenvalue method:
+        N_independent = (sum(eigenvalues))^2 / sum(eigenvalues^2)
+
+        Args:
+            strategy_returns: List of return series for each strategy variant
+            correlation_threshold: Threshold for considering strategies independent
+
+        Returns:
+            Estimated number of independent trials
+        """
+        if len(strategy_returns) <= 1:
+            return len(strategy_returns)
+
+        # Build correlation matrix of strategy returns
+        n_strategies = len(strategy_returns)
+
+        # Align returns to common dates
+        combined = pd.concat(
+            [r.rename(f'strat_{i}') for i, r in enumerate(strategy_returns)],
+            axis=1
+        ).dropna()
+
+        if len(combined) < 10:
+            return n_strategies
+
+        corr_matrix = combined.corr().values
+
+        # Method 1: Eigenvalue-based (more accurate)
+        eigenvalues = np.linalg.eigvalsh(corr_matrix)
+        eigenvalues = eigenvalues[eigenvalues > 0]
+
+        if len(eigenvalues) > 0:
+            n_independent_eigen = (np.sum(eigenvalues) ** 2) / np.sum(eigenvalues ** 2)
+        else:
+            n_independent_eigen = n_strategies
+
+        # Method 2: Average correlation
+        # Get upper triangle (excluding diagonal)
+        upper_tri = corr_matrix[np.triu_indices(n_strategies, k=1)]
+        if len(upper_tri) > 0:
+            avg_corr = np.mean(np.abs(upper_tri))
+            n_independent_corr = n_strategies / (1 + (n_strategies - 1) * avg_corr)
+        else:
+            n_independent_corr = n_strategies
+
+        # Use the more conservative estimate
+        n_independent = min(n_independent_eigen, n_independent_corr)
+
+        return max(1, int(np.ceil(n_independent)))
+
+    def estimate_trials_from_variance(
+        self,
+        returns: pd.Series,
+        strategy_sharpe_ratios: Optional[List[float]] = None
+    ) -> int:
+        """
+        Estimate number of trials from the variance of Sharpe ratios.
+
+        If multiple strategy variants were tested, the variance of their
+        Sharpe ratios can be used to infer the number of independent trials.
+
+        Formula: N = (SR_max - SR_mean)^2 / Var(SR) * correction_factor
+
+        Args:
+            returns: Primary strategy returns
+            strategy_sharpe_ratios: List of SRs from all tested variants
+
+        Returns:
+            Estimated number of independent trials
+        """
+        if strategy_sharpe_ratios is None or len(strategy_sharpe_ratios) < 2:
+            # Default estimate based on typical research practices
+            # Assume 50-100 variants tested
+            return 50
+
+        sr_array = np.array(strategy_sharpe_ratios)
+        sr_max = sr_array.max()
+        sr_mean = sr_array.mean()
+        sr_var = sr_array.var()
+
+        if sr_var <= 0:
+            return len(strategy_sharpe_ratios)
+
+        # Bailey & Lopez de Prado formula
+        # Expected max of N iid draws from standard normal
+        n_reported = len(strategy_sharpe_ratios)
+        expected_max_factor = np.sqrt(2 * np.log(n_reported))
+
+        n_estimated = max(1, int(((sr_max - sr_mean) / np.sqrt(sr_var)) ** 2 / expected_max_factor))
+
+        return n_estimated
+
+    def expected_max_sharpe_ratio(
+        self,
+        n_trials: int,
+        variance_sharpe: float = None,
+        n_observations: int = 252
+    ) -> float:
+        """
+        Calculate expected maximum Sharpe Ratio under the null hypothesis.
+
+        Under the null (random strategy), the expected maximum SR from
+        N independent trials is:
+
+        E[max(SR)] = sqrt(V(SR)) * [(1-gamma)*Phi^-1(1-1/N) + gamma*Phi^-1(1-1/(N*e))]
+
+        Where gamma is the Euler-Mascheroni constant (0.5772...)
+
+        Args:
+            n_trials: Number of independent trials
+            variance_sharpe: Variance of SR estimate (default: 1/(T-1))
+            n_observations: Number of return observations
+
+        Returns:
+            Expected maximum Sharpe ratio under null
+        """
+        if n_trials <= 1:
+            return 0.0
+
+        gamma = 0.5772156649  # Euler-Mascheroni constant
+
+        # Variance of SR under standard assumptions
+        if variance_sharpe is None:
+            variance_sharpe = 1.0 / (n_observations - 1)
+
+        std_sharpe = np.sqrt(variance_sharpe)
+
+        # Expected maximum of N iid standard normals
+        z1 = stats.norm.ppf(1 - 1 / n_trials)
+        z2 = stats.norm.ppf(1 - 1 / (n_trials * np.e))
+
+        e_max = std_sharpe * ((1 - gamma) * z1 + gamma * z2)
+
+        return e_max
+
+    def deflated_sharpe_ratio(
+        self,
+        returns: pd.Series,
+        n_trials: int = None,
+        strategy_returns_list: Optional[List[pd.Series]] = None,
+        sr_benchmark: float = 0.0
+    ) -> float:
+        """
+        Calculate the Deflated Sharpe Ratio.
+
+        DSR adjusts for selection bias from multiple testing by computing
+        the probability that the observed SR exceeds the expected maximum
+        SR under the null hypothesis.
+
+        DSR = PSR(SR*, max(SR_benchmark, E[max(SR)]))
+
+        A DSR < 0.95 indicates the strategy may be a false positive
+        (result of data mining rather than genuine alpha).
+
+        Args:
+            returns: Strategy returns
+            n_trials: Number of independent trials (auto-estimated if None)
+            strategy_returns_list: Returns from all tested variants
+            sr_benchmark: Minimum acceptable SR
+
+        Returns:
+            DSR (probability between 0 and 1)
+        """
+        n = len(returns)
+        if n < 4:
+            return 0.5
+
+        # Calculate observed SR
+        sr_observed = self.calculate_sharpe_ratio(returns, annualize=False)
+
+        # Estimate number of trials if not provided
+        if n_trials is None:
+            if strategy_returns_list is not None:
+                n_trials = self.estimate_independent_trials(strategy_returns_list)
+            else:
+                # Default assumption: moderate selection bias
+                n_trials = 50
+
+        # Calculate variance of SR
+        skew = returns.skew()
+        kurt = returns.kurtosis()
+        sr_squared = sr_observed ** 2
+        var_sr = (1 - skew * sr_observed + (kurt / 4) * sr_squared) / (n - 1)
+        var_sr = max(var_sr, 1 / (n - 1))
+
+        # Expected maximum SR under null
+        e_max_sr = self.expected_max_sharpe_ratio(n_trials, var_sr, n)
+
+        # Adjusted benchmark
+        sr_benchmark_adj = max(sr_benchmark, e_max_sr)
+
+        # Calculate DSR = PSR with adjusted benchmark
+        dsr = self.probabilistic_sharpe_ratio(returns, sr_benchmark_adj)
+
+        return dsr
+
+    def haircut_sharpe_ratio(
+        self,
+        returns: pd.Series,
+        n_trials: int = None,
+        strategy_returns_list: Optional[List[pd.Series]] = None
+    ) -> float:
+        """
+        Calculate the Haircut Sharpe Ratio.
+
+        The Haircut SR is the SR adjusted downward for expected multiple
+        testing bias. It represents what the "true" SR might be after
+        accounting for selection effects.
+
+        Haircut_SR = SR_observed - E[max(SR)] * (1 - DSR)
+
+        Args:
+            returns: Strategy returns
+            n_trials: Number of independent trials
+            strategy_returns_list: Returns from all tested variants
+
+        Returns:
+            Haircut-adjusted Sharpe ratio
+        """
+        sr_observed = self.calculate_sharpe_ratio(returns, annualize=True)
+        dsr = self.deflated_sharpe_ratio(returns, n_trials, strategy_returns_list)
+
+        n = len(returns)
+
+        # Estimate variance and expected max
+        if n_trials is None:
+            n_trials = 50
+
+        var_sr = 1 / (n - 1)
+        e_max_sr = self.expected_max_sharpe_ratio(n_trials, var_sr, n)
+
+        # Annualize the expected max
+        e_max_sr_ann = e_max_sr * np.sqrt(self.periods_per_year)
+
+        # Haircut based on DSR
+        haircut = e_max_sr_ann * (1 - dsr)
+        haircut_sr = sr_observed - haircut
+
+        return max(0, haircut_sr)
+
+    def probability_of_overfitting(
+        self,
+        in_sample_returns: pd.Series,
+        out_of_sample_returns: pd.Series,
+        n_trials: int = None
+    ) -> float:
+        """
+        Calculate the probability that a strategy is overfit.
+
+        Uses the ratio of out-of-sample to in-sample Sharpe ratios
+        compared to what would be expected from a non-overfit strategy.
+
+        Args:
+            in_sample_returns: In-sample backtest returns
+            out_of_sample_returns: Out-of-sample returns
+            n_trials: Number of trials tested
+
+        Returns:
+            Probability of overfitting (0-1)
+        """
+        sr_is = self.calculate_sharpe_ratio(in_sample_returns, annualize=True)
+        sr_oos = self.calculate_sharpe_ratio(out_of_sample_returns, annualize=True)
+
+        if sr_is <= 0:
+            return 1.0
+
+        # Ratio of OOS to IS Sharpe
+        sr_ratio = sr_oos / sr_is
+
+        # Expected ratio under no overfitting (theoretical: ~1)
+        # Under overfitting, ratio is typically < 0.5
+        if sr_ratio >= 1.0:
+            prob_overfit = 0.0
+        elif sr_ratio <= 0:
+            prob_overfit = 1.0
+        else:
+            # Use DSR to estimate overfitting probability
+            dsr = self.deflated_sharpe_ratio(in_sample_returns, n_trials)
+            prob_overfit = 1 - (sr_ratio * dsr)
+
+        return max(0, min(1, prob_overfit))
+
+    def generate_report(
+        self,
+        returns: pd.Series,
+        n_trials: int = None,
+        strategy_returns_list: Optional[List[pd.Series]] = None,
+        strategy_name: str = "Strategy"
+    ) -> Dict[str, Any]:
+        """
+        Generate comprehensive DSR analysis report.
+
+        Args:
+            returns: Strategy returns
+            n_trials: Number of trials (auto-estimated if None)
+            strategy_returns_list: Returns from all tested variants
+            strategy_name: Name for reporting
+
+        Returns:
+            Dictionary with full DSR analysis
+        """
+        n = len(returns)
+        sr = self.calculate_sharpe_ratio(returns, annualize=True)
+        sr_se = self.calculate_sharpe_ratio_standard_error(returns)
+        psr = self.probabilistic_sharpe_ratio(returns, sr_benchmark=0.0)
+        dsr = self.deflated_sharpe_ratio(returns, n_trials, strategy_returns_list)
+        haircut_sr = self.haircut_sharpe_ratio(returns, n_trials, strategy_returns_list)
+
+        # Confidence interval
+        z = stats.norm.ppf(0.975)  # 95% CI
+        sr_daily = self.calculate_sharpe_ratio(returns, annualize=False)
+        ci_lower = (sr_daily - z * sr_se) * np.sqrt(self.periods_per_year)
+        ci_upper = (sr_daily + z * sr_se) * np.sqrt(self.periods_per_year)
+
+        # Interpretation
+        if dsr >= 0.95:
+            significance = "SIGNIFICANT"
+            interpretation = "Strategy passes multiple testing adjustment"
+        elif dsr >= 0.80:
+            significance = "MARGINAL"
+            interpretation = "Strategy shows some evidence but needs more data"
+        else:
+            significance = "INSIGNIFICANT/OVERFIT"
+            interpretation = "Strategy likely result of data mining"
+
+        return {
+            'strategy_name': strategy_name,
+            'n_observations': n,
+            'n_trials_estimated': n_trials or 50,
+
+            # Sharpe Ratios
+            'sharpe_ratio': sr,
+            'sharpe_ratio_se': sr_se * np.sqrt(self.periods_per_year),
+            'sharpe_ratio_ci_95': (ci_lower, ci_upper),
+
+            # Probabilistic metrics
+            'probabilistic_sr': psr,
+            'deflated_sr': dsr,
+            'haircut_sr': haircut_sr,
+
+            # Distribution
+            'skewness': returns.skew(),
+            'kurtosis': returns.kurtosis(),
+
+            # Interpretation
+            'significance': significance,
+            'interpretation': interpretation,
+            'passes_95_threshold': dsr >= 0.95,
+
+            # Expected values under null
+            'expected_max_sr_null': self.expected_max_sharpe_ratio(
+                n_trials or 50, 1 / (n - 1), n
+            ) * np.sqrt(self.periods_per_year)
+        }
+
+
+# Updated convenience function with better trials estimation
+def calculate_dsr_with_trials_estimation(
+    returns: pd.Series,
+    strategy_variants: Optional[List[pd.Series]] = None,
+    periods_per_year: int = 252
+) -> Dict[str, float]:
+    """
+    Calculate DSR with automatic trials estimation.
+
+    This is the recommended function for institutional use as it
+    properly estimates the number of independent trials from
+    correlated strategy variants.
+
+    Args:
+        returns: Primary strategy returns
+        strategy_variants: List of returns from all tested strategy variants
+        periods_per_year: Trading periods per year
+
+    Returns:
+        Dictionary with DSR, haircut SR, and diagnostics
+    """
+    calculator = DeflatedSharpeRatio(periods_per_year=periods_per_year)
+
+    if strategy_variants:
+        n_trials = calculator.estimate_independent_trials(strategy_variants)
+    else:
+        n_trials = None  # Will use default
+
+    report = calculator.generate_report(
+        returns,
+        n_trials=n_trials,
+        strategy_returns_list=strategy_variants
+    )
+
+    return report
