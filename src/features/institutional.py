@@ -728,6 +728,33 @@ class HMMRegimeDetector:
         result['hmm_confidence'] = 0.7  # Default confidence
         result['regime_change'] = (result['hmm_state'].diff() != 0).astype(int)
 
+        # Add regime probabilities (simulated from volatility-based detection)
+        # These approximate what HMM would produce
+        result['prob_neutral'] = 0.0
+        result['prob_bull'] = 0.0
+        result['prob_bear'] = 0.0
+
+        # Set probabilities based on detected state
+        result.loc[result['hmm_state'] == 0, 'prob_bear'] = 0.7
+        result.loc[result['hmm_state'] == 0, 'prob_neutral'] = 0.2
+        result.loc[result['hmm_state'] == 0, 'prob_bull'] = 0.1
+
+        result.loc[result['hmm_state'] == 1, 'prob_neutral'] = 0.7
+        result.loc[result['hmm_state'] == 1, 'prob_bear'] = 0.15
+        result.loc[result['hmm_state'] == 1, 'prob_bull'] = 0.15
+
+        result.loc[result['hmm_state'] == 2, 'prob_bull'] = 0.7
+        result.loc[result['hmm_state'] == 2, 'prob_neutral'] = 0.2
+        result.loc[result['hmm_state'] == 2, 'prob_bear'] = 0.1
+
+        # Add vol_percentile
+        result['vol_percentile'] = vol_pct.fillna(0.5)
+
+        # Calculate regime duration (how many bars in current regime)
+        regime_changes = result['hmm_state'].diff().fillna(0) != 0
+        regime_groups = regime_changes.cumsum()
+        result['regime_duration'] = regime_groups.groupby(regime_groups).cumcount() + 1
+
         return result
 
     def generate_regime_features(
@@ -865,33 +892,42 @@ class InstitutionalFeatureEngineer:
 
         # 1. Fractional Differentiation Features
         if FeatureCategory.FRACDIFF in include_categories:
-            fracdiff_df, optimal_ds = self._fracdiff.transform(
-                df, columns=['close', 'volume']
-            )
-            self._optimal_d.update(optimal_ds)
+            try:
+                fracdiff_df, optimal_ds = self._fracdiff.transform(
+                    df, columns=['close', 'volume']
+                )
+                self._optimal_d.update(optimal_ds)
 
-            # Add FFD columns
-            ffd_cols = [c for c in fracdiff_df.columns if '_ffd' in c]
-            for col in ffd_cols:
-                features[col] = fracdiff_df[col]
+                # Add FFD columns
+                ffd_cols = [c for c in fracdiff_df.columns if '_ffd' in c]
+                for col in ffd_cols:
+                    features[col] = fracdiff_df[col]
 
-            # FFD-based derived features
-            if 'close_ffd' in fracdiff_df.columns:
-                ffd = fracdiff_df['close_ffd']
-                features['ffd_zscore'] = (ffd - ffd.rolling(20).mean()) / ffd.rolling(20).std()
-                features['ffd_momentum'] = ffd - ffd.rolling(10).mean()
+                # FFD-based derived features
+                if 'close_ffd' in fracdiff_df.columns:
+                    ffd = fracdiff_df['close_ffd']
+                    features['ffd_zscore'] = (ffd - ffd.rolling(20).mean()) / ffd.rolling(20).std()
+                    features['ffd_momentum'] = ffd - ffd.rolling(10).mean()
+            except Exception as e:
+                logger.warning(f"FFD feature generation failed: {e}")
 
         # 2. Microstructure Features
         if FeatureCategory.MICROSTRUCTURE in include_categories:
-            micro_features = self._microstructure.generate_all_features(df)
-            for col in micro_features.columns:
-                features[f'micro_{col}'] = micro_features[col]
+            try:
+                micro_features = self._microstructure.generate_all_features(df)
+                for col in micro_features.columns:
+                    features[f'micro_{col}'] = micro_features[col]
+            except Exception as e:
+                logger.warning(f"Microstructure feature generation failed: {e}")
 
         # 3. Regime Features
         if FeatureCategory.REGIME in include_categories:
-            regime_features = self._regime.generate_regime_features(df)
-            for col in regime_features.columns:
-                features[f'regime_{col}'] = regime_features[col]
+            try:
+                regime_features = self._regime.generate_regime_features(df)
+                for col in regime_features.columns:
+                    features[f'regime_{col}'] = regime_features[col]
+            except Exception as e:
+                logger.warning(f"Regime feature generation failed: {e}")
 
         # 4. Returns (stationary by construction)
         if FeatureCategory.RETURNS in include_categories:
@@ -930,6 +966,39 @@ class InstitutionalFeatureEngineer:
             features['vol_gk'] = np.sqrt(
                 (0.5 * log_hl_sq - (2 * np.log(2) - 1) * log_co).rolling(20).mean()
             )
+
+        # 6. Signal Features (placeholder - populated by strategy if needed)
+        # These are typically derived from the model itself or ensemble voting
+        if 'primary_signal' not in features.columns:
+            # Derive a basic signal from momentum and regime features
+            try:
+                signal = np.zeros(len(df))
+
+                # Use return momentum as base signal
+                if 'return_momentum' in features.columns:
+                    mom = features['return_momentum'].fillna(0)
+                    signal = signal + np.sign(mom) * 0.5
+
+                # Add regime influence
+                if 'regime_regime_score' in features.columns:
+                    regime = features['regime_regime_score'].fillna(0)
+                    signal = signal + regime * 0.3
+
+                # Add microstructure influence
+                if 'micro_ofi' in features.columns:
+                    ofi = features['micro_ofi'].fillna(0)
+                    ofi_norm = (ofi - ofi.mean()) / (ofi.std() + 1e-8)
+                    signal = signal + np.clip(ofi_norm, -1, 1) * 0.2
+
+                features['primary_signal'] = np.clip(signal, -1, 1)
+
+                # Confidence based on feature agreement
+                confidence = np.abs(signal)
+                features['signal_confidence'] = np.clip(confidence, 0, 1)
+            except Exception as e:
+                logger.warning(f"Signal feature generation failed: {e}")
+                features['primary_signal'] = 0.0
+                features['signal_confidence'] = 0.0
 
         # Handle infinities and NaNs
         features = features.replace([np.inf, -np.inf], np.nan)

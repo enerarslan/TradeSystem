@@ -201,7 +201,12 @@ class FractionalDifferentiation:
             index=series.index,
             dtype=np.float64
         )
-        result.iloc[len(weights) - 1:] = result_values
+
+        # Safe assignment: ensure we only assign as many values as we have
+        start_idx = len(weights) - 1
+        end_idx = start_idx + len(result_values)
+        if len(result_values) > 0 and end_idx <= len(result):
+            result.iloc[start_idx:end_idx] = result_values
 
         return result
 

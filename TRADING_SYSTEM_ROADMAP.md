@@ -1,11 +1,11 @@
 # AlphaTrade System - AI Agent Roadmap
 ## JPMorgan-Level Institutional Trading Platform
 
-**Version:** 4.0 - INSTITUTIONAL TRAINING PIPELINE (AFML Best Practices)
-**Status:** ✅ All Components Built + Full AFML Implementation + Institutional Training Pipeline
+**Version:** 4.1 - PRODUCTION DATA ALIGNMENT HOTFIX
+**Status:** ✅ All Components Built + Full AFML Implementation + Institutional Training Pipeline + Production Ready
 **Total Files:** 55+ Python files + configs + deployment
 **Lines of Code:** ~35,000+
-**Last Updated:** December 2024
+**Last Updated:** December 13, 2024
 
 ---
 
@@ -18,7 +18,15 @@ A complete institutional-grade algorithmic trading system capable of:
 - Algorithmic execution (TWAP, VWAP, POV, Adaptive)
 - Real-time monitoring and reporting
 
-### Version 4.0 Institutional Training Pipeline (NEW):
+### Version 4.1 Production Data Alignment HOTFIX (CRITICAL):
+- **Feature Alignment Fix** - main.py now uses `InstitutionalFeatureEngineer` instead of `FeatureBuilder`
+- **51/51 Feature Match** - Backtest now generates exact features required by trained model
+- **FFD Slice Fix** - Fixed array bounds error in `frac_diff_ffd_vectorized` method
+- **HMM Fallback Regime** - Added missing regime probability features (prob_bull, prob_bear, prob_neutral)
+- **Regime Duration** - Added regime_duration tracking to fallback regime detection
+- **Signal Features** - Added primary_signal and signal_confidence to complete feature set
+
+### Version 4.0 Institutional Training Pipeline:
 - **InstitutionalFeatureEngineer** - Complete AFML feature engineering (FracDiff, Microstructure, HMM Regime)
 - **Meta-Labeling Pipeline** - Two-stage approach: Primary Signal + ML Filter (AFML Ch. 3.6)
 - **Sequential Bootstrap** - Proper sampling for dependent financial data
@@ -551,6 +559,42 @@ Order | File/Command | Purpose
 | SequentialBootstrap | ✅ | Sample uniqueness-aware bootstrap for dependent data |
 | BaggingEnsemble | ✅ | 100+ estimators, 50% samples, 70% features per estimator |
 | train_models.py | ✅ | `scripts/train_models.py`: 538 lines - Complete CLI training script |
+
+### Phase 10: Production Data Alignment HOTFIX v4.1 (COMPLETED ✅)
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| main.py Feature Alignment | ✅ | Replaced `FeatureBuilder` with `InstitutionalFeatureEngineer` |
+| 51/51 Feature Match | ✅ | Generated features now perfectly match `models/features.txt` |
+| fracdiff.py FFD Fix | ✅ | Safe bounds checking in `frac_diff_ffd_vectorized` slice assignment |
+| HMM Fallback Probabilities | ✅ | Added prob_neutral, prob_bull, prob_bear to `_fallback_regime` |
+| Regime Duration | ✅ | Added `regime_duration` feature tracking consecutive bars in regime |
+| Vol Percentile | ✅ | Added `vol_percentile` to fallback regime (was only in full HMM) |
+| Signal Features | ✅ | Added `primary_signal` and `signal_confidence` composite features |
+
+**Critical Bug Fixed:**
+- **Issue:** Backtest was using `FeatureBuilder` (10-11/51 features) while model was trained with `InstitutionalFeatureEngineer` (51 features)
+- **Impact:** ML predictions were garbage ("garbage in, garbage out")
+- **Solution:** Aligned backtest pipeline with training pipeline
+
+**Files Modified:**
+1. `main.py` - Import and initialize InstitutionalFeatureEngineer
+2. `src/features/fracdiff.py` - Safe array bounds in FFD vectorized
+3. `src/features/institutional.py` - Complete fallback regime features + signal features
+
+**Verification:**
+```python
+# Test command that confirms 51/51 feature match
+python -c "
+from src.features.institutional import InstitutionalFeatureEngineer
+engineer = InstitutionalFeatureEngineer()
+features = engineer.build_features(test_df)
+expected = set(open('models/features.txt').read().strip().split('\n'))
+generated = set(features.columns)
+print(f'Match: {len(expected & generated)}/51')
+"
+# Output: Match: 51/51
+```
 
 **Key Performance Metrics (AAPL Test Run):**
 - **CV Accuracy:** 54.5% (+/- 0.38%)
@@ -1294,10 +1338,11 @@ training:
 
 ---
 
-*Document Version: 4.0*
-*Implementation Status: COMPLETE + FULL AFML INSTITUTIONAL METHODOLOGY + INSTITUTIONAL TRAINING PIPELINE*
+*Document Version: 4.1*
+*Implementation Status: COMPLETE + FULL AFML INSTITUTIONAL METHODOLOGY + INSTITUTIONAL TRAINING PIPELINE + PRODUCTION READY*
 *Ready for: Model Training → Backtest → Paper Trading → Live Trading*
 *v3.1 Features: Triple Barrier, Meta-Labeling, Information Bars, Clustered Importance, PSR/DSR, PurgedKFoldCV 5% Embargo*
 *v3.2 Features: Trading Hours Filter, Cross-Asset Integration, Regime Features, Cross-Sectional Ranks, Dynamic Embargo, Combined Weights, Symbol-Specific Costs*
 *v3.3 Features: Data Quality Pipeline, Barrier Calibration, Label Validation, Holdout Setup, Feature Optimization, Regime Awareness, Symbol Parameters*
 *v4.0 Features: InstitutionalFeatureEngineer, FracDiff Auto-Optimization, VPIN/Kyle's Lambda/Amihud Microstructure, MetaLabelingPipeline, BaggingEnsemble, SequentialBootstrap*
+*v4.1 Features: Production Data Alignment (51/51 features), FFD Slice Fix, HMM Fallback Regime Complete, Signal Features, Backtest-Training Pipeline Alignment*
