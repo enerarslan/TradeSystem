@@ -461,6 +461,9 @@ class SymbolConfigUpdater:
         # Backup existing
         if self.config_path.exists():
             backup_path = self.config_path.with_suffix('.yaml.backup')
+            # Remove existing backup if it exists (Windows compatibility)
+            if backup_path.exists():
+                backup_path.unlink()
             self.config_path.rename(backup_path)
             logger.info(f"Backed up existing config to {backup_path}")
 
