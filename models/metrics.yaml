@@ -1,0 +1,46 @@
+training_date: '2025-12-13T18:23:11.149693'
+configuration:
+  model_type: catboost
+  meta_labeling: true
+  n_estimators: 100
+  n_splits: 5
+  embargo_pct: 0.05
+  pt_sl_ratio:
+  - 1.5
+  - 1.0
+  max_holding_period: 20
+data:
+  symbols:
+  - AAPL
+  n_symbols_processed: 1
+  n_samples: 15181
+  n_features: 47
+performance:
+  train_accuracy: 0.7489625189381464
+  train_precision: 0.7507305768300093
+  train_recall: 0.7489625189381464
+  train_f1: 0.7473945966173235
+  cv_accuracy: 0.5450238234371604
+  cv_accuracy_std: 0.0038424455487004855
+top_features:
+  close_ffd: 9.735599363622208
+  vol_60: 7.07335869129472
+  micro_vpin_zscore: 5.54042724170074
+  micro_amihud_illiq: 4.877956993508042
+  regime_vol_percentile: 4.63855402982507
+  micro_vpin: 4.513147156726019
+  micro_kyle_lambda: 4.485736785232465
+  vol_20: 4.204116733682348
+  micro_ofi: 3.938964141443681
+  vol_gk: 3.82506986939372
+  log_return_60: 3.8045121356069855
+  micro_micro_score: 3.5255825290834806
+  return_60: 3.4854199201733276
+  micro_kyle_lambda_pct: 3.1779314261741334
+  vol_10: 3.011018220517623
+  primary_signal: 2.8579037687115845
+  log_return_20: 2.223051003720328
+  vol_parkinson: 2.0752985185570627
+  return_20: 1.9208077476304137
+  ffd_momentum: 1.7065086143897292
+training_time_seconds: 269.3098349571228
