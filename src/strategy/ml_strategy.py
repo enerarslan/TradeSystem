@@ -7,11 +7,14 @@ Features:
 - Ensemble model strategies
 - Feature importance integration
 - Adaptive signal thresholds
+- CatBoost model wrapper for direct pkl loading
 """
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple, Any
+import pickle
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any, Union
 from datetime import datetime
 
 from .base_strategy import (
@@ -26,6 +29,114 @@ from ..utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+class CatBoostModelWrapper:
+    """
+    Wrapper for raw CatBoost models loaded from pickle files.
+
+    This wrapper provides a consistent interface compatible with BaseModel
+    for CatBoost models that were saved directly (not through our BaseModel framework).
+    """
+
+    def __init__(self, model, feature_names: Optional[List[str]] = None):
+        """
+        Initialize wrapper.
+
+        Args:
+            model: Raw CatBoost model object
+            feature_names: List of feature names the model was trained on
+        """
+        self._model = model
+        self._feature_names = feature_names or []
+        self.model_type = 'catboost'
+        self._is_trained = True
+
+        # Try to get feature names from model if not provided
+        if not self._feature_names:
+            try:
+                self._feature_names = list(model.feature_names_)
+            except (AttributeError, TypeError):
+                pass
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        """Make predictions"""
+        # Align features if we know the expected feature names
+        if self._feature_names:
+            available = [f for f in self._feature_names if f in X.columns]
+            if available:
+                X = X[available]
+
+        predictions = self._model.predict(X)
+
+        # Flatten if needed
+        if hasattr(predictions, 'flatten'):
+            predictions = predictions.flatten()
+
+        return predictions
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        """Predict class probabilities"""
+        # Align features if we know the expected feature names
+        if self._feature_names:
+            available = [f for f in self._feature_names if f in X.columns]
+            if available:
+                X = X[available]
+
+        try:
+            return self._model.predict_proba(X)
+        except AttributeError:
+            # Regressor - return predictions as probabilities
+            preds = self._model.predict(X)
+            return np.column_stack([1 - preds, preds])
+
+    def get_feature_importance(self) -> Dict[str, float]:
+        """Get feature importance scores"""
+        try:
+            importance = self._model.feature_importances_
+            if self._feature_names and len(self._feature_names) == len(importance):
+                return dict(zip(self._feature_names, importance))
+            return {f'feature_{i}': v for i, v in enumerate(importance)}
+        except (AttributeError, TypeError):
+            return {}
+
+
+def load_model_from_path(model_path: str, feature_list: Optional[List[str]] = None) -> Union[BaseModel, CatBoostModelWrapper]:
+    """
+    Load a model from a pickle file path.
+
+    Handles both BaseModel subclasses and raw sklearn/catboost models.
+
+    Args:
+        model_path: Path to the pickle file
+        feature_list: Optional list of feature names
+
+    Returns:
+        Model object (BaseModel or CatBoostModelWrapper)
+    """
+    path = Path(model_path)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    with open(path, 'rb') as f:
+        loaded = pickle.load(f)
+
+    # Check if it's our BaseModel format (dict with 'model' key)
+    if isinstance(loaded, dict) and 'model' in loaded:
+        # This is our standard format
+        model = loaded['model']
+        feature_names = loaded.get('feature_names', feature_list or [])
+
+        # Return wrapped model
+        return CatBoostModelWrapper(model, feature_names)
+
+    # Check if it's a BaseModel subclass
+    if isinstance(loaded, BaseModel):
+        return loaded
+
+    # It's a raw model (CatBoost, XGBoost, etc.)
+    return CatBoostModelWrapper(loaded, feature_list)
+
+
 class MLStrategy(BaseStrategy):
     """
     Machine learning based trading strategy.
@@ -37,7 +148,9 @@ class MLStrategy(BaseStrategy):
     def __init__(
         self,
         model: Optional[BaseModel] = None,
+        model_path: Optional[str] = None,
         feature_builder: Optional[FeatureBuilder] = None,
+        feature_list: Optional[List[str]] = None,
         min_confidence: float = 0.6,
         signal_threshold: float = 0.5,
         use_probability: bool = True,
@@ -47,23 +160,36 @@ class MLStrategy(BaseStrategy):
         Initialize MLStrategy.
 
         Args:
-            model: Trained ML model
+            model: Trained ML model (optional if model_path provided)
+            model_path: Path to model pickle file (optional if model provided)
             feature_builder: Feature engineering builder
+            feature_list: List of feature names for consistency (from features.txt)
             min_confidence: Minimum prediction confidence
             signal_threshold: Threshold for signal generation
             use_probability: Use probability output for strength
         """
-        config = StrategyConfig(name="ml_strategy", **kwargs)
+        config = StrategyConfig(name=kwargs.pop('name', 'ml_strategy'), **kwargs)
         super().__init__(config)
 
-        self.model = model
+        # Load model from path if provided
+        if model is None and model_path is not None:
+            self.model = load_model_from_path(model_path, feature_list)
+            logger.info(f"Loaded model from {model_path}")
+        else:
+            self.model = model
+
         self.feature_builder = feature_builder or FeatureBuilder()
+        self.feature_list = feature_list or []
         self.min_confidence = min_confidence
         self.signal_threshold = signal_threshold
         self.use_probability = use_probability
 
         self._feature_cache: Dict[str, pd.DataFrame] = {}
         self._prediction_history: List[Dict[str, Any]] = []
+
+        # Log feature list info
+        if self.feature_list:
+            logger.info(f"MLStrategy initialized with {len(self.feature_list)} required features")
 
     def set_model(self, model: BaseModel) -> None:
         """Set the ML model"""
@@ -112,27 +238,49 @@ class MLStrategy(BaseStrategy):
         # Get latest feature row
         latest_features = features.iloc[[-1]].dropna(axis=1)
 
-        # Ensure features match model's expected features
-        if hasattr(self.model, '_feature_names'):
+        # FIXED: Use feature_list from features.txt if available for feature alignment
+        expected_features = None
+        if self.feature_list:
+            expected_features = self.feature_list
+        elif hasattr(self.model, '_feature_names') and self.model._feature_names:
             expected_features = self.model._feature_names
+
+        if expected_features:
             available = [f for f in expected_features if f in latest_features.columns]
 
-            if len(available) < len(expected_features) * 0.8:
-                logger.warning(f"Insufficient features for {symbol}")
+            if len(available) < len(expected_features) * 0.5:
+                logger.warning(
+                    f"Insufficient features for {symbol}: "
+                    f"{len(available)}/{len(expected_features)} available"
+                )
                 return SignalType.FLAT, 0.0
 
+            # Reorder to match expected feature order
             latest_features = latest_features[available]
+
+            # Fill missing features with 0 (for features that couldn't be computed)
+            missing = [f for f in expected_features if f not in available]
+            if missing:
+                logger.debug(f"Missing {len(missing)} features for {symbol}, filling with 0")
+                for f in missing:
+                    latest_features[f] = 0.0
+                # Reorder to expected order
+                latest_features = latest_features[[f for f in expected_features if f in latest_features.columns]]
 
         # Make prediction
         prediction = self.model.predict(latest_features)[0]
 
         # Get probability/confidence
         if self.use_probability:
-            proba = self.model.predict_proba(latest_features)
-            if proba.ndim > 1:
-                confidence = np.max(proba[0])
-            else:
-                confidence = abs(proba[0] - 0.5) * 2
+            try:
+                proba = self.model.predict_proba(latest_features)
+                if proba.ndim > 1:
+                    confidence = np.max(proba[0])
+                else:
+                    confidence = abs(proba[0] - 0.5) * 2
+            except Exception as e:
+                logger.debug(f"Could not get probabilities: {e}")
+                confidence = 0.7  # Default confidence
         else:
             confidence = 0.7  # Default confidence
 

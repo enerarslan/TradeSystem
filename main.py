@@ -107,9 +107,9 @@ class AlphaTradeSystem:
         self._last_signals: Dict[str, Any] = {}
         self._market_data: Dict[str, pd.DataFrame] = {}
 
-        # Setup logging
+        # Setup logging - FIXED: Use correct parameter names
         setup_logging(
-            log_dir=self.config.get('logging', {}).get('log_dir', 'logs'),
+            log_path=self.config.get('logging', {}).get('log_dir', 'logs'),
             level=self.config.get('logging', {}).get('level', 'INFO')
         )
 
@@ -154,11 +154,11 @@ class AlphaTradeSystem:
 
             logger.info(f"Trading universe: {len(self.symbols)} symbols")
 
-            # Initialize data loader
+            # Initialize data loader - FIXED: Use correct parameter names
             logger.info("Initializing data loader...")
             self.data_loader = MultiAssetLoader(
-                symbols=self.symbols,
-                data_dir="data/raw"
+                data_path="data/raw",
+                cache_path="data/cache"
             )
 
             # Initialize preprocessor
@@ -223,36 +223,46 @@ class AlphaTradeSystem:
 
     def _init_strategies(self) -> None:
         """Initialize trading strategies"""
-        # Momentum strategy
+        # Momentum strategy - FIXED: Don't pass name through kwargs (hardcoded in strategy)
         momentum = MomentumStrategy(
-            name="momentum_main",
-            lookback=20,
-            threshold=0.02
+            lookback_periods=[10, 20, 50],
+            rsi_period=14
         )
         self.strategies.append(momentum)
 
-        # Mean reversion strategy
+        # Mean reversion strategy - FIXED: Use correct parameter names
         mean_rev = MeanReversionStrategy(
-            name="mean_reversion_main",
-            lookback=20,
+            lookback_period=20,
             entry_zscore=2.0,
             exit_zscore=0.5
         )
         self.strategies.append(mean_rev)
 
-        # ML strategy (if models exist)
-        model_path = Path("models/ensemble_model.pkl")
+        # ML strategy (if models exist) - FIXED: Use correct model path
+        model_path = Path("models/model.pkl")
+        features_path = Path("models/features.txt")
+
         if model_path.exists():
             try:
+                # Load feature list from features.txt for consistency
+                feature_list = None
+                if features_path.exists():
+                    with open(features_path, 'r') as f:
+                        feature_list = [line.strip() for line in f.readlines() if line.strip()]
+                    logger.info(f"Loaded {len(feature_list)} features from features.txt")
+
                 ml_strategy = MLStrategy(
                     name="ml_ensemble",
                     model_path=str(model_path),
-                    feature_builder=self.feature_builder
+                    feature_builder=self.feature_builder,
+                    feature_list=feature_list
                 )
                 self.strategies.append(ml_strategy)
-                logger.info("ML strategy loaded")
+                logger.info("ML strategy loaded successfully")
             except Exception as e:
                 logger.warning(f"Could not load ML strategy: {e}")
+                import traceback
+                traceback.print_exc()
 
     async def _init_broker(self) -> None:
         """Initialize broker connection"""
@@ -302,17 +312,22 @@ class AlphaTradeSystem:
         """Load historical data for all symbols"""
         logger.info("Loading historical data...")
 
+        # FIXED: Use load_symbols method (plural) which handles parallel loading
+        raw_data = self.data_loader.load_symbols(
+            symbols=self.symbols,
+            show_progress=True
+        )
+
+        # Preprocess each symbol's data - FIXED: Use preprocess() method which returns tuple
         data = {}
-        for symbol in self.symbols:
+        for symbol, df in raw_data.items():
             try:
-                df = self.data_loader.load_symbol(symbol)
                 if df is not None and len(df) > 0:
-                    # Preprocess
-                    df = self.preprocessor.clean_data(df)
-                    data[symbol] = df
-                    logger.debug(f"Loaded {len(df)} bars for {symbol}")
+                    df_clean, report = self.preprocessor.preprocess(df, symbol)
+                    data[symbol] = df_clean
+                    logger.debug(f"Loaded {len(df_clean)} bars for {symbol} (quality: {report.quality_score:.1f})")
             except Exception as e:
-                logger.warning(f"Failed to load {symbol}: {e}")
+                logger.warning(f"Failed to preprocess {symbol}: {e}")
 
         logger.info(f"Loaded data for {len(data)} symbols")
         self._market_data = data
@@ -437,12 +452,25 @@ class AlphaTradeSystem:
             warmup_period=100
         )
 
-        # Use first strategy for backtest
+        # FIXED: Select ML strategy as primary backtest target
         if not self.strategies:
             logger.error("No strategies configured")
             return
 
-        strategy = self.strategies[0]
+        # Find ML strategy by name (ml_ensemble or ml_strategy)
+        strategy = None
+        ml_strategy_names = ['ml_ensemble', 'ml_strategy']
+
+        for s in self.strategies:
+            if s.name in ml_strategy_names:
+                strategy = s
+                logger.info(f"Selected ML strategy '{s.name}' for backtest")
+                break
+
+        # Fallback to first strategy if no ML strategy found
+        if strategy is None:
+            strategy = self.strategies[0]
+            logger.warning(f"ML strategy not found, falling back to '{strategy.name}'")
 
         # Run backtest
         engine = BacktestEngine(
