@@ -843,7 +843,7 @@ def train_with_purged_cv(
     X: pd.DataFrame,
     y: pd.Series,
     sample_weight: pd.Series = None,
-    n_splits: int = 5,
+    n_splits: int = 3,  # Changed from 5 to 3 for better effective test size with 11% embargo
     embargo_pct: float = None,
     use_dynamic_embargo: bool = True
 ) -> dict:
@@ -1051,6 +1051,10 @@ def main():
     parser.add_argument("--include-extended-hours", action="store_true", default=False,
                         help="Include pre-market and after-hours data")
     parser.add_argument("--n-trials", type=int, default=1, help="Number of backtests for DSR")
+    parser.add_argument("--n-splits", type=int, default=3,
+                        help="Number of CV folds (default: 3, recommended with 11%% embargo)")
+    parser.add_argument("--embargo", type=float, default=0.11,
+                        help="Embargo percentage for PurgedKFoldCV (default: 0.11 = 11%%)")
     parser.add_argument("--use-optimal-features", action="store_true", default=True,
                         help="Use pre-selected optimal features from config/optimal_features.yaml")
     parser.add_argument("--optimal-features-config", type=str, default="config/optimal_features.yaml",
@@ -1158,6 +1162,7 @@ def main():
     weights_train = sample_weights.iloc[:split_idx]
 
     logger.info(f"Train size: {len(X_train)}, Validation size: {len(X_val)}")
+    logger.info(f"CV settings: n_splits={args.n_splits}, embargo={args.embargo:.1%}")
 
     # Validate train/val label distributions
     train_labels = y_train.unique()
@@ -1274,7 +1279,8 @@ def main():
                 'bar_type': 'dollar' if args.use_information_bars else 'time',
                 'feature_neutralization': args.neutralize,
                 'cv_method': 'purged_kfold',
-                'embargo_pct': 0.05
+                'n_splits': args.n_splits,
+                'embargo_pct': args.embargo
             },
             'symbols': symbols,
             'train_size': len(X_train),
