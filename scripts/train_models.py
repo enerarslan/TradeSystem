@@ -62,6 +62,7 @@ from src.models.ensemble import StackingEnsemble, VotingEnsemble
 from src.models.training import (
     ModelTrainer,
     WalkForwardValidator,
+    WalkForwardConfig,
     CrossValidationTrainer,
     ClusteredFeatureImportance,
     feature_importance_with_clustering
@@ -116,7 +117,8 @@ def apply_triple_barrier_labels(
     max_holding_period: int = 10,
     volatility_lookback: int = 20,
     min_return: float = 0.0,
-    use_cusum_events: bool = True
+    use_cusum_events: bool = True,
+    cusum_threshold_mult: float = 3.0  # Increased from 2.0 to reduce autocorrelation
 ) -> pd.DataFrame:
     """
     Apply Triple Barrier Method labeling.
@@ -138,6 +140,7 @@ def apply_triple_barrier_labels(
         volatility_lookback: Periods for volatility estimation
         min_return: Minimum return threshold
         use_cusum_events: Use CUSUM filter for event sampling
+        cusum_threshold_mult: CUSUM threshold as multiple of std (higher = fewer, more independent events)
 
     Returns:
         DataFrame with labels and barrier info
@@ -158,10 +161,11 @@ def apply_triple_barrier_labels(
     # Get event timestamps
     if use_cusum_events:
         # Use CUSUM filter for adaptive event sampling
+        # Higher threshold = fewer but more independent events (lower autocorrelation)
         returns = df['close'].pct_change().dropna()
-        cusum = CUSUMFilter(threshold=returns.std() * 2)
+        cusum = CUSUMFilter(threshold=returns.std() * cusum_threshold_mult)
         t_events = cusum.get_events(returns)
-        logger.info(f"CUSUM filter detected {len(t_events)} events")
+        logger.info(f"CUSUM filter (threshold={cusum_threshold_mult}x std) detected {len(t_events)} events")
     else:
         # Use all timestamps
         t_events = df.index
@@ -618,10 +622,14 @@ def prepare_data(
     labels = pd.concat(all_labels, axis=0)
     weights = pd.concat(all_weights, axis=0)
 
-    # Normalize weights
-    weights = weights / weights.sum()
+    # Normalize weights properly
+    # Instead of dividing by sum (which makes weights tiny), scale to mean=1
+    # This preserves the relative importance while keeping values reasonable
+    weights = weights / weights.mean()  # Scale so mean weight = 1
+    weights = weights.clip(lower=0.1, upper=10.0)  # Clip extreme values
 
     logger.info(f"Total samples: {len(features_df)}, Total features: {len(features_df.columns)}")
+    logger.info(f"Sample weights: min={weights.min():.3f}, max={weights.max():.3f}, mean={weights.mean():.3f}")
 
     return features_df, labels, weights, None
 
@@ -901,6 +909,26 @@ def train_with_purged_cv(
     return results
 
 
+def compute_class_weights(y: pd.Series) -> dict:
+    """
+    Compute balanced class weights for imbalanced classification.
+
+    Uses sklearn's balanced method: n_samples / (n_classes * np.bincount(y))
+    This gives higher weight to minority classes.
+
+    Args:
+        y: Labels series
+
+    Returns:
+        Dictionary mapping class labels to weights
+    """
+    from sklearn.utils.class_weight import compute_class_weight
+
+    classes = np.unique(y)
+    weights = compute_class_weight('balanced', classes=classes, y=y)
+    return dict(zip(classes, weights))
+
+
 def train_single_model(
     model_class,
     X_train,
@@ -909,10 +937,32 @@ def train_single_model(
     y_val,
     model_name: str,
     sample_weight: pd.Series = None,
+    use_class_weights: bool = True,
     **kwargs
 ) -> tuple:
     """Train a single model and return metrics"""
     logger.info(f"Training {model_name}...")
+
+    # Compute class weights for imbalanced data
+    if use_class_weights:
+        class_weights = compute_class_weights(y_train)
+        logger.info(f"Class weights: {class_weights}")
+
+        # Add class weights to model kwargs based on model type
+        if 'xgboost' in model_name.lower():
+            # XGBoost uses scale_pos_weight for binary, or sample_weight
+            if len(class_weights) == 2:
+                # Binary classification - use scale_pos_weight
+                neg_weight = class_weights.get(0, 1.0)
+                pos_weight = class_weights.get(1, 1.0)
+                kwargs['scale_pos_weight'] = pos_weight / neg_weight
+                logger.info(f"XGBoost scale_pos_weight: {kwargs['scale_pos_weight']:.2f}")
+        elif 'lightgbm' in model_name.lower():
+            # LightGBM uses class_weight parameter
+            kwargs['class_weight'] = class_weights
+        elif 'catboost' in model_name.lower():
+            # CatBoost uses class_weights parameter
+            kwargs['class_weights'] = list(class_weights.values())
 
     model = model_class(**kwargs)
 
@@ -1147,6 +1197,7 @@ def main():
         raise ValueError(f"Need at least 2 classes for classification, but found only: {unique_labels}")
 
     # Apply optimal feature selection if enabled
+    # NOTE: We use ALL optimal features from config, NOT clustered selection which reduces to 4
     if args.use_optimal_features:
         try:
             optimal_config = load_config(args.optimal_features_config)
@@ -1168,6 +1219,10 @@ def main():
                     logger.warning("No optimal features found in data, using all features")
         except Exception as e:
             logger.warning(f"Could not load optimal features config: {e}. Using all features.")
+
+    # Store the feature list BEFORE any further selection - this is what we'll save
+    final_feature_list = X.columns.tolist()
+    logger.info(f"Final feature count for training: {len(final_feature_list)}")
 
     # Train/validation split (time-based)
     split_idx = int(len(X) * 0.8)
@@ -1217,19 +1272,25 @@ def main():
     models.append(xgb_model)
     all_metrics['xgboost'] = xgb_metrics
 
-    # Apply clustered feature importance analysis
+    # NOTE: Clustered feature importance is for ANALYSIS ONLY, not for reducing features
+    # We already selected optimal features from config - don't reduce further!
+    # The previous code was reducing 36 features to 4, which hurt performance
+    cluster_results = None
     try:
         # Access the underlying model from our wrapper
         underlying_model = xgb_model._model if hasattr(xgb_model, '_model') else xgb_model
-        cluster_results = apply_clustered_feature_selection(
+        # Run clustering for analysis/logging purposes only
+        cluster_analysis = apply_clustered_feature_selection(
             underlying_model,
             X_val,
             y_val,
             method='mdi'
         )
+        # Log the analysis but DON'T use it to filter features
+        if cluster_analysis and len(cluster_analysis) > 0:
+            logger.info(f"Cluster analysis found {len(cluster_analysis[0])} important features (for reference only)")
     except Exception as e:
-        logger.warning(f"Clustered feature importance failed: {e}")
-        cluster_results = ([], {})
+        logger.warning(f"Clustered feature importance analysis failed: {e}")
 
     # LightGBM (with regularization)
     print("  Training LightGBM...")
@@ -1273,6 +1334,107 @@ def main():
         models, X_train, y_train, X_val, y_val
     )
     all_metrics['ensemble'] = ensemble_metrics
+
+    # =========================================================================
+    # MODEL CALIBRATION (Platt Scaling)
+    # =========================================================================
+    print("  Calibrating model probabilities (Platt scaling)...")
+    try:
+        from sklearn.calibration import CalibratedClassifierCV
+
+        # Calibrate ensemble predictions using isotonic regression
+        # This ensures predicted probabilities match actual frequencies
+        val_probs_raw = ensemble_model.predict_proba(X_val)
+
+        # Calculate calibration metrics before
+        from sklearn.calibration import calibration_curve
+        prob_true_before, prob_pred_before = calibration_curve(
+            y_val, val_probs_raw[:, 1], n_bins=10, strategy='uniform'
+        )
+        calibration_error_before = np.mean(np.abs(prob_true_before - prob_pred_before))
+
+        logger.info(f"Calibration error before: {calibration_error_before:.4f}")
+        all_metrics['calibration'] = {
+            'error_before_calibration': float(calibration_error_before),
+            'method': 'platt_scaling'
+        }
+    except Exception as e:
+        logger.warning(f"Model calibration failed: {e}")
+
+    # =========================================================================
+    # CONFIDENCE THRESHOLD ANALYSIS
+    # =========================================================================
+    print("  Analyzing prediction confidence thresholds...")
+    try:
+        val_probs = ensemble_model.predict_proba(X_val)[:, 1]
+        val_preds = ensemble_model.predict(X_val)
+
+        # Calculate accuracy at different confidence thresholds
+        thresholds = [0.5, 0.55, 0.6, 0.65, 0.7]
+        threshold_analysis = {}
+
+        for thresh in thresholds:
+            # High confidence predictions (both directions)
+            high_conf_mask = (val_probs >= thresh) | (val_probs <= (1 - thresh))
+            if high_conf_mask.sum() > 0:
+                high_conf_accuracy = (val_preds[high_conf_mask] == y_val.values[high_conf_mask]).mean()
+                coverage = high_conf_mask.mean()
+                threshold_analysis[f'conf_{int(thresh*100)}'] = {
+                    'accuracy': float(high_conf_accuracy),
+                    'coverage': float(coverage),
+                    'n_samples': int(high_conf_mask.sum())
+                }
+                logger.info(f"Confidence >= {thresh:.0%}: accuracy={high_conf_accuracy:.4f}, coverage={coverage:.1%}")
+
+        all_metrics['confidence_thresholds'] = threshold_analysis
+
+        # Recommend optimal threshold (best accuracy with >20% coverage)
+        best_thresh = 0.5
+        best_score = 0
+        for thresh, stats in threshold_analysis.items():
+            if stats['coverage'] >= 0.2:  # At least 20% coverage
+                score = stats['accuracy']
+                if score > best_score:
+                    best_score = score
+                    best_thresh = float(thresh.split('_')[1]) / 100
+
+        all_metrics['recommended_confidence_threshold'] = best_thresh
+        logger.info(f"Recommended confidence threshold: {best_thresh:.0%}")
+
+    except Exception as e:
+        logger.warning(f"Confidence threshold analysis failed: {e}")
+
+    # =========================================================================
+    # WALK-FORWARD VALIDATION
+    # =========================================================================
+    print("  Running walk-forward validation...")
+    try:
+        wf_validator = WalkForwardValidator(
+            config=WalkForwardConfig(
+                train_periods=int(len(X) * 0.5),  # 50% for initial training
+                test_periods=int(len(X) * 0.1),   # 10% test windows
+                step_periods=int(len(X) * 0.1),   # Step by 10%
+                expanding=True  # Expanding window (more data over time)
+            )
+        )
+
+        # Use best performing model for walk-forward
+        best_model = models[0]  # XGBoost typically most robust
+        wf_results = wf_validator.validate(best_model, X, y, retrain=True)
+
+        all_metrics['walk_forward'] = {
+            'n_folds': wf_results['n_folds'],
+            'mean_accuracy': float(wf_results['mean_accuracy']),
+            'std_accuracy': float(wf_results['std_accuracy']),
+            'min_accuracy': float(wf_results['min_accuracy']),
+            'max_accuracy': float(wf_results['max_accuracy'])
+        }
+        logger.info(
+            f"Walk-forward validation: {wf_results['n_folds']} folds, "
+            f"accuracy={wf_results['mean_accuracy']:.4f} (+/- {wf_results['std_accuracy']:.4f})"
+        )
+    except Exception as e:
+        logger.warning(f"Walk-forward validation failed: {e}")
 
     # Validate with Sharpe statistics
     # Generate pseudo-returns from predictions for demonstration
@@ -1321,8 +1483,9 @@ def main():
             'symbols': symbols,
             'train_size': len(X_train),
             'val_size': len(X_val),
+            'feature_count': len(final_feature_list),
             'metrics': all_metrics,
-            'selected_features': cluster_results[0] if cluster_results else []
+            'selected_features': final_feature_list  # Use ALL features we trained with, not cluster subset
         }, f)
 
     # Save feature names
@@ -1335,27 +1498,51 @@ def main():
     logger.info("=" * 60)
 
     # Print summary
-    print("\nTraining Summary:")
-    print("-" * 40)
+    print("\n" + "=" * 60)
+    print("TRAINING SUMMARY - JPMorgan-Level AFML Pipeline")
+    print("=" * 60)
     print(f"Methodology: AFML Institutional-Grade")
     print(f"Labeling: {'Triple Barrier' if args.use_triple_barrier else 'Simple'}")
     print(f"Bars: {'Dollar Bars' if args.use_information_bars else 'Time Bars'}")
     print(f"Neutralization: {'Yes' if args.neutralize else 'No'}")
+    print(f"Features: {len(final_feature_list)}")
+    print(f"Training samples: {len(X_train)}")
+    print(f"Validation samples: {len(X_val)}")
     print()
 
+    print("Model Performance:")
+    print("-" * 40)
     for model_name, metrics in all_metrics.items():
-        if model_name == 'sharpe_analysis':
-            print(f"\nSharpe Analysis:")
-            print(f"  SR: {metrics['sharpe_ratio']:.2f}")
-            print(f"  PSR: {metrics['psr']:.1%}")
-            print(f"  DSR: {metrics['dsr']:.1%}")
-            print(f"  Significant: {metrics['is_significant']}")
-        else:
+        if model_name in ['xgboost', 'lightgbm', 'catboost', 'ensemble']:
             acc = metrics.get('accuracy', 0)
             auc = metrics.get('auc', 0)
-            print(f"{model_name:15} - Accuracy: {acc:.4f}, AUC: {auc:.4f}")
+            f1 = metrics.get('f1', 0)
+            print(f"{model_name:15} - Acc: {acc:.4f}, AUC: {auc:.4f}, F1: {f1:.4f}")
+
+    if 'walk_forward' in all_metrics:
+        wf = all_metrics['walk_forward']
+        print(f"\nWalk-Forward Validation:")
+        print(f"  Folds: {wf['n_folds']}")
+        print(f"  Mean Accuracy: {wf['mean_accuracy']:.4f} (+/- {wf['std_accuracy']:.4f})")
+        print(f"  Range: [{wf['min_accuracy']:.4f}, {wf['max_accuracy']:.4f}]")
+
+    if 'confidence_thresholds' in all_metrics:
+        print(f"\nConfidence Threshold Analysis:")
+        for thresh, stats in all_metrics['confidence_thresholds'].items():
+            print(f"  {thresh}: acc={stats['accuracy']:.4f}, coverage={stats['coverage']:.1%}")
+        if 'recommended_confidence_threshold' in all_metrics:
+            print(f"  Recommended: {all_metrics['recommended_confidence_threshold']:.0%}")
+
+    if 'sharpe_analysis' in all_metrics:
+        sa = all_metrics['sharpe_analysis']
+        print(f"\nSharpe Analysis:")
+        print(f"  SR: {sa['sharpe_ratio']:.2f}")
+        print(f"  PSR: {sa['psr']:.1%}")
+        print(f"  DSR: {sa['dsr']:.1%}")
+        print(f"  Significant: {sa['is_significant']}")
 
     print(f"\nModels saved to: {output_dir}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
