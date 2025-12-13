@@ -29,6 +29,7 @@ from src.data.preprocessor import DataPreprocessor
 from src.data.live_feed import WebSocketManager
 
 from src.features.builder import FeatureBuilder, FeaturePipeline
+from src.features.institutional import InstitutionalFeatureEngineer
 from src.features.regime import RegimeDetector
 
 from src.models.training import ModelTrainer, WalkForwardValidator
@@ -90,7 +91,7 @@ class AlphaTradeSystem:
         # Component references
         self.data_loader: Optional[MultiAssetLoader] = None
         self.preprocessor: Optional[DataPreprocessor] = None
-        self.feature_builder: Optional[FeatureBuilder] = None
+        self.feature_builder: Optional[InstitutionalFeatureEngineer] = None
         self.regime_detector: Optional[RegimeDetector] = None
         self.strategies: List[Any] = []
         self.risk_manager: Optional[RiskManager] = None
@@ -165,9 +166,9 @@ class AlphaTradeSystem:
             logger.info("Initializing preprocessor...")
             self.preprocessor = DataPreprocessor()
 
-            # Initialize feature builder
-            logger.info("Initializing feature builder...")
-            self.feature_builder = FeatureBuilder()
+            # Initialize feature builder - Use InstitutionalFeatureEngineer for ML model compatibility
+            logger.info("Initializing institutional feature engineer...")
+            self.feature_builder = InstitutionalFeatureEngineer()
 
             # Initialize regime detector
             logger.info("Initializing regime detector...")
