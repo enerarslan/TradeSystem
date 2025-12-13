@@ -8,6 +8,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 30.84
+      avg_daily_volume: 28679484
+      avg_daily_dollar_volume: 5019043673
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   ABBV:
     sector: Healthcare
     spread_bps: 29.0
@@ -15,6 +24,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 34.29
+      avg_daily_volume: 1841171
+      avg_daily_dollar_volume: 280216944
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   ADBE:
     sector: Technology
     spread_bps: 35.6
@@ -22,6 +40,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 42.07
+      avg_daily_volume: 1138806
+      avg_daily_dollar_volume: 542003643
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   AMGN:
     sector: Healthcare
     spread_bps: 32.6
@@ -29,6 +56,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 38.28
+      avg_daily_volume: 765764
+      avg_daily_dollar_volume: 200443101
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   AMZN:
     sector: Consumer
     spread_bps: 27.7
@@ -36,6 +72,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 37.2
+      avg_daily_volume: 24920912
+      avg_daily_dollar_volume: 3924183026
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   AVGO:
     sector: Technology
     spread_bps: 39.9
@@ -43,6 +88,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 47.95
+      avg_daily_volume: 8019411
+      avg_daily_dollar_volume: 813721451
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   AXP:
     sector: Financials
     spread_bps: 33.0
@@ -50,6 +104,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 38.73
+      avg_daily_volume: 1027517
+      avg_daily_dollar_volume: 200694388
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   BA:
     sector: Industrials
     spread_bps: 33.0
@@ -57,6 +120,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 42.51
+      avg_daily_volume: 4117762
+      avg_daily_dollar_volume: 800020260
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   BAC:
     sector: Financials
     spread_bps: 26.7
@@ -64,6 +136,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 33.71
+      avg_daily_volume: 17129664
+      avg_daily_dollar_volume: 645163202
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   BRK.B:
     sector: Financials
     spread_bps: 19.1
@@ -71,6 +152,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 22.31
+      avg_daily_volume: 1301061
+      avg_daily_dollar_volume: 461683346
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   CAT:
     sector: Industrials
     spread_bps: 32.7
@@ -78,6 +168,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 38.34
+      avg_daily_volume: 1046367
+      avg_daily_dollar_volume: 279293605
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   COST:
     sector: Consumer
     spread_bps: 26.9
@@ -85,6 +184,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 31.33
+      avg_daily_volume: 718548
+      avg_daily_dollar_volume: 448228186
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   CRM:
     sector: Technology
     spread_bps: 33.8
@@ -92,6 +200,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 41.34
+      avg_daily_volume: 2503961
+      avg_daily_dollar_volume: 588561297
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   CSCO:
     sector: Technology
     spread_bps: 23.2
@@ -99,6 +216,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 27.88
+      avg_daily_volume: 5735855
+      avg_daily_dollar_volume: 300105872
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   CVX:
     sector: Energy
     spread_bps: 27.3
@@ -106,6 +232,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 32.57
+      avg_daily_volume: 3394348
+      avg_daily_dollar_volume: 491246445
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   DIS:
     sector: Consumer
     spread_bps: 25.3
@@ -113,6 +248,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 31.62
+      avg_daily_volume: 4304441
+      avg_daily_dollar_volume: 514757474
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   DOW:
     sector: Industrials
     spread_bps: 34.4
@@ -120,6 +264,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 40.85
+      avg_daily_volume: 1883059
+      avg_daily_dollar_volume: 99688659
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   GOOGL:
     sector: Technology
     spread_bps: 26.4
@@ -127,6 +280,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 34.08
+      avg_daily_volume: 12533028
+      avg_daily_dollar_volume: 1703956200
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   GS:
     sector: Financials
     spread_bps: 32.5
@@ -134,6 +296,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 37.79
+      avg_daily_volume: 895497
+      avg_daily_dollar_volume: 363303757
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   HD:
     sector: Consumer
     spread_bps: 29.4
@@ -141,6 +312,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 34.49
+      avg_daily_volume: 1197333
+      avg_daily_dollar_volume: 400554240
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   HON:
     sector: Industrials
     spread_bps: 28.1
@@ -148,6 +328,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 32.6
+      avg_daily_volume: 844791
+      avg_daily_dollar_volume: 173505181
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   IBM:
     sector: Technology
     spread_bps: 23.7
@@ -155,6 +344,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 27.94
+      avg_daily_volume: 1571468
+      avg_daily_dollar_volume: 255065510
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   INTC:
     sector: Technology
     spread_bps: 32.4
@@ -162,6 +360,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 42.9
+      avg_daily_volume: 18750029
+      avg_daily_dollar_volume: 705859492
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   JNJ:
     sector: Healthcare
     spread_bps: 22.1
@@ -169,6 +376,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 25.76
+      avg_daily_volume: 2484391
+      avg_daily_dollar_volume: 403691322
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   JPM:
     sector: Financials
     spread_bps: 25.4
@@ -176,6 +392,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 30.92
+      avg_daily_volume: 4089007
+      avg_daily_dollar_volume: 700015013
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   KO:
     sector: Consumer
     spread_bps: 16.5
@@ -183,6 +408,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 20.37
+      avg_daily_volume: 4720276
+      avg_daily_dollar_volume: 288187423
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   LLY:
     sector: Healthcare
     spread_bps: 35.3
@@ -190,6 +424,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 43.56
+      avg_daily_volume: 1165737
+      avg_daily_dollar_volume: 577903484
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   MA:
     sector: Financials
     spread_bps: 30.0
@@ -197,6 +440,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 36.4
+      avg_daily_volume: 1006506
+      avg_daily_dollar_volume: 412395439
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   MCD:
     sector: Consumer
     spread_bps: 23.2
@@ -204,6 +456,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 26.47
+      avg_daily_volume: 937729
+      avg_daily_dollar_volume: 250848754
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   META:
     sector: Technology
     spread_bps: 28.9
@@ -211,6 +472,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 39.05
+      avg_daily_volume: 8124210
+      avg_daily_dollar_volume: 2685110659
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   MMM:
     sector: Industrials
     spread_bps: 29.5
@@ -218,6 +488,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 34.37
+      avg_daily_volume: 1376392
+      avg_daily_dollar_volume: 166292241
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   MRK:
     sector: Healthcare
     spread_bps: 25.7
@@ -225,6 +504,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 31.02
+      avg_daily_volume: 3351445
+      avg_daily_dollar_volume: 324544989
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   MSFT:
     sector: Technology
     spread_bps: 21.6
@@ -232,6 +520,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 28.45
+      avg_daily_volume: 9544226
+      avg_daily_dollar_volume: 3189097352
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   NKE:
     sector: Consumer
     spread_bps: 28.5
@@ -239,6 +536,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 35.03
+      avg_daily_volume: 3569083
+      avg_daily_dollar_volume: 395176372
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   NVDA:
     sector: Technology
     spread_bps: 40.7
@@ -246,6 +552,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 55.91
+      avg_daily_volume: 198313741
+      avg_daily_dollar_volume: 10666115241
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   PEP:
     sector: Consumer
     spread_bps: 23.3
@@ -253,6 +568,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 27.17
+      avg_daily_volume: 1588689
+      avg_daily_dollar_volume: 260238269
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   PG:
     sector: Consumer
     spread_bps: 22.6
@@ -260,6 +584,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 25.91
+      avg_daily_volume: 2197720
+      avg_daily_dollar_volume: 333577460
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   TMO:
     sector: Healthcare
     spread_bps: 38.3
@@ -267,6 +600,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 46.0
+      avg_daily_volume: 526768
+      avg_daily_dollar_volume: 282736708
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   TRV:
     sector: Insurance
     spread_bps: 31.8
@@ -274,6 +616,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 37.57
+      avg_daily_volume: 330499
+      avg_daily_dollar_volume: 63037983
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   TSLA:
     sector: Consumer
     spread_bps: 46.9
@@ -281,6 +632,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 64.62
+      avg_daily_volume: 50230438
+      avg_daily_dollar_volume: 12645973653
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   UNH:
     sector: Healthcare
     spread_bps: 31.5
@@ -288,6 +648,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 38.45
+      avg_daily_volume: 1627354
+      avg_daily_dollar_volume: 778449536
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   V:
     sector: Financials
     spread_bps: 25.2
@@ -295,6 +664,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 30.31
+      avg_daily_volume: 2261846
+      avg_daily_dollar_volume: 564949471
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
   VZ:
     sector: Telecom
     spread_bps: 19.7
@@ -302,6 +680,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 24.66
+      avg_daily_volume: 6920685
+      avg_daily_dollar_volume: 308189867
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   WBA:
     sector: Consumer
     spread_bps: 32.6
@@ -309,6 +696,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 41.96
+      avg_daily_volume: 3787255
+      avg_daily_dollar_volume: 117331774
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   WMT:
     sector: Consumer
     spread_bps: 21.0
@@ -316,6 +712,15 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 25.59
+      avg_daily_volume: 7202436
+      avg_daily_dollar_volume: 423857772
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: medium
   XOM:
     sector: Energy
     spread_bps: 27.1
@@ -323,3 +728,16 @@ symbols:
     beta: 1.0
     volatility_group: medium
     liquidity_group: high
+    calculated_params:
+      spread_bps: 33.33
+      avg_daily_volume: 7390436
+      avg_daily_dollar_volume: 701885728
+      beta: 1.0
+      correlation_to_spy: 0.5
+      annualized_volatility: 0.2
+      volatility_group: medium
+      liquidity_group: high
+calculated_params_metadata:
+  last_updated: '2025-12-13T12:07:39.916836'
+  data_source: OHLCV bar data
+  notes: Spread estimated from High-Low range. Beta calculated vs SPY.
