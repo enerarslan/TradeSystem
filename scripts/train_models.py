@@ -15,6 +15,14 @@ Features:
 import sys
 import os
 from pathlib import Path
+
+# Suppress warnings before other imports
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message='.*DataFrame is highly fragmented.*')
+warnings.filterwarnings('ignore', message='.*numpy.dtype size changed.*')
+
 import argparse
 import yaml
 import pandas as pd
@@ -22,6 +30,7 @@ import numpy as np
 from datetime import datetime
 import joblib
 from typing import Dict, List, Optional, Tuple
+from tqdm import tqdm
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -391,7 +400,8 @@ def prepare_data(
     symbol_data = {}
     symbol_prices = {}
 
-    for symbol in symbols:
+    print(f"\n[1/4] Loading and preprocessing data for {len(symbols)} symbols...")
+    for symbol in tqdm(symbols, desc="Loading symbols", unit="symbol"):
         try:
             # 1. Load raw data
             df = loader.loader.load(symbol)
@@ -475,7 +485,8 @@ def prepare_data(
     all_weights = []
     all_events = []
 
-    for symbol, df_bars in symbol_data.items():
+    print(f"\n[2/4] Generating features and labels...")
+    for symbol, df_bars in tqdm(symbol_data.items(), desc="Processing symbols", unit="symbol"):
         try:
             # 4. Apply Triple Barrier labeling
             if use_triple_barrier:
@@ -905,6 +916,9 @@ def train_single_model(
 
     model = model_class(**kwargs)
 
+    # Set model_id to the friendly name for saving
+    model.model_id = model_name
+
     # Train (use fit method)
     model.fit(X_train, y_train, validation_data=(X_val, y_val))
 
@@ -1183,15 +1197,22 @@ def main():
     models = []
     all_metrics = {}
 
-    # XGBoost
+    print(f"\n[3/4] Training models...")
+
+    # XGBoost (with early stopping to prevent overfitting)
+    print("  Training XGBoost...")
     xgb_model, xgb_metrics = train_single_model(
         XGBoostModel,
         X_train, y_train, X_val, y_val,
         model_name="xgboost_v1",
         sample_weight=weights_train,
-        n_estimators=200,
-        max_depth=6,
-        learning_rate=0.1
+        n_estimators=500,  # More iterations with early stopping
+        max_depth=4,       # Reduced depth to prevent overfitting
+        learning_rate=0.05,  # Lower learning rate
+        early_stopping_rounds=30,  # Stop if no improvement for 30 rounds
+        min_child_weight=5,  # Regularization
+        subsample=0.8,       # Row sampling
+        colsample_bytree=0.8  # Column sampling
     )
     models.append(xgb_model)
     all_metrics['xgboost'] = xgb_metrics
@@ -1210,31 +1231,44 @@ def main():
         logger.warning(f"Clustered feature importance failed: {e}")
         cluster_results = ([], {})
 
-    # LightGBM
+    # LightGBM (with regularization)
+    print("  Training LightGBM...")
     lgb_model, lgb_metrics = train_single_model(
         LightGBMModel,
         X_train, y_train, X_val, y_val,
         model_name="lightgbm_v1",
-        n_estimators=200,
-        max_depth=6,
-        learning_rate=0.1
+        n_estimators=500,
+        max_depth=4,
+        learning_rate=0.05,
+        early_stopping_rounds=30,
+        min_child_samples=20,  # Regularization
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_alpha=0.1,  # L1 regularization
+        reg_lambda=0.1  # L2 regularization
     )
     models.append(lgb_model)
     all_metrics['lightgbm'] = lgb_metrics
 
-    # CatBoost (uses depth instead of max_depth, iterations instead of n_estimators)
+    # CatBoost (with regularization)
+    print("  Training CatBoost...")
     cat_model, cat_metrics = train_single_model(
         CatBoostModel,
         X_train, y_train, X_val, y_val,
         model_name="catboost_v1",
-        iterations=200,
-        depth=6,
-        learning_rate=0.1
+        iterations=500,
+        depth=4,
+        learning_rate=0.05,
+        early_stopping_rounds=30,
+        l2_leaf_reg=3.0,  # L2 regularization
+        subsample=0.8,
+        colsample_bylevel=0.8
     )
     models.append(cat_model)
     all_metrics['catboost'] = cat_metrics
 
     # Train ensemble
+    print("  Training Ensemble...")
     ensemble_model, ensemble_metrics = train_ensemble(
         models, X_train, y_train, X_val, y_val
     )
@@ -1248,14 +1282,16 @@ def main():
         index=X_val.index
     )
     sharpe_report = validate_with_sharpe_statistics(pseudo_returns, n_trials=args.n_trials)
+    # Convert numpy types to native Python types for YAML serialization
     all_metrics['sharpe_analysis'] = {
-        'sharpe_ratio': sharpe_report['sharpe_ratio'],
-        'psr': sharpe_report['probabilistic_sr'],
-        'dsr': sharpe_report['deflated_sr'],
-        'is_significant': sharpe_report['is_significant']
+        'sharpe_ratio': float(sharpe_report['sharpe_ratio']),
+        'psr': float(sharpe_report['probabilistic_sr']),
+        'dsr': float(sharpe_report['deflated_sr']),
+        'is_significant': bool(sharpe_report['is_significant'])
     }
 
     # Save models
+    print(f"\n[4/4] Saving models...")
     logger.info("Saving models...")
 
     for model in models:

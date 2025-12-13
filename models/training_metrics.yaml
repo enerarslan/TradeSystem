@@ -1,25 +1,26 @@
 methodology:
   bar_type: dollar
   cv_method: purged_kfold
-  embargo_pct: 0.05
+  embargo_pct: 0.11
   feature_neutralization: true
   labeling: triple_barrier
+  n_splits: 3
 metrics:
   catboost:
-    accuracy: 0.4859550561797753
-    auc: 0.45965440710209254
-    f1: 0.44993601058430505
-    precision: 0.46138687683851154
-    recall: 0.4859550561797753
+    accuracy: 0.5343190287294146
+    auc: 0.5168383376227352
+    f1: 0.4239000171402873
+    precision: 0.5167033509817832
+    recall: 0.5343190287294146
   ensemble:
-    accuracy: 0.5337078651685393
-    auc: 0.5247939124920735
+    accuracy: 0.52878951797091
+    auc: 0.50968481637669
   lightgbm:
-    accuracy: 0.5337078651685393
-    auc: 0.5109701965757768
-    f1: 0.37144503436638265
-    precision: 0.28484408534275973
-    recall: 0.5337078651685393
+    accuracy: 0.5350402692631326
+    auc: 0.5118058949662097
+    f1: 0.3953126942792215
+    precision: 0.5172434117098079
+    recall: 0.5350402692631326
   sharpe_analysis:
     dsr: !!python/object/apply:numpy._core.multiarray.scalar
     - &id001 !!python/object/apply:numpy.dtype
@@ -37,7 +38,7 @@ metrics:
       - -1
       - 0
     - !!binary |
-      rk6HOUJbmzk=
+      AAAAAAAAAAA=
     is_significant: !!python/object/apply:numpy._core.multiarray.scalar
     - !!python/object/apply:numpy.dtype
       args:
@@ -58,17 +59,17 @@ metrics:
     psr: !!python/object/apply:numpy._core.multiarray.scalar
     - *id001
     - !!binary |
-      rk6HOUJbmzk=
+      AAAAAAAAAAA=
     sharpe_ratio: !!python/object/apply:numpy._core.multiarray.scalar
     - *id001
     - !!binary |
-      NCPxHFkRJsA=
+      Zm+M4awTKMA=
   xgboost:
-    accuracy: 0.5393258426966292
-    auc: 0.5281230183893468
-    f1: 0.523243560176971
-    precision: 0.5325985777438623
-    recall: 0.5393258426966292
+    accuracy: 0.5131626397403534
+    auc: 0.507465917813331
+    f1: 0.505358432424381
+    precision: 0.5067064922095574
+    recall: 0.5131626397403534
 selected_features:
 - bb_upper_20
 - return_5
@@ -76,7 +77,51 @@ selected_features:
 - volume_ratio_5
 symbols:
 - AAPL
+- ABBV
+- ADBE
+- AMGN
+- AMZN
+- AVGO
+- AXP
+- BA
+- BAC
+- BRK.B
+- CAT
+- COST
+- CRM
+- CSCO
+- CVX
+- DIS
+- DOW
+- GOOGL
+- GS
+- HD
+- HON
+- IBM
+- INTC
+- JNJ
+- JPM
+- KO
+- LLY
+- MA
+- MCD
+- META
+- MMM
+- MRK
 - MSFT
-train_size: 1421
-training_date: '2025-12-12T22:18:52.807350'
-val_size: 356
+- NKE
+- NVDA
+- PEP
+- PG
+- TMO
+- TRV
+- TSLA
+- UNH
+- V
+- VZ
+- WBA
+- WMT
+- XOM
+train_size: 33274
+training_date: '2025-12-13T13:32:08.855074'
+val_size: 8319

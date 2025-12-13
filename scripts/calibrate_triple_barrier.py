@@ -23,6 +23,14 @@ Based on AFML (Advances in Financial Machine Learning) best practices
 import sys
 import os
 from pathlib import Path
+
+# Suppress warnings before other imports
+import warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message='.*DataFrame is highly fragmented.*')
+warnings.filterwarnings('ignore', message='.*numpy.dtype size changed.*')
+
 import pandas as pd
 import numpy as np
 from datetime import datetime
@@ -32,7 +40,7 @@ import json
 import argparse
 from dataclasses import dataclass, asdict, field
 from collections import defaultdict
-import warnings
+from tqdm import tqdm
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -585,8 +593,9 @@ class TripleBarrierCalibrator:
             raw_dir = Path("data/raw")
             symbols = [f.stem.replace('_15min', '') for f in raw_dir.glob('*_15min.csv')]
 
+        print(f"\nCalibrating Triple Barrier parameters for {len(symbols)} symbols...")
         results = {}
-        for symbol in symbols:
+        for symbol in tqdm(symbols, desc="Calibrating", unit="symbol"):
             try:
                 result = self.calibrate_symbol(symbol)
                 results[symbol] = result
@@ -792,8 +801,9 @@ class LabelQualityValidator:
             raw_dir = Path("data/raw")
             symbols = [f.stem.replace('_15min', '') for f in raw_dir.glob('*_15min.csv')]
 
+        print(f"\nValidating label quality for {len(symbols)} symbols...")
         reports = {}
-        for symbol in symbols:
+        for symbol in tqdm(symbols, desc="Validating", unit="symbol"):
             try:
                 report = self.validate_symbol(symbol)
                 reports[symbol] = report
