@@ -1,5 +1,5 @@
 version: '1.0'
-calibration_date: '2025-12-12T20:51:08.078606'
+calibration_date: '2025-12-13T01:06:04.909195'
 default_params:
   profit_target_atr_mult: 1.5
   stop_loss_atr_mult: 1.0
@@ -20,508 +20,508 @@ vix_adjustments:
     multiplier: 2.0
 symbols:
   AAPL:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.6611
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7019
-      upper_touch_pct: 0.4616
-      lower_touch_pct: 0.5384
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6711
+      upper_touch_pct: 0.5098
+      lower_touch_pct: 0.487
+      vertical_touch_pct: 0.0032
   ABBV:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.8294
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6595
-      upper_touch_pct: 0.4561
-      lower_touch_pct: 0.5439
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6578
+      upper_touch_pct: 0.5
+      lower_touch_pct: 0.4973
+      vertical_touch_pct: 0.0027
   ADBE:
     volatility_group: low
     atr_pct: 0.3911
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.674
-      upper_touch_pct: 0.4475
-      lower_touch_pct: 0.5525
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6998
+      upper_touch_pct: 0.5034
+      lower_touch_pct: 0.4955
+      vertical_touch_pct: 0.0012
   AMGN:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5114
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6453
-      upper_touch_pct: 0.4353
-      lower_touch_pct: 0.5646
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6519
+      upper_touch_pct: 0.4975
+      lower_touch_pct: 0.5011
+      vertical_touch_pct: 0.0014
   AMZN:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.7607
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7006
-      upper_touch_pct: 0.4293
-      lower_touch_pct: 0.5707
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.688
+      upper_touch_pct: 0.5007
+      lower_touch_pct: 0.4963
+      vertical_touch_pct: 0.0031
   AVGO:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.7215
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
       label_autocorr: 0.6931
-      upper_touch_pct: 0.4598
-      lower_touch_pct: 0.5402
-      vertical_touch_pct: 0.0
+      upper_touch_pct: 0.5066
+      lower_touch_pct: 0.4904
+      vertical_touch_pct: 0.003
   AXP:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.4895
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.667
-      upper_touch_pct: 0.4734
-      lower_touch_pct: 0.5266
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6951
+      upper_touch_pct: 0.5188
+      lower_touch_pct: 0.4793
+      vertical_touch_pct: 0.0018
   BAC:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.4812
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7033
-      upper_touch_pct: 0.4311
-      lower_touch_pct: 0.5688
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6912
+      upper_touch_pct: 0.4868
+      lower_touch_pct: 0.5004
+      vertical_touch_pct: 0.0128
   BA:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5681
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7043
-      upper_touch_pct: 0.4273
-      lower_touch_pct: 0.5727
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6904
+      upper_touch_pct: 0.479
+      lower_touch_pct: 0.5185
+      vertical_touch_pct: 0.0025
   BRK.B:
     volatility_group: low
     atr_pct: 0.2921
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6712
-      upper_touch_pct: 0.4685
-      lower_touch_pct: 0.5315
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6937
+      upper_touch_pct: 0.5125
+      lower_touch_pct: 0.4851
+      vertical_touch_pct: 0.0025
   CAT:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5051
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6665
-      upper_touch_pct: 0.4546
-      lower_touch_pct: 0.5454
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6858
+      upper_touch_pct: 0.5046
+      lower_touch_pct: 0.4938
+      vertical_touch_pct: 0.0016
   COST:
     volatility_group: low
     atr_pct: 0.352
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6765
-      upper_touch_pct: 0.4587
-      lower_touch_pct: 0.5413
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.7116
+      upper_touch_pct: 0.5173
+      lower_touch_pct: 0.4816
+      vertical_touch_pct: 0.001
   CRM:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.4143
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6761
-      upper_touch_pct: 0.4241
-      lower_touch_pct: 0.5759
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6812
+      upper_touch_pct: 0.4889
+      lower_touch_pct: 0.5096
+      vertical_touch_pct: 0.0015
   CSCO:
     volatility_group: low
     atr_pct: 0.3538
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6494
-      upper_touch_pct: 0.4353
-      lower_touch_pct: 0.5646
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6657
+      upper_touch_pct: 0.4909
+      lower_touch_pct: 0.4998
+      vertical_touch_pct: 0.0093
   CVX:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5319
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6755
-      upper_touch_pct: 0.4425
-      lower_touch_pct: 0.5575
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6848
+      upper_touch_pct: 0.4996
+      lower_touch_pct: 0.4978
+      vertical_touch_pct: 0.0026
   DIS:
     volatility_group: low
     atr_pct: 0.3788
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6939
-      upper_touch_pct: 0.4168
-      lower_touch_pct: 0.5831
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6968
+      upper_touch_pct: 0.473
+      lower_touch_pct: 0.5223
+      vertical_touch_pct: 0.0047
   DOW:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.728
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6667
-      upper_touch_pct: 0.4221
-      lower_touch_pct: 0.5778
-      vertical_touch_pct: 0.0002
+      label_autocorr: 0.6649
+      upper_touch_pct: 0.467
+      lower_touch_pct: 0.5273
+      vertical_touch_pct: 0.0058
   GOOGL:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.466
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6883
-      upper_touch_pct: 0.4466
-      lower_touch_pct: 0.5534
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.683
+      upper_touch_pct: 0.5013
+      lower_touch_pct: 0.4948
+      vertical_touch_pct: 0.0039
   GS:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.609
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6641
-      upper_touch_pct: 0.468
-      lower_touch_pct: 0.532
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6723
+      upper_touch_pct: 0.5148
+      lower_touch_pct: 0.484
+      vertical_touch_pct: 0.0012
   HD:
     volatility_group: low
     atr_pct: 0.3896
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6713
-      upper_touch_pct: 0.4568
-      lower_touch_pct: 0.5432
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6954
+      upper_touch_pct: 0.5042
+      lower_touch_pct: 0.4947
+      vertical_touch_pct: 0.001
   HON:
     volatility_group: low
     atr_pct: 0.3904
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6689
-      upper_touch_pct: 0.4442
-      lower_touch_pct: 0.5558
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6858
+      upper_touch_pct: 0.5018
+      lower_touch_pct: 0.4958
+      vertical_touch_pct: 0.0025
   IBM:
     volatility_group: low
     atr_pct: 0.3854
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6598
-      upper_touch_pct: 0.46
-      lower_touch_pct: 0.54
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6915
+      upper_touch_pct: 0.5134
+      lower_touch_pct: 0.4834
+      vertical_touch_pct: 0.0032
   INTC:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5243
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7
-      upper_touch_pct: 0.4142
-      lower_touch_pct: 0.5855
-      vertical_touch_pct: 0.0003
+      label_autocorr: 0.6843
+      upper_touch_pct: 0.4666
+      lower_touch_pct: 0.5216
+      vertical_touch_pct: 0.0118
   JNJ:
     volatility_group: low
     atr_pct: 0.3492
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6492
-      upper_touch_pct: 0.429
-      lower_touch_pct: 0.5709
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6666
+      upper_touch_pct: 0.4829
+      lower_touch_pct: 0.514
+      vertical_touch_pct: 0.0031
   JPM:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5175
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6741
-      upper_touch_pct: 0.4545
-      lower_touch_pct: 0.5455
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6847
+      upper_touch_pct: 0.5105
+      lower_touch_pct: 0.4863
+      vertical_touch_pct: 0.0032
   KO:
     volatility_group: low
     atr_pct: 0.2747
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6727
-      upper_touch_pct: 0.4325
-      lower_touch_pct: 0.5672
-      vertical_touch_pct: 0.0002
+      label_autocorr: 0.683
+      upper_touch_pct: 0.4935
+      lower_touch_pct: 0.4957
+      vertical_touch_pct: 0.0108
   LLY:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.7049
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6752
-      upper_touch_pct: 0.4565
-      lower_touch_pct: 0.5435
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6671
+      upper_touch_pct: 0.5071
+      lower_touch_pct: 0.4919
+      vertical_touch_pct: 0.0011
   MA:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.4998
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6778
-      upper_touch_pct: 0.453
-      lower_touch_pct: 0.547
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6904
+      upper_touch_pct: 0.5092
+      lower_touch_pct: 0.4895
+      vertical_touch_pct: 0.0013
   MCD:
     volatility_group: low
     atr_pct: 0.3174
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6524
-      upper_touch_pct: 0.4483
-      lower_touch_pct: 0.5517
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6792
+      upper_touch_pct: 0.5038
+      lower_touch_pct: 0.4941
+      vertical_touch_pct: 0.0022
   META:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5534
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7058
-      upper_touch_pct: 0.4475
-      lower_touch_pct: 0.5524
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6519
+      upper_touch_pct: 0.4831
+      lower_touch_pct: 0.5136
+      vertical_touch_pct: 0.0034
   MMM:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.407
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6714
-      upper_touch_pct: 0.4312
-      lower_touch_pct: 0.5688
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6781
+      upper_touch_pct: 0.4856
+      lower_touch_pct: 0.5117
+      vertical_touch_pct: 0.0028
   MRK:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5901
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.667
-      upper_touch_pct: 0.4154
-      lower_touch_pct: 0.5846
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6595
+      upper_touch_pct: 0.4776
+      lower_touch_pct: 0.5175
+      vertical_touch_pct: 0.0048
   MSFT:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.4078
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.694
-      upper_touch_pct: 0.4419
-      lower_touch_pct: 0.5581
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6808
+      upper_touch_pct: 0.4999
+      lower_touch_pct: 0.4981
+      vertical_touch_pct: 0.0021
   NKE:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.479
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6768
-      upper_touch_pct: 0.4264
-      lower_touch_pct: 0.5736
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6975
+      upper_touch_pct: 0.4814
+      lower_touch_pct: 0.5148
+      vertical_touch_pct: 0.0038
   NVDA:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.6173
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7222
-      upper_touch_pct: 0.466
-      lower_touch_pct: 0.534
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.7009
+      upper_touch_pct: 0.511
+      lower_touch_pct: 0.4792
+      vertical_touch_pct: 0.0097
   PEP:
     volatility_group: low
     atr_pct: 0.3568
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6513
-      upper_touch_pct: 0.4336
-      lower_touch_pct: 0.5664
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.678
+      upper_touch_pct: 0.4846
+      lower_touch_pct: 0.5123
+      vertical_touch_pct: 0.0031
   PG:
     volatility_group: low
     atr_pct: 0.3653
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6535
-      upper_touch_pct: 0.4241
-      lower_touch_pct: 0.5759
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6776
+      upper_touch_pct: 0.4907
+      lower_touch_pct: 0.5067
+      vertical_touch_pct: 0.0026
   TMO:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.6867
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7063
-      upper_touch_pct: 0.4374
-      lower_touch_pct: 0.5626
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.694
+      upper_touch_pct: 0.4874
+      lower_touch_pct: 0.512
+      vertical_touch_pct: 0.0006
   TRV:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.4191
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6938
-      upper_touch_pct: 0.458
-      lower_touch_pct: 0.5419
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6898
+      upper_touch_pct: 0.514
+      lower_touch_pct: 0.4843
+      vertical_touch_pct: 0.0018
   TSLA:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.8023
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.7307
-      upper_touch_pct: 0.4234
-      lower_touch_pct: 0.5765
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6981
+      upper_touch_pct: 0.4859
+      lower_touch_pct: 0.5122
+      vertical_touch_pct: 0.0019
   UNH:
-    volatility_group: low
+    volatility_group: high
     atr_pct: 0.8086
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.2
+    stop_loss_atr_mult: 0.8
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6854
-      upper_touch_pct: 0.4406
-      lower_touch_pct: 0.5594
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6826
+      upper_touch_pct: 0.4964
+      lower_touch_pct: 0.503
+      vertical_touch_pct: 0.0006
   VZ:
     volatility_group: low
     atr_pct: 0.389
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6804
-      upper_touch_pct: 0.4273
-      lower_touch_pct: 0.5727
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6916
+      upper_touch_pct: 0.4784
+      lower_touch_pct: 0.5091
+      vertical_touch_pct: 0.0126
   V:
     volatility_group: low
     atr_pct: 0.3894
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6511
-      upper_touch_pct: 0.4523
-      lower_touch_pct: 0.5476
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.6833
+      upper_touch_pct: 0.507
+      lower_touch_pct: 0.492
+      vertical_touch_pct: 0.001
   WBA:
     volatility_group: low
     atr_pct: 0.1203
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6744
-      upper_touch_pct: 0.4091
-      lower_touch_pct: 0.5908
-      vertical_touch_pct: 0.0002
+      label_autocorr: 0.7061
+      upper_touch_pct: 0.458
+      lower_touch_pct: 0.5208
+      vertical_touch_pct: 0.0212
   WMT:
     volatility_group: low
     atr_pct: 0.3261
     profit_target_atr_mult: 1.8
     stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.6625
-      upper_touch_pct: 0.4475
-      lower_touch_pct: 0.5523
-      vertical_touch_pct: 0.0001
+      label_autocorr: 0.685
+      upper_touch_pct: 0.4977
+      lower_touch_pct: 0.4934
+      vertical_touch_pct: 0.0089
   XOM:
-    volatility_group: low
+    volatility_group: medium
     atr_pct: 0.5547
-    profit_target_atr_mult: 1.8
-    stop_loss_atr_mult: 1.2
-    max_holding_period: 40
+    profit_target_atr_mult: 1.5
+    stop_loss_atr_mult: 1.0
+    max_holding_period: 10
     quality_metrics:
-      label_autocorr: 0.694
-      upper_touch_pct: 0.453
-      lower_touch_pct: 0.547
-      vertical_touch_pct: 0.0
+      label_autocorr: 0.6935
+      upper_touch_pct: 0.5027
+      lower_touch_pct: 0.492
+      vertical_touch_pct: 0.0053
