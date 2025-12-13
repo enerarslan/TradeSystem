@@ -1,21 +1,40 @@
 """
-Feature Optimization Pipeline
-=============================
+Institutional Feature Optimization Pipeline
+============================================
 
-This script implements PRIORITY 4 tasks from AI_AGENT_INSTRUCTIONS.md:
-- Task 8: Remove Redundant Features (correlation analysis, clustering)
-- Task 9: Add Regime Awareness (VIX, trend, volatility regimes)
+Based on AFML (Advances in Financial Machine Learning) by Marcos Lopez de Prado.
 
-Reduces features from 200+ to 60-80 high-quality, low-correlation features
-while adding critical regime awareness signals.
+This script implements institutional-grade feature engineering:
+
+1. FRACTIONAL DIFFERENTIATION
+   - Finds optimal d that achieves stationarity while preserving memory
+   - Tests d in [0.1, 0.9] range, selecting minimum d where ADF p-value < 0.05
+   - Preserves correlation with original series (target: > 0.7)
+
+2. MICROSTRUCTURE FEATURES
+   - VPIN: Volume-Synchronized Probability of Informed Trading
+   - Kyle's Lambda: Price impact coefficient
+   - Amihud Illiquidity: |return| / dollar volume
+   - Order Flow Imbalance: Net buying/selling pressure
+
+3. REGIME DETECTION
+   - HMM-based market regime (bull/bear/neutral)
+   - Volatility regime (low/normal/high/extreme)
+   - Trend regime (based on MA relationships)
+
+4. FEATURE CLUSTERING
+   - Hierarchical clustering of correlated features
+   - Select representative from each cluster
+   - Apply PCA to microstructure features
 
 Usage:
-    python scripts/optimize_features.py --analyze       # Analyze feature correlations
-    python scripts/optimize_features.py --reduce        # Reduce to optimal feature set
-    python scripts/optimize_features.py --add-regime    # Add regime features
+    python scripts/optimize_features.py --analyze          # Analyze correlations
+    python scripts/optimize_features.py --reduce           # Reduce feature set
+    python scripts/optimize_features.py --add-regime       # Add regime features
+    python scripts/optimize_features.py --institutional    # Full institutional pipeline
+    python scripts/optimize_features.py --fracdiff-search  # Optimize FracDiff d
 
-Author: AlphaTrade System
-Based on AFML (Advances in Financial Machine Learning) best practices
+Author: AlphaTrade Institutional System
 """
 
 import sys
@@ -776,9 +795,220 @@ class OptimalFeatureSelector:
 # CLI INTERFACE
 # ============================================================================
 
+def run_institutional_pipeline(df: pd.DataFrame, symbol: str, output_path: str):
+    """
+    Run the full institutional feature engineering pipeline.
+
+    This implements the AFML best practices:
+    1. Optimal FracDiff d search
+    2. Microstructure features (VPIN, Kyle's Lambda, etc.)
+    3. HMM regime detection
+    4. Feature clustering and selection
+    """
+    from src.features.institutional import (
+        InstitutionalFeatureEngineer, InstitutionalFeatureConfig,
+        ClusteredFeatureSelector, MicrostructurePCA
+    )
+
+    print("\n" + "=" * 70)
+    print("INSTITUTIONAL FEATURE ENGINEERING PIPELINE")
+    print("=" * 70)
+
+    config = InstitutionalFeatureConfig()
+    engineer = InstitutionalFeatureEngineer(config)
+
+    # 1. Generate all institutional features
+    print("\n[1/4] Generating institutional features...")
+    features = engineer.build_features(df)
+    print(f"      Generated {len(features.columns)} features")
+
+    # Show optimal d values
+    optimal_d = engineer.get_optimal_d()
+    if optimal_d:
+        print("\n      Optimal FracDiff d values:")
+        for col, d in optimal_d.items():
+            print(f"        {col}: d = {d:.2f}")
+
+    # 2. Feature statistics
+    print("\n[2/4] Computing feature statistics...")
+    stats = engineer.get_feature_statistics(features)
+
+    # Show top features by variance
+    if not stats.empty:
+        print("\n      Top features by variance:")
+        top_var = stats.nlargest(10, 'std')
+        for feat in top_var.index[:5]:
+            print(f"        {feat}: std={stats.loc[feat, 'std']:.4f}")
+
+    # 3. Apply PCA to microstructure features
+    print("\n[3/4] Applying PCA to microstructure features...")
+    pca = MicrostructurePCA(config)
+    pca_features = pca.fit_transform(features)
+
+    if not pca_features.empty:
+        print(f"      Extracted {len(pca_features.columns)} PCA components")
+        features = pd.concat([features, pca_features], axis=1)
+
+    # 4. Cluster and select features
+    print("\n[4/4] Clustering and selecting features...")
+
+    # Remove non-numeric columns
+    numeric_features = features.select_dtypes(include=[np.number])
+    numeric_features = numeric_features.dropna(axis=1, how='all')
+
+    selector = ClusteredFeatureSelector(config)
+    selected = selector.fit_select(numeric_features)
+
+    clusters = selector.get_clusters()
+    print(f"      Created {len(clusters)} clusters")
+    print(f"      Selected {len(selected)} features")
+
+    # Export results
+    print("\n" + "-" * 70)
+    print("RESULTS")
+    print("-" * 70)
+
+    # Feature categories
+    fracdiff_features = [f for f in selected if 'ffd' in f]
+    micro_features = [f for f in selected if 'micro_' in f]
+    regime_features = [f for f in selected if 'regime_' in f]
+    return_features = [f for f in selected if f.startswith('return_') or f.startswith('log_return_')]
+    vol_features = [f for f in selected if f.startswith('vol_')]
+    other_features = [f for f in selected if f not in
+                     fracdiff_features + micro_features + regime_features + return_features + vol_features]
+
+    print(f"\n  Feature Categories:")
+    print(f"    Fractional Differentiation: {len(fracdiff_features)}")
+    print(f"    Microstructure:             {len(micro_features)}")
+    print(f"    Regime:                     {len(regime_features)}")
+    print(f"    Returns:                    {len(return_features)}")
+    print(f"    Volatility:                 {len(vol_features)}")
+    print(f"    Other:                      {len(other_features)}")
+    print(f"    --------------------------------")
+    print(f"    TOTAL:                      {len(selected)}")
+
+    # Export to YAML
+    export_institutional_features(
+        selected_features=selected,
+        clusters=clusters,
+        optimal_d=optimal_d,
+        symbol=symbol,
+        output_path=output_path
+    )
+
+    print(f"\n  Features exported to: {output_path}")
+
+    return features, selected
+
+
+def export_institutional_features(
+    selected_features: List[str],
+    clusters: Dict[int, List[str]],
+    optimal_d: Dict[str, float],
+    symbol: str,
+    output_path: str
+):
+    """Export institutional features to YAML."""
+
+    config = {
+        'version': '2.0',
+        'type': 'institutional',
+        'created_at': datetime.now().isoformat(),
+        'symbol': symbol,
+        'selection_summary': {
+            'total_features': len(selected_features),
+            'n_clusters': len(clusters)
+        },
+        'optimal_fracdiff_d': {k: float(v) for k, v in optimal_d.items()},
+        'feature_categories': {
+            'fracdiff': [f for f in selected_features if 'ffd' in f],
+            'microstructure': [f for f in selected_features if 'micro_' in f],
+            'regime': [f for f in selected_features if 'regime_' in f],
+            'returns': [f for f in selected_features if f.startswith('return_') or f.startswith('log_return_')],
+            'volatility': [f for f in selected_features if f.startswith('vol_')],
+        },
+        'optimal_features': list(selected_features),
+        'clusters': [
+            {
+                'cluster_id': int(cid),
+                'features': list(feats)
+            }
+            for cid, feats in clusters.items()
+        ]
+    }
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+
+def run_fracdiff_search(df: pd.DataFrame, symbol: str):
+    """
+    Run fractional differentiation parameter search.
+
+    This finds the optimal d value for each price series that:
+    1. Achieves stationarity (ADF p-value < 0.05)
+    2. Maximizes correlation with original series
+    """
+    from src.features.institutional import OptimalFracDiff, InstitutionalFeatureConfig
+
+    print("\n" + "=" * 70)
+    print("FRACTIONAL DIFFERENTIATION PARAMETER SEARCH")
+    print("=" * 70)
+    print(f"\nAnalyzing {symbol}...")
+
+    config = InstitutionalFeatureConfig()
+    fracdiff = OptimalFracDiff(config)
+
+    close = df['close']
+    volume = df['volume']
+
+    print("\n" + "-" * 70)
+    print("Close Price Analysis")
+    print("-" * 70)
+
+    optimal_d, diagnostics = fracdiff.find_optimal_d(close, 'close')
+
+    print(f"\n  Optimal d: {optimal_d:.2f}")
+    print(f"\n  Parameter Search Results:")
+    print(f"  {'d':>6} {'ADF Stat':>12} {'p-value':>12} {'Stationary':>12} {'Correlation':>12}")
+    print("  " + "-" * 60)
+
+    for r in diagnostics['all_results']:
+        stat = '*' if r['is_stationary'] else ''
+        print(f"  {r['d']:>6.2f} {r['adf_stat']:>12.4f} {r['p_value']:>12.4f} {stat:>12} {r['correlation']:>12.4f}")
+
+    print("\n  * = Stationary (ADF p-value < 0.05)")
+
+    # Volume analysis
+    print("\n" + "-" * 70)
+    print("Log Volume Analysis")
+    print("-" * 70)
+
+    log_volume = np.log1p(volume)
+    optimal_d_vol, diagnostics_vol = fracdiff.find_optimal_d(log_volume, 'log_volume')
+
+    print(f"\n  Optimal d: {optimal_d_vol:.2f}")
+
+    # Summary
+    print("\n" + "=" * 70)
+    print("SUMMARY")
+    print("=" * 70)
+    print(f"\n  Series              Optimal d    Correlation    Stationary")
+    print("  " + "-" * 55)
+    print(f"  Close               {optimal_d:>8.2f}    {diagnostics['selected_row']['correlation']:>11.4f}    {'Yes' if diagnostics['selected_row']['is_stationary'] else 'No'}")
+    print(f"  Log Volume          {optimal_d_vol:>8.2f}    {diagnostics_vol['selected_row']['correlation']:>11.4f}    {'Yes' if diagnostics_vol['selected_row']['is_stationary'] else 'No'}")
+
+    print("\n  Interpretation:")
+    print(f"    - d = 0 means no differencing (non-stationary, full memory)")
+    print(f"    - d = 1 means full differencing (stationary, no memory)")
+    print(f"    - d = {optimal_d:.2f} preserves {diagnostics['selected_row']['correlation']:.0%} correlation while achieving stationarity")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Feature Optimization for AlphaTrade System"
+        description="Institutional Feature Optimization for AlphaTrade System"
     )
     parser.add_argument(
         '--analyze',
@@ -796,6 +1026,16 @@ def main():
         help='Add regime awareness features'
     )
     parser.add_argument(
+        '--institutional',
+        action='store_true',
+        help='Run full institutional feature pipeline (FracDiff + Microstructure + Regime)'
+    )
+    parser.add_argument(
+        '--fracdiff-search',
+        action='store_true',
+        help='Search for optimal fractional differentiation d parameter'
+    )
+    parser.add_argument(
         '--symbol',
         type=str,
         default='ALL',
@@ -810,6 +1050,25 @@ def main():
 
     args = parser.parse_args()
     config = FeatureOptimizationConfig()
+
+    # New institutional pipeline options
+    if args.institutional or args.fracdiff_search:
+        analysis_symbol = args.symbol if args.symbol != 'ALL' else 'AAPL'
+        data_path = Path("data/raw") / f"{analysis_symbol}_15min.csv"
+
+        if not data_path.exists():
+            print(f"Data file not found: {data_path}")
+            return
+
+        df = pd.read_csv(data_path, parse_dates=['timestamp'], index_col='timestamp')
+        df.columns = df.columns.str.lower()
+
+        if args.fracdiff_search:
+            run_fracdiff_search(df, analysis_symbol)
+        elif args.institutional:
+            run_institutional_pipeline(df, analysis_symbol, args.output)
+
+        return
 
     if args.analyze or args.reduce:
         logger.info("=" * 60)
