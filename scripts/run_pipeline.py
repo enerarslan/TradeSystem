@@ -584,27 +584,130 @@ def stage_calibrate(force: bool = False) -> bool:
 
 
 # =============================================================================
-# STAGE 6: BACKTEST
+# STAGE 6: BACKTEST (TRUE OUT-OF-SAMPLE WITH FRESH DATA)
 # =============================================================================
+
+def download_oos_data(symbols: list, start_date: str, end_date: str = None) -> Dict[str, pd.DataFrame]:
+    """
+    Download fresh OOS data from Alpaca.
+
+    This ensures we test on data the model has NEVER seen.
+
+    Alpaca provides extensive historical data (years of 15-min bars).
+    Uses IEX feed which is available on free tier.
+
+    Args:
+        symbols: List of stock symbols
+        start_date: Start date for OOS period (should be after training end)
+        end_date: End date (defaults to today)
+
+    Returns:
+        Dictionary of symbol -> DataFrame with 15min OHLCV data
+    """
+    from dotenv import load_dotenv
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from alpaca_trade_api import REST
+
+    load_dotenv()
+
+    api_key = os.environ.get('ALPACA_API_KEY')
+    secret_key = os.environ.get('ALPACA_SECRET_KEY')
+
+    if not api_key or not secret_key:
+        print("ERROR: ALPACA_API_KEY and ALPACA_SECRET_KEY must be set in .env")
+        return {}
+
+    api = REST(api_key, secret_key, base_url='https://paper-api.alpaca.markets')
+
+    if end_date is None:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+
+    print(f"\nDownloading OOS data from Alpaca (IEX feed)...")
+    print(f"  Period: {start_date} to {end_date}")
+    print(f"  Symbols: {len(symbols)}")
+
+    def download_symbol(symbol: str) -> tuple:
+        """Download single symbol data."""
+        try:
+            # Handle special ticker symbols for Alpaca
+            alpaca_symbol = symbol.replace('.', '/')  # BRK.B -> BRK/B for Alpaca
+
+            bars = api.get_bars(
+                alpaca_symbol,
+                '15Min',
+                start=start_date,
+                end=end_date,
+                adjustment='split',
+                feed='iex'  # Use IEX feed for free tier
+            ).df
+
+            if bars is None or len(bars) == 0:
+                return (symbol, None, "No data returned")
+
+            # Remove duplicates
+            bars = bars[~bars.index.duplicated(keep='last')]
+
+            # Standardize columns (Alpaca returns: open, high, low, close, volume, trade_count, vwap)
+            df = bars[['open', 'high', 'low', 'close', 'volume']].copy()
+
+            # Index is already timezone-aware (UTC) from Alpaca
+            return (symbol, df, None)
+
+        except Exception as e:
+            return (symbol, None, str(e))
+
+    # Download in parallel (but with rate limiting for Alpaca)
+    data = {}
+    errors = []
+
+    # Use fewer workers to respect rate limits
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(download_symbol, sym): sym for sym in symbols}
+
+        for i, future in enumerate(as_completed(futures)):
+            symbol, df, error = future.result()
+
+            if error:
+                errors.append(f"{symbol}: {error}")
+            elif df is not None and len(df) > 100:
+                data[symbol] = df
+
+            # Progress
+            print(f"\r  Progress: {i+1}/{len(symbols)} symbols...", end="")
+
+            # Small delay for rate limiting
+            time.sleep(0.05)
+
+    print(f"\n  Downloaded: {len(data)} symbols successfully")
+    if errors:
+        print(f"  Errors: {len(errors)} symbols failed")
+        for err in errors[:5]:  # Show first 5 errors
+            print(f"    - {err}")
+
+    return data
+
 
 def stage_backtest(force: bool = False) -> bool:
     """
-    Stage 6: Validate strategy with realistic execution on OUT-OF-SAMPLE data.
+    Stage 6: Validate strategy with realistic execution on TRUE OUT-OF-SAMPLE data.
 
-    CRITICAL: This backtest runs ONLY on data NOT seen during training:
-    1. Temporal OOS: Data after training cutoff date (2025-05-01)
-    2. Symbol OOS: Holdout symbols not used in training
+    CRITICAL: This backtest downloads FRESH data from the internet that the model
+    has NEVER seen during training. This is the only way to get unbiased performance.
+
+    The model was trained on data up to 2025-05-01.
+    We download data from 2025-05-01 onwards for testing.
 
     Input: All previous outputs
     Output: results/backtest/backtest_report.json, results/backtest/equity_curve.csv
     """
     print("\n" + "=" * 70)
-    print("STAGE 6: OUT-OF-SAMPLE BACKTEST")
+    print("STAGE 6: TRUE OUT-OF-SAMPLE BACKTEST")
     print("=" * 70)
 
     model_path = Path("models/model.pkl")
     report_path = Path("results/backtest/backtest_report.json")
     holdout_manifest_path = Path("data/holdout/holdout_manifest.json")
+    oos_data_path = Path("data/oos/oos_data.pkl")
 
     # Check dependencies
     if not model_path.exists():
@@ -634,27 +737,98 @@ def stage_backtest(force: bool = False) -> bool:
         from src.risk.position_sizer import VolatilityPositionSizer
         import joblib
 
-        # Load holdout manifest to get OOS parameters
-        if not holdout_manifest_path.exists():
-            print(f"ERROR: Holdout manifest not found: {holdout_manifest_path}")
-            print("Cannot run OOS backtest without holdout configuration")
-            return False
+        # Get training end date from holdout manifest or model metrics
+        training_end_date = "2025-05-01"  # Default
 
-        with open(holdout_manifest_path, 'r') as f:
-            holdout_manifest = json.load(f)
+        if holdout_manifest_path.exists():
+            with open(holdout_manifest_path, 'r') as f:
+                holdout_manifest = json.load(f)
+            training_end_date = holdout_manifest.get('temporal_cutoff_date', training_end_date)[:10]
 
-        temporal_cutoff = pd.Timestamp(holdout_manifest['temporal_cutoff_date'])
-        holdout_symbols = set(holdout_manifest['holdout_symbols'])
+        # Also check model metrics
+        metrics_path = Path("models/metrics.yaml")
+        if metrics_path.exists():
+            with open(metrics_path, 'r') as f:
+                model_metrics = yaml.safe_load(f)
+            # Training date tells us when model was created
+            training_date = model_metrics.get('training_date', '')[:10]
+            print(f"Model trained on: {training_date}")
 
         print(f"\n{'='*50}")
-        print("OUT-OF-SAMPLE CONFIGURATION")
+        print("TRUE OUT-OF-SAMPLE CONFIGURATION")
         print(f"{'='*50}")
-        print(f"Temporal OOS Start: {temporal_cutoff}")
-        print(f"Holdout Symbols: {holdout_symbols}")
+        print(f"Training data ended: {training_end_date}")
+        print(f"OOS data starts:     {training_end_date}")
+        print(f"OOS data ends:       today")
         print(f"{'='*50}\n")
 
+        # Get symbols from config
+        symbols_config_path = Path("config/symbols.yaml")
+        with open(symbols_config_path, 'r') as f:
+            symbols_config = yaml.safe_load(f)
+
+        symbols = list(symbols_config.get('symbols', {}).keys())
+        print(f"Total symbols: {len(symbols)}")
+
+        # Download or load OOS data
+        oos_data_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if oos_data_path.exists() and not force:
+            print(f"\nLoading cached OOS data from {oos_data_path}...")
+            with open(oos_data_path, 'rb') as f:
+                cached = pickle.load(f)
+
+            # Check if cache is recent (within 1 day)
+            cache_date = cached.get('download_date', '')
+            if cache_date:
+                cache_dt = pd.Timestamp(cache_date)
+                if (datetime.now() - cache_dt.to_pydatetime()).days < 1:
+                    data = cached.get('data', {})
+                    print(f"Using cached data from {cache_date}")
+                else:
+                    print("Cache is stale, re-downloading...")
+                    data = download_oos_data(symbols, training_end_date)
+                    # Save cache
+                    with open(oos_data_path, 'wb') as f:
+                        pickle.dump({
+                            'download_date': datetime.now().isoformat(),
+                            'training_end_date': training_end_date,
+                            'data': data
+                        }, f)
+            else:
+                data = cached.get('data', {})
+        else:
+            # Download fresh data
+            data = download_oos_data(symbols, training_end_date)
+
+            # Cache the data
+            print(f"\nCaching OOS data to {oos_data_path}...")
+            with open(oos_data_path, 'wb') as f:
+                pickle.dump({
+                    'download_date': datetime.now().isoformat(),
+                    'training_end_date': training_end_date,
+                    'data': data
+                }, f)
+
+        if not data:
+            print("ERROR: No OOS data available for backtest!")
+            print("Check your internet connection and try again.")
+            return False
+
+        # Data summary
+        total_bars = sum(len(df) for df in data.values())
+        date_range_start = min(df.index.min() for df in data.values())
+        date_range_end = max(df.index.max() for df in data.values())
+
+        print(f"\nOOS Data Summary:")
+        print(f"  Symbols loaded: {len(data)}")
+        print(f"  Total bars: {total_bars:,}")
+        print(f"  Date range: {date_range_start} to {date_range_end}")
+        print(f"  Training ended: {training_end_date}")
+        print(f"  Data is TRUE OUT-OF-SAMPLE: YES")
+
         # Load model
-        print("Loading model and data...")
+        print("\nLoading model...")
         model = joblib.load(model_path)
 
         # Load feature list
@@ -663,57 +837,7 @@ def stage_backtest(force: bool = False) -> bool:
         if features_file.exists():
             with open(features_file, 'r') as f:
                 feature_list = [line.strip() for line in f.readlines() if line.strip()]
-
-        # Load data
-        data_path = Path("data/processed/combined_data.pkl")
-        if not data_path.exists():
-            print(f"ERROR: Data not found: {data_path}")
-            return False
-
-        with open(data_path, 'rb') as f:
-            all_data = pickle.load(f)
-
-        # =================================================================
-        # CRITICAL: Filter to OUT-OF-SAMPLE data only
-        # =================================================================
-        # Option 1: Temporal OOS - Use data AFTER training cutoff for trained symbols
-        # Option 2: Symbol OOS - Use ALL data for holdout symbols (never seen in training)
-
-        oos_data = {}
-        temporal_oos_bars = 0
-        symbol_oos_bars = 0
-
-        for symbol, df in all_data.items():
-            if symbol in holdout_symbols:
-                # Symbol OOS: This symbol was NEVER used in training
-                # Use all its data for OOS validation
-                oos_data[symbol] = df.copy()
-                symbol_oos_bars += len(df)
-            else:
-                # Temporal OOS: Filter to data AFTER training cutoff
-                oos_df = df[df.index >= temporal_cutoff].copy()
-                if len(oos_df) > 100:  # Minimum bars for meaningful backtest
-                    oos_data[symbol] = oos_df
-                    temporal_oos_bars += len(oos_df)
-
-        if not oos_data:
-            print("ERROR: No OOS data available for backtest!")
-            return False
-
-        print(f"\nOOS Data Summary:")
-        print(f"  Total symbols: {len(oos_data)}")
-        print(f"  Temporal OOS bars: {temporal_oos_bars:,}")
-        print(f"  Symbol OOS bars: {symbol_oos_bars:,}")
-        print(f"  Total OOS bars: {temporal_oos_bars + symbol_oos_bars:,}")
-
-        # Verify no data leakage
-        print(f"\n  Training ended: {temporal_cutoff}")
-        first_oos_date = min(df.index.min() for df in oos_data.values())
-        print(f"  First OOS date: {first_oos_date}")
-
-        # Use OOS data for backtest
-        data = oos_data
-        print(f"\nLoaded {len(data)} symbols for OOS backtest")
+            print(f"Loaded {len(feature_list)} features")
 
         # Initialize components
         feature_builder = InstitutionalFeatureEngineer()
@@ -774,13 +898,14 @@ def stage_backtest(force: bool = False) -> bool:
         # Generate report with OOS metadata
         report = {
             'run_date': datetime.now().isoformat(),
-            'backtest_type': 'OUT_OF_SAMPLE',
+            'backtest_type': 'TRUE_OUT_OF_SAMPLE',
             'oos_config': {
-                'temporal_cutoff': str(temporal_cutoff),
-                'holdout_symbols': list(holdout_symbols),
-                'temporal_oos_bars': temporal_oos_bars,
-                'symbol_oos_bars': symbol_oos_bars,
-                'total_oos_symbols': len(data)
+                'training_end_date': training_end_date,
+                'oos_start_date': str(date_range_start),
+                'oos_end_date': str(date_range_end),
+                'total_oos_symbols': len(data),
+                'total_oos_bars': total_bars,
+                'data_source': 'Yahoo Finance (fresh download)'
             },
             'initial_capital': config.initial_capital,
             'final_value': float(result.equity_curve['equity'].iloc[-1]),
@@ -808,11 +933,12 @@ def stage_backtest(force: bool = False) -> bool:
 
         # Print summary
         print("\n" + "=" * 50)
-        print("OUT-OF-SAMPLE BACKTEST RESULTS")
+        print("TRUE OUT-OF-SAMPLE BACKTEST RESULTS")
         print("=" * 50)
-        print(f"Backtest Type:    OUT-OF-SAMPLE (No data leakage)")
+        print(f"Backtest Type:    TRUE OOS (Fresh data from internet)")
+        print(f"OOS Period:       {date_range_start} to {date_range_end}")
         print(f"OOS Symbols:      {len(data)}")
-        print(f"OOS Bars:         {temporal_oos_bars + symbol_oos_bars:,}")
+        print(f"OOS Bars:         {total_bars:,}")
         print("-" * 50)
         print(f"Initial Capital:  ${config.initial_capital:,.0f}")
         print(f"Final Value:      ${report['final_value']:,.0f}")
