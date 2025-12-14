@@ -690,11 +690,11 @@ def stage_backtest(force: bool = False) -> bool:
             risk_manager=risk_manager,
             enable_microstructure=True,
             microstructure_config={
-                'base_spread_bps': 5,
-                'latency_mean_ms': 10,
-                'latency_std_ms': 5,
-                'partial_fill_prob': 0.1,
-                'adverse_selection_factor': 0.3
+                'latency_mean_ms': 10.0,
+                'latency_shape': 2.0,
+                'liquidity_factor': 0.01,
+                'partial_fill_threshold': 0.5,
+                'rejection_probability': 0.02
             }
         )
 

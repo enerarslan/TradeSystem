@@ -1440,27 +1440,32 @@ python main.py --mode live --config config/settings.yaml
 ## Complete Pipeline Command Summary
 
 ```bash
-# === FULL EXECUTION SEQUENCE ===
+# Stage 1: Data - Download historical data
+python scripts/run_pipeline.py --stage data
 
-# 1. Activate environment
-source venv/bin/activate  # Linux/Mac
-# OR
-.\venv\Scripts\activate   # Windows
+# Stage 2: Features - Generate institutional features  
+python scripts/run_pipeline.py --stage features
 
-# 2. Verify data quality
-python scripts/data_quality_pipeline.py
+# Stage 3: Labels - Generate triple barrier labels
+python scripts/run_pipeline.py --stage labels
+# OR calibrate separately:
+python scripts/calibrate_triple_barrier.py --calibrate
 
-# 3. Run backtest (REQUIRED before any trading)
+# Stage 4: Train - Train ML model with purged k-fold CV
+python scripts/run_pipeline.py --stage train
+
+# Stage 5: Calibrate - Calibrate probabilities for Kelly sizing
+python scripts/run_pipeline.py --stage calibrate
+
+# Stage 6: Backtest - Validate with realistic execution ← YOU ARE HERE
 python scripts/run_pipeline.py --stage backtest --force
 
-# 4. Analyze results
-cat results/backtest_report.json | python -m json.tool
+# Stage 7: Validate - Final validation
+python scripts/run_pipeline.py --stage validate
 
-# 5. If results acceptable, start paper trading
-python main.py --mode paper
+# Stage 8: Paper Trading (optional)
+python scripts/run_pipeline.py --stage paper
 
-# 6. After 2+ weeks successful paper trading, live mode
-python main.py --mode live
 ```
 
 ---
