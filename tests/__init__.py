@@ -1,1 +1,0 @@
-# AlphaTrade System Tests
