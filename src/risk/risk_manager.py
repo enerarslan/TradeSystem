@@ -965,3 +965,194 @@ class RiskManager:
                         })
 
         return trades
+
+
+class BacktestCircuitBreaker:
+    """
+    Enhanced circuit breaker for backtesting with multiple trigger conditions.
+
+    ADDED: This class addresses the audit finding that circuit breakers
+    were not properly integrated into the backtest loop.
+
+    Trigger Conditions:
+    1. Intraday loss exceeds threshold (e.g., -3%)
+    2. Drawdown exceeds threshold (e.g., -15%)
+    3. Consecutive losing trades exceed threshold (e.g., 5)
+    4. Volatility spike detected (e.g., 3x normal)
+    5. Win rate drops below threshold (e.g., <40% over last N trades)
+
+    When triggered:
+    - Pauses new position entries
+    - Can optionally force-close existing positions
+    - Cooldown period before resuming
+    """
+
+    def __init__(
+        self,
+        max_daily_loss_pct: float = 0.03,        # 3% daily loss trigger
+        max_drawdown_pct: float = 0.15,          # 15% drawdown trigger
+        max_consecutive_losses: int = 5,          # 5 consecutive losses
+        volatility_spike_mult: float = 3.0,       # 3x normal volatility
+        min_win_rate: float = 0.35,               # 35% minimum win rate
+        win_rate_lookback: int = 20,              # Over last 20 trades
+        cooldown_periods: int = 10,               # Pause for 10 bars
+        force_close_on_trigger: bool = False      # Close positions when triggered
+    ):
+        self.max_daily_loss_pct = max_daily_loss_pct
+        self.max_drawdown_pct = max_drawdown_pct
+        self.max_consecutive_losses = max_consecutive_losses
+        self.volatility_spike_mult = volatility_spike_mult
+        self.min_win_rate = min_win_rate
+        self.win_rate_lookback = win_rate_lookback
+        self.cooldown_periods = cooldown_periods
+        self.force_close_on_trigger = force_close_on_trigger
+
+        # State
+        self._is_triggered = False
+        self._trigger_reason = None
+        self._trigger_time = None
+        self._cooldown_remaining = 0
+        self._consecutive_losses = 0
+        self._trade_results: List[bool] = []  # True = win, False = loss
+        self._normal_volatility = None
+        self._daily_starting_equity = None
+        self._peak_equity = 0
+
+        # Metrics
+        self._triggers_count = 0
+        self._total_cooldown_periods = 0
+
+    def reset_daily(self, current_equity: float) -> None:
+        """Reset daily metrics (call at start of each trading day)."""
+        self._daily_starting_equity = current_equity
+
+    def update_peak(self, current_equity: float) -> None:
+        """Update peak equity for drawdown calculation."""
+        if current_equity > self._peak_equity:
+            self._peak_equity = current_equity
+
+    def set_normal_volatility(self, volatility: float) -> None:
+        """Set baseline volatility for spike detection."""
+        self._normal_volatility = volatility
+
+    def record_trade(self, pnl: float) -> None:
+        """Record trade result for consecutive loss and win rate tracking."""
+        is_win = pnl > 0
+        self._trade_results.append(is_win)
+
+        # Track consecutive losses
+        if not is_win:
+            self._consecutive_losses += 1
+        else:
+            self._consecutive_losses = 0
+
+        # Keep only recent trades for win rate
+        if len(self._trade_results) > self.win_rate_lookback * 2:
+            self._trade_results = self._trade_results[-self.win_rate_lookback:]
+
+    def check_triggers(
+        self,
+        current_equity: float,
+        current_volatility: Optional[float] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Check all circuit breaker conditions.
+
+        Args:
+            current_equity: Current portfolio equity
+            current_volatility: Current realized volatility (optional)
+
+        Returns:
+            Tuple of (is_triggered, trigger_reason)
+        """
+        # If in cooldown, decrement and check if done
+        if self._cooldown_remaining > 0:
+            self._cooldown_remaining -= 1
+            if self._cooldown_remaining == 0:
+                self._is_triggered = False
+                self._trigger_reason = None
+                logger.info("Circuit breaker cooldown complete, trading resumed")
+            return self._is_triggered, self._trigger_reason
+
+        # Update peak
+        self.update_peak(current_equity)
+
+        # 1. Check daily loss
+        if self._daily_starting_equity is not None and self._daily_starting_equity > 0:
+            daily_return = (current_equity - self._daily_starting_equity) / self._daily_starting_equity
+            if daily_return < -self.max_daily_loss_pct:
+                return self._trigger(f"Daily loss exceeded: {daily_return:.2%}")
+
+        # 2. Check drawdown
+        if self._peak_equity > 0:
+            drawdown = (self._peak_equity - current_equity) / self._peak_equity
+            if drawdown > self.max_drawdown_pct:
+                return self._trigger(f"Max drawdown exceeded: {drawdown:.2%}")
+
+        # 3. Check consecutive losses
+        if self._consecutive_losses >= self.max_consecutive_losses:
+            return self._trigger(f"Consecutive losses: {self._consecutive_losses}")
+
+        # 4. Check volatility spike
+        if current_volatility is not None and self._normal_volatility is not None:
+            if current_volatility > self._normal_volatility * self.volatility_spike_mult:
+                return self._trigger(
+                    f"Volatility spike: {current_volatility:.2%} vs normal {self._normal_volatility:.2%}"
+                )
+
+        # 5. Check win rate
+        if len(self._trade_results) >= self.win_rate_lookback:
+            recent_results = self._trade_results[-self.win_rate_lookback:]
+            win_rate = sum(recent_results) / len(recent_results)
+            if win_rate < self.min_win_rate:
+                return self._trigger(f"Win rate collapsed: {win_rate:.2%}")
+
+        return False, None
+
+    def _trigger(self, reason: str) -> Tuple[bool, str]:
+        """Trigger the circuit breaker."""
+        self._is_triggered = True
+        self._trigger_reason = reason
+        self._trigger_time = datetime.now()
+        self._cooldown_remaining = self.cooldown_periods
+        self._triggers_count += 1
+        self._total_cooldown_periods += self.cooldown_periods
+
+        logger.warning(f"CIRCUIT BREAKER TRIGGERED: {reason}")
+        logger.warning(f"Trading paused for {self.cooldown_periods} periods")
+
+        return True, reason
+
+    def is_trading_allowed(self) -> bool:
+        """Check if trading is currently allowed."""
+        return not self._is_triggered
+
+    def should_force_close(self) -> bool:
+        """Check if positions should be force-closed."""
+        return self._is_triggered and self.force_close_on_trigger
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current circuit breaker status."""
+        recent_win_rate = None
+        if len(self._trade_results) >= 5:
+            recent = self._trade_results[-min(self.win_rate_lookback, len(self._trade_results)):]
+            recent_win_rate = sum(recent) / len(recent)
+
+        return {
+            'is_triggered': self._is_triggered,
+            'trigger_reason': self._trigger_reason,
+            'cooldown_remaining': self._cooldown_remaining,
+            'consecutive_losses': self._consecutive_losses,
+            'recent_win_rate': recent_win_rate,
+            'triggers_count': self._triggers_count,
+            'total_cooldown_periods': self._total_cooldown_periods
+        }
+
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get circuit breaker metrics for reporting."""
+        return {
+            'total_triggers': self._triggers_count,
+            'total_cooldown_periods': self._total_cooldown_periods,
+            'consecutive_losses_max': self._consecutive_losses,
+            'trades_tracked': len(self._trade_results)
+        }

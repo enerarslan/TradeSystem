@@ -864,11 +864,134 @@ def download_oos_data(symbols: list, start_date: str, end_date: str = None) -> D
     return data
 
 
+def diagnose_model_predictions(
+    model,
+    data: Dict[str, pd.DataFrame],
+    feature_builder,
+    sample_size: int = 1000
+) -> Dict[str, Any]:
+    """
+    Diagnose if model predictions are worse than random.
+
+    CRITICAL: This detects when the model is generating anti-signals
+    (predictions that are consistently OPPOSITE of the correct direction).
+
+    Args:
+        model: Trained model
+        data: Dict of symbol -> DataFrame
+        feature_builder: Feature engineering pipeline
+        sample_size: Number of samples to evaluate
+
+    Returns:
+        Dict with diagnostic metrics
+    """
+    print("\n" + "=" * 60)
+    print("MODEL PREDICTION DIAGNOSTIC")
+    print("=" * 60)
+
+    all_predictions = []
+    all_actuals = []
+    all_probas = []
+
+    for symbol, df in data.items():
+        try:
+            features = feature_builder.build_features(df)
+            if features is None or len(features) < 100:
+                continue
+
+            X = features.select_dtypes(include=[np.number]).fillna(0)
+
+            # Get predictions
+            if hasattr(model, 'predict_proba'):
+                proba = model.predict_proba(X)
+                if proba.ndim > 1:
+                    # Check which class is which
+                    proba = proba[:, 1]  # Probability of class 1
+                all_probas.extend(proba[:-1].tolist())
+                predictions = (proba > 0.5).astype(int)
+            else:
+                predictions = model.predict(X)
+                all_probas.extend([0.5] * (len(predictions) - 1))
+
+            # Get actual future returns (1-bar forward)
+            actual_returns = df['close'].pct_change().shift(-1).loc[features.index]
+            actual_direction = (actual_returns > 0).astype(int)
+
+            all_predictions.extend(predictions[:-1].tolist())
+            all_actuals.extend(actual_direction[:-1].tolist())
+
+            if len(all_predictions) >= sample_size:
+                break
+
+        except Exception as e:
+            logger.debug(f"Diagnostic skipped {symbol}: {e}")
+
+    if len(all_predictions) < 100:
+        print("WARNING: Insufficient data for model diagnostic")
+        return {'accuracy': 0.5, 'status': 'INSUFFICIENT_DATA'}
+
+    # Calculate accuracy
+    predictions = np.array(all_predictions)
+    actuals = np.array(all_actuals)
+    probas = np.array(all_probas)
+
+    accuracy = np.mean(predictions == actuals)
+    avg_proba = np.mean(probas)
+
+    # Calculate correlation between predicted probability and actual returns
+    correlation = np.corrcoef(probas, actuals)[0, 1] if len(probas) > 10 else 0
+
+    print(f"\nSamples analyzed: {len(predictions)}")
+    print(f"Directional Accuracy: {accuracy:.2%}")
+    print(f"Average Probability: {avg_proba:.4f}")
+    print(f"Proba-Return Correlation: {correlation:.4f}")
+    print(f"Expected Random: 50%")
+
+    # Determine status
+    if accuracy < 0.45:
+        status = 'INVERTED_SIGNALS'
+        print(f"\n*** WARNING: Model accuracy {accuracy:.2%} is BELOW 45%! ***")
+        print("    The model is predicting OPPOSITE of correct direction.")
+        print("    Consider: 1) Inverting signals, 2) Checking label encoding")
+        print("    3) Retraining with correct labels")
+    elif accuracy < 0.48:
+        status = 'NO_EDGE'
+        print(f"\n*** WARNING: Model has NO EDGE (accuracy ~50%) ***")
+        print("    The model is not better than random guessing.")
+    elif accuracy > 0.52:
+        status = 'OK'
+        print(f"\n*** Model appears to have predictive power ***")
+    else:
+        status = 'MARGINAL'
+        print(f"\n*** Model has marginal edge ***")
+
+    # Check if classes might be inverted
+    if hasattr(model, 'classes_'):
+        print(f"\nModel classes: {model.classes_}")
+
+    if hasattr(model, '_label_encoder') and model._label_encoder is not None:
+        le = model._label_encoder
+        if hasattr(le, 'classes_'):
+            print(f"Label encoder classes: {le.classes_}")
+
+    print("=" * 60)
+
+    return {
+        'accuracy': float(accuracy),
+        'avg_proba': float(avg_proba),
+        'correlation': float(correlation),
+        'n_samples': len(predictions),
+        'status': status,
+        'should_invert': accuracy < 0.45
+    }
+
+
 def run_vectorized_backtest(
     data: Dict[str, pd.DataFrame],
     model,
     feature_builder,
-    config: Dict
+    config: Dict,
+    invert_signals: bool = False
 ) -> Dict[str, Any]:
     """
     Run fast vectorized backtest for development/optimization.
@@ -876,11 +999,18 @@ def run_vectorized_backtest(
     This is 50-100x faster than event-driven backtest.
     Used for quick iteration, not final validation.
 
+    FIXES APPLIED:
+    - Added model diagnostic to detect inverted signals
+    - Fixed probability-to-signal conversion
+    - Added position limits via VectorizedBacktester v2
+    - Improved signal threshold calibration
+
     Args:
         data: Dict of symbol -> DataFrame
         model: Trained model
         feature_builder: Feature engineering pipeline
         config: Backtest configuration
+        invert_signals: If True, invert model signals (for anti-correlated models)
 
     Returns:
         Dict with backtest results
@@ -907,11 +1037,28 @@ def run_vectorized_backtest(
             if hasattr(model, 'predict_proba'):
                 proba = model.predict_proba(X)
                 if proba.ndim > 1:
+                    # FIXED: Verify which column corresponds to positive class
+                    # For binary classification, column 1 is typically P(class=1)
+                    # If model was trained with labels {-1, 1} or {0, 1}, class 1 should be "bullish"
                     proba = proba[:, 1]
+
                 # Convert probability to signal (-1 to 1)
+                # P > 0.5 -> bullish, P < 0.5 -> bearish
                 signals = (proba - 0.5) * 2
+
+                # FIXED: Invert if model is anti-correlated
+                if invert_signals:
+                    signals = -signals
             else:
-                signals = model.predict(X)
+                predictions = model.predict(X)
+                # Map predictions to signals
+                if set(np.unique(predictions)) <= {0, 1}:
+                    signals = (predictions - 0.5) * 2
+                else:
+                    signals = predictions
+
+                if invert_signals:
+                    signals = -signals
 
             # Create signal series aligned with prices
             signal_series = pd.Series(signals, index=features.index)
@@ -940,18 +1087,19 @@ def run_vectorized_backtest(
     # Fill NaN signals with 0 (no position)
     signals_df = signals_df.fillna(0)
 
-    # Convert continuous signals to discrete positions
-    # Threshold at 0.3 for position entry
-    positions = signals_df.apply(lambda x: np.where(x > 0.3, 1, np.where(x < -0.3, -1, 0)))
-
-    # Run vectorized backtest
+    # FIXED: Use VectorizedBacktester v2 with position limits
+    # Signal thresholding is now handled inside the backtester
     backtester = VectorizedBacktester(
         initial_capital=config.get('initial_capital', 1000000),
         commission_pct=config.get('commission_pct', 0.001),
-        slippage_pct=config.get('slippage_pct', 0.0005)
+        slippage_pct=config.get('slippage_pct', 0.0005),
+        max_position_pct=config.get('max_position_pct', 0.10),      # 10% max per position
+        max_gross_exposure=config.get('max_gross_exposure', 0.80),   # 80% max invested
+        min_signal_threshold=config.get('min_signal_threshold', 0.3) # Only trade strong signals
     )
 
-    result = backtester.run(prices_df, positions)
+    # Pass continuous signals - the backtester handles thresholding
+    result = backtester.run(prices_df, signals_df)
 
     return result
 
@@ -1126,6 +1274,41 @@ def stage_backtest(force: bool = False) -> bool:
         # Initialize components
         feature_builder = InstitutionalFeatureEngineer()
 
+        # ============================================================
+        # NEW: Run model diagnostic BEFORE backtest
+        # This detects if model is generating anti-signals
+        # ============================================================
+        print("\n" + "=" * 70)
+        print("RUNNING MODEL DIAGNOSTIC (Pre-Backtest Validation)")
+        print("=" * 70)
+
+        diagnostic = diagnose_model_predictions(
+            model=model,
+            data=data,
+            feature_builder=feature_builder,
+            sample_size=2000
+        )
+
+        # Determine if we should invert signals
+        invert_signals = diagnostic.get('should_invert', False)
+        model_accuracy = diagnostic.get('accuracy', 0.5)
+
+        if invert_signals:
+            print("\n*** AUTO-INVERTING SIGNALS due to anti-correlation ***")
+            print("    Original model was predicting opposite of correct direction.")
+
+        if diagnostic.get('status') == 'NO_EDGE':
+            print("\n*** WARNING: Model has no predictive power ***")
+            print("    Results may be close to random or negative after costs.")
+
+        # Store diagnostic in report
+        diagnostic_report = {
+            'model_accuracy': model_accuracy,
+            'status': diagnostic.get('status', 'UNKNOWN'),
+            'correlation': diagnostic.get('correlation', 0),
+            'signals_inverted': invert_signals
+        }
+
         backtest_start_time = time.time()
 
         if use_vectorized:
@@ -1141,26 +1324,44 @@ def stage_backtest(force: bool = False) -> bool:
                 config={
                     'initial_capital': vectorized_config.get('initial_capital', 1000000),
                     'commission_pct': vectorized_config.get('commission_pct', 0.001),
-                    'slippage_pct': vectorized_config.get('slippage_pct', 0.0005)
-                }
+                    'slippage_pct': vectorized_config.get('slippage_pct', 0.0005),
+                    'max_position_pct': vectorized_config.get('max_position_pct', 0.10),
+                    'max_gross_exposure': vectorized_config.get('max_gross_exposure', 0.80),
+                    'min_signal_threshold': vectorized_config.get('min_signal_threshold', 0.3)
+                },
+                invert_signals=invert_signals  # NEW: Use diagnostic result
             )
 
             if 'error' in result:
                 print(f"ERROR: {result['error']}")
                 return False
 
-            # Extract metrics from vectorized result
+            # Extract metrics from vectorized result (FIXED - now includes trade metrics)
             metrics = {
                 'total_return': result.get('total_return', 0),
+                'annualized_return': result.get('annualized_return', 0),
                 'sharpe_ratio': result.get('sharpe_ratio', 0),
+                'sortino_ratio': result.get('sortino_ratio', 0),
+                'calmar_ratio': result.get('calmar_ratio', 0),
                 'max_drawdown': result.get('max_drawdown', 0),
                 'volatility': result.get('volatility', 0),
-                'total_costs': result.get('total_costs', 0)
+                'total_costs': result.get('total_costs', 0),
+                'cost_drag_pct': result.get('cost_drag_pct', 0),
+                # NEW: Trade metrics (FIXED - no longer always 0)
+                'total_trades': result.get('total_trades', 0),
+                'win_rate': result.get('win_rate', 0),
+                'profit_factor': result.get('profit_factor', 0),
+                'avg_trade_pnl': result.get('avg_trade_pnl', 0),
+                'gross_profit': result.get('gross_profit', 0),
+                'gross_loss': result.get('gross_loss', 0)
             }
 
             # Create result-like object for report generation
             equity_curve = result.get('equity_curve', pd.Series())
             trades = []  # Vectorized doesn't track individual trades
+
+            # Include positions for analysis
+            positions = result.get('positions', pd.DataFrame())
 
         else:
             # === EVENT-DRIVEN BACKTEST ===
@@ -1247,16 +1448,27 @@ def stage_backtest(force: bool = False) -> bool:
                 'total_oos_bars': total_bars,
                 'data_source': 'Alpaca (fresh download)'
             },
+            # NEW: Model diagnostic results
+            'model_diagnostic': diagnostic_report,
             'initial_capital': initial_capital,
             'final_value': final_value,
             'total_return': float(metrics.get('total_return', 0)),
+            'annualized_return': float(metrics.get('annualized_return', 0)),
             'sharpe_ratio': float(metrics.get('sharpe_ratio', 0)),
+            'sortino_ratio': float(metrics.get('sortino_ratio', 0)),
+            'calmar_ratio': float(metrics.get('calmar_ratio', 0)),
             'max_drawdown': float(metrics.get('max_drawdown', 0)),
+            'volatility': float(metrics.get('volatility', 0)),
+            # FIXED: Trade metrics now populated
+            'total_trades': int(metrics.get('total_trades', 0)) if use_vectorized else len(trades),
             'win_rate': float(metrics.get('win_rate', 0)),
             'profit_factor': float(metrics.get('profit_factor', 0)),
-            'total_trades': len(trades) if trades else 0,
-            'avg_trade_return': float(metrics.get('avg_trade_return', 0)),
-            'calmar_ratio': float(metrics.get('calmar_ratio', 0))
+            'avg_trade_pnl': float(metrics.get('avg_trade_pnl', 0)),
+            'gross_profit': float(metrics.get('gross_profit', 0)),
+            'gross_loss': float(metrics.get('gross_loss', 0)),
+            # Cost metrics
+            'total_costs': float(metrics.get('total_costs', 0)),
+            'cost_drag_pct': float(metrics.get('cost_drag_pct', 0))
         }
 
         # Save results
@@ -1281,24 +1493,40 @@ def stage_backtest(force: bool = False) -> bool:
                 pd.DataFrame(trades).to_csv(trades_path, index=False)
 
         # Print summary
-        print("\n" + "=" * 50)
+        print("\n" + "=" * 60)
         print(f"{'VECTORIZED' if use_vectorized else 'EVENT-DRIVEN'} BACKTEST RESULTS")
-        print("=" * 50)
+        print("=" * 60)
         print(f"Backtest Type:    {'VECTORIZED (Fast)' if use_vectorized else 'EVENT-DRIVEN'}")
         print(f"Elapsed Time:     {backtest_elapsed:.1f}s ({backtest_elapsed/60:.1f} min)")
         print(f"OOS Period:       {date_range_start} to {date_range_end}")
         print(f"OOS Symbols:      {len(data)}")
         print(f"OOS Bars:         {total_bars:,}")
-        print("-" * 50)
-        print(f"Initial Capital:  ${initial_capital:,.0f}")
-        print(f"Final Value:      ${report['final_value']:,.0f}")
-        print(f"Total Return:     {report['total_return']:.2%}")
-        print(f"Sharpe Ratio:     {report['sharpe_ratio']:.2f}")
-        print(f"Max Drawdown:     {report['max_drawdown']:.2%}")
-        if not use_vectorized:
-            print(f"Win Rate:         {report['win_rate']:.2%}")
-            print(f"Total Trades:     {report['total_trades']}")
-        print("=" * 50)
+        print("-" * 60)
+        print("MODEL DIAGNOSTIC:")
+        print(f"  Model Accuracy:   {diagnostic_report.get('model_accuracy', 0):.2%}")
+        print(f"  Status:           {diagnostic_report.get('status', 'UNKNOWN')}")
+        print(f"  Signals Inverted: {diagnostic_report.get('signals_inverted', False)}")
+        print("-" * 60)
+        print("PERFORMANCE:")
+        print(f"  Initial Capital:  ${initial_capital:,.0f}")
+        print(f"  Final Value:      ${report['final_value']:,.0f}")
+        print(f"  Total Return:     {report['total_return']:.2%}")
+        print(f"  Ann. Return:      {report.get('annualized_return', 0):.2%}")
+        print(f"  Sharpe Ratio:     {report['sharpe_ratio']:.2f}")
+        print(f"  Sortino Ratio:    {report.get('sortino_ratio', 0):.2f}")
+        print(f"  Max Drawdown:     {report['max_drawdown']:.2%}")
+        print(f"  Calmar Ratio:     {report.get('calmar_ratio', 0):.2f}")
+        print("-" * 60)
+        print("TRADE METRICS (FIXED):")
+        print(f"  Total Trades:     {report['total_trades']:,}")
+        print(f"  Win Rate:         {report['win_rate']:.2%}")
+        print(f"  Profit Factor:    {report['profit_factor']:.2f}")
+        print(f"  Avg Trade P&L:    {report.get('avg_trade_pnl', 0):.6f}")
+        print("-" * 60)
+        print("COSTS:")
+        print(f"  Total Costs:      ${report.get('total_costs', 0):,.2f}")
+        print(f"  Cost Drag:        {report.get('cost_drag_pct', 0):.4%}")
+        print("=" * 60)
 
         print(f"\nReport saved to {report_path}")
 

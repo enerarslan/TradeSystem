@@ -233,15 +233,22 @@ class TripleBarrierLabeler:
         self,
         t_events: pd.DatetimeIndex,
         prices: pd.DataFrame,
-        num_bars: Optional[int] = None
+        num_bars: Optional[int] = None,
+        training_end_date: Optional[pd.Timestamp] = None
     ) -> pd.Series:
         """
         Get vertical barrier timestamps.
+
+        FIXED: Added training_end_date parameter to prevent look-ahead bias.
+        When labeling for training, events near the end of the training period
+        should be excluded if their vertical barrier extends into the holdout period.
 
         Args:
             t_events: Event timestamps
             prices: Price DataFrame with DatetimeIndex
             num_bars: Number of bars for vertical barrier (default: config value)
+            training_end_date: If provided, exclude events whose vertical barrier
+                               extends past this date (prevents label leakage)
 
         Returns:
             Series mapping event time to vertical barrier time
@@ -266,7 +273,27 @@ class TripleBarrierLabeler:
 
             # Get vertical barrier time
             barrier_loc = min(loc + num_bars, len(price_idx) - 1)
-            vertical_barriers[t] = price_idx[barrier_loc]
+            barrier_time = price_idx[barrier_loc]
+
+            # FIXED: Check for look-ahead bias
+            if training_end_date is not None:
+                if barrier_time > training_end_date:
+                    # This event's outcome extends into holdout period
+                    # Mark as NaT to exclude from training
+                    vertical_barriers[t] = pd.NaT
+                    logger.debug(
+                        f"Excluding event at {t}: vertical barrier {barrier_time} "
+                        f"extends past training end {training_end_date}"
+                    )
+                    continue
+
+            vertical_barriers[t] = barrier_time
+
+        valid_count = sum(1 for v in vertical_barriers.values() if pd.notna(v))
+        logger.info(
+            f"Vertical barriers: {valid_count}/{len(t_events)} valid "
+            f"({len(t_events) - valid_count} excluded for look-ahead)"
+        )
 
         return pd.Series(vertical_barriers)
 
@@ -466,7 +493,8 @@ class TripleBarrierLabeler:
         target: Optional[pd.Series] = None,
         min_ret: Optional[float] = None,
         vertical_barrier_times: Optional[pd.Series] = None,
-        side: Optional[pd.Series] = None
+        side: Optional[pd.Series] = None,
+        training_end_date: Optional[pd.Timestamp] = None
     ) -> pd.DataFrame:
         """
         Main entry point for Triple Barrier labeling.
@@ -477,6 +505,9 @@ class TripleBarrierLabeler:
         3. Forms events DataFrame
         4. Applies barrier logic
 
+        FIXED: Added training_end_date parameter to prevent label leakage.
+        Events whose vertical barrier extends past training_end_date are excluded.
+
         Args:
             close: Close price series
             t_events: Event timestamps (signal times)
@@ -485,6 +516,8 @@ class TripleBarrierLabeler:
             min_ret: Minimum return threshold
             vertical_barrier_times: Pre-computed vertical barriers (optional)
             side: Pre-determined side for each event (optional)
+            training_end_date: If provided, exclude events whose outcome
+                               extends past this date (prevents look-ahead bias)
 
         Returns:
             DataFrame with columns:
@@ -517,14 +550,24 @@ class TripleBarrierLabeler:
             logger.warning("No events meet minimum return threshold")
             return pd.DataFrame()
 
-        # 2. Get vertical barriers
+        # 2. Get vertical barriers (FIXED: now supports training_end_date)
         if vertical_barrier_times is None:
             vertical_barrier_times = self.get_vertical_barriers(
                 target.index,
-                pd.DataFrame({'close': close})
+                pd.DataFrame({'close': close}),
+                training_end_date=training_end_date  # FIXED: Pass through
             )
         else:
             vertical_barrier_times = vertical_barrier_times.reindex(target.index)
+            # Also filter pre-computed barriers if training_end_date provided
+            if training_end_date is not None:
+                mask = vertical_barrier_times > training_end_date
+                vertical_barrier_times[mask] = pd.NaT
+                if mask.sum() > 0:
+                    logger.info(
+                        f"Filtered {mask.sum()} pre-computed vertical barriers "
+                        f"that extend past training end date"
+                    )
 
         # 3. Form events object
         if side is None:
@@ -619,6 +662,8 @@ class MetaLabeler:
     The meta-label is:
     - 1: If the trade was profitable (primary model correct)
     - 0: If the trade was unprofitable (primary model wrong)
+
+    FIXED: Added auto-calibration for optimal threshold.
     """
 
     def __init__(
@@ -632,11 +677,84 @@ class MetaLabeler:
             config: Meta-labeling configuration
         """
         self.config = config or MetaLabelingConfig()
+        self._calibrated_threshold = None
 
         logger.info(
             f"MetaLabeler initialized: "
             f"threshold={self.config.primary_threshold}"
         )
+
+    def calibrate_threshold(
+        self,
+        primary_predictions: pd.Series,
+        actual_outcomes: pd.Series,
+        metric: str = 'f1',
+        n_thresholds: int = 20
+    ) -> float:
+        """
+        Auto-calibrate the optimal threshold for meta-labeling.
+
+        FIXES the issue where a fixed 0.5 threshold may not be optimal.
+        This method finds the threshold that maximizes the chosen metric.
+
+        Args:
+            primary_predictions: Probability predictions from primary model
+            actual_outcomes: Actual labels (1 for profitable, -1 for loss)
+            metric: Metric to optimize ('f1', 'precision', 'recall', 'accuracy')
+            n_thresholds: Number of thresholds to test
+
+        Returns:
+            Optimal threshold value
+        """
+        from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
+
+        # Align indices
+        common_idx = primary_predictions.index.intersection(actual_outcomes.index)
+        if len(common_idx) == 0:
+            logger.warning("No common indices for threshold calibration")
+            return self.config.primary_threshold
+
+        preds = primary_predictions.loc[common_idx].values
+        actuals = (actual_outcomes.loc[common_idx] > 0).astype(int).values
+
+        # Test different thresholds
+        thresholds = np.linspace(0.3, 0.7, n_thresholds)
+        best_threshold = 0.5
+        best_score = 0
+
+        metric_funcs = {
+            'f1': f1_score,
+            'precision': precision_score,
+            'recall': recall_score,
+            'accuracy': accuracy_score
+        }
+        metric_func = metric_funcs.get(metric, f1_score)
+
+        for threshold in thresholds:
+            binary_preds = (preds > threshold).astype(int)
+
+            try:
+                score = metric_func(actuals, binary_preds, zero_division=0)
+                if score > best_score:
+                    best_score = score
+                    best_threshold = threshold
+            except Exception:
+                continue
+
+        self._calibrated_threshold = best_threshold
+
+        logger.info(
+            f"Meta-labeling threshold calibrated: {best_threshold:.3f} "
+            f"(optimized for {metric}, score={best_score:.4f})"
+        )
+
+        return best_threshold
+
+    def get_threshold(self) -> float:
+        """Get current threshold (calibrated or default)."""
+        if self._calibrated_threshold is not None:
+            return self._calibrated_threshold
+        return self.config.primary_threshold
 
     def get_primary_side(
         self,
@@ -646,16 +764,20 @@ class MetaLabeler:
         """
         Convert primary model predictions to side (direction).
 
+        FIXED: Uses calibrated threshold if available.
+
         Args:
             primary_predictions: Predictions from primary model
                 - If probabilities: convert using threshold
                 - If binary: use directly
-            threshold: Classification threshold
+            threshold: Classification threshold (uses calibrated if None)
 
         Returns:
             Series of sides: +1 (long), -1 (short), 0 (no position)
         """
-        threshold = threshold or self.config.primary_threshold
+        # FIXED: Use calibrated threshold if available
+        if threshold is None:
+            threshold = self.get_threshold()
 
         if isinstance(primary_predictions, np.ndarray):
             primary_predictions = pd.Series(primary_predictions)
