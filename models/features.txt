@@ -19,9 +19,9 @@ micro_spread_regime
 micro_micro_score
 regime_hmm_state
 regime_hmm_confidence
-regime_prob_neutral
 regime_prob_bull
 regime_prob_bear
+regime_prob_neutral
 regime_regime_change
 regime_regime_duration
 regime_vol_percentile
