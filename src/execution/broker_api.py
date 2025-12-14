@@ -23,11 +23,534 @@ import json
 import hmac
 import hashlib
 import uuid
+import functools
+import random
 
 from ..utils.logger import get_logger, get_audit_logger
 
 logger = get_logger(__name__)
 audit_logger = get_audit_logger()
+
+
+# =============================================================================
+# RETRY DECORATOR WITH EXPONENTIAL BACKOFF
+# =============================================================================
+
+class RetryableError(Exception):
+    """Exception that indicates the operation should be retried"""
+    pass
+
+
+class NonRetryableError(Exception):
+    """Exception that indicates the operation should NOT be retried"""
+    pass
+
+
+def retry_with_backoff(
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    max_delay: float = 16.0,
+    exponential_base: float = 2.0,
+    retryable_status_codes: tuple = (502, 503, 504, 429),
+    retryable_exceptions: tuple = (
+        aiohttp.ClientError,
+        asyncio.TimeoutError,
+        ConnectionError,
+        OSError,
+    ),
+    jitter: bool = True
+):
+    """
+    Decorator for async functions to retry with exponential backoff.
+
+    Implements JPMorgan-level retry logic:
+    - Retries on HTTP 502, 503, 504, 429 (rate limit) errors
+    - Retries on connection errors and timeouts
+    - Uses exponential backoff: 1s, 2s, 4s, 8s... (capped at max_delay)
+    - Adds jitter to prevent thundering herd
+    - Logs each retry attempt
+    - Raises after max retries with clear error message
+
+    Args:
+        max_retries: Maximum number of retry attempts
+        base_delay: Initial delay in seconds
+        max_delay: Maximum delay cap in seconds
+        exponential_base: Multiplier for each retry
+        retryable_status_codes: HTTP status codes that trigger retry
+        retryable_exceptions: Exception types that trigger retry
+        jitter: Add random jitter to delay (prevents thundering herd)
+
+    Example:
+        @retry_with_backoff(max_retries=3, base_delay=1.0)
+        async def submit_order(self, order: OrderRequest) -> OrderResponse:
+            ...
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+
+            for attempt in range(max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+
+                except aiohttp.ClientResponseError as e:
+                    # Check if status code is retryable
+                    if e.status not in retryable_status_codes:
+                        logger.error(f"{func.__name__} failed with non-retryable status {e.status}: {e.message}")
+                        raise
+
+                    last_exception = e
+                    error_msg = f"HTTP {e.status}: {e.message}"
+
+                except retryable_exceptions as e:
+                    last_exception = e
+                    error_msg = f"{type(e).__name__}: {str(e)}"
+
+                except NonRetryableError:
+                    # Explicitly marked as non-retryable
+                    raise
+
+                except Exception as e:
+                    # Unexpected exception - don't retry
+                    logger.error(f"{func.__name__} failed with unexpected error: {e}")
+                    raise
+
+                # Check if we have retries left
+                if attempt >= max_retries:
+                    logger.error(
+                        f"{func.__name__} failed after {max_retries + 1} attempts. "
+                        f"Last error: {error_msg}"
+                    )
+                    raise last_exception
+
+                # Calculate delay with exponential backoff
+                delay = min(base_delay * (exponential_base ** attempt), max_delay)
+
+                # Add jitter (0-50% of delay)
+                if jitter:
+                    delay = delay * (1 + random.uniform(0, 0.5))
+
+                logger.warning(
+                    f"{func.__name__} attempt {attempt + 1}/{max_retries + 1} failed: {error_msg}. "
+                    f"Retrying in {delay:.2f}s..."
+                )
+
+                audit_logger.log_order(
+                    order_id="retry",
+                    symbol="",
+                    action="RETRY_ATTEMPT",
+                    details={
+                        'function': func.__name__,
+                        'attempt': attempt + 1,
+                        'max_retries': max_retries + 1,
+                        'error': error_msg,
+                        'delay': delay
+                    }
+                )
+
+                await asyncio.sleep(delay)
+
+            # Should never reach here, but just in case
+            raise last_exception
+
+        return wrapper
+    return decorator
+
+
+# =============================================================================
+# WEBSOCKET RECONNECTION MANAGER
+# =============================================================================
+
+@dataclass
+class WebSocketConfig:
+    """Configuration for WebSocket connection"""
+    url: str
+    initial_delay: float = 1.0
+    max_delay: float = 60.0
+    exponential_base: float = 2.0
+    max_reconnect_attempts: int = -1  # -1 = unlimited
+    ping_interval: float = 30.0
+    ping_timeout: float = 10.0
+    jitter: bool = True
+
+
+class WebSocketReconnectManager:
+    """
+    Manages WebSocket connections with automatic reconnection.
+
+    Features:
+    - Detects disconnection (ping timeout or connection error)
+    - Attempts reconnection with exponential backoff (1s, 2s, 4s... max 60s)
+    - Resubscribes to previous channels on reconnect
+    - Emits on_reconnected event for state sync
+    - Integrates with GracefulDegradationManager
+
+    Usage:
+        manager = WebSocketReconnectManager(
+            config=WebSocketConfig(url="wss://api.example.com/stream"),
+            auth_handler=lambda ws: ws.send(json.dumps({"auth": "key"})),
+            message_handler=self._handle_message
+        )
+        await manager.connect()
+    """
+
+    def __init__(
+        self,
+        config: WebSocketConfig,
+        auth_handler: Optional[Callable] = None,
+        message_handler: Optional[Callable] = None,
+        on_connect: Optional[Callable] = None,
+        on_disconnect: Optional[Callable] = None,
+        on_reconnect: Optional[Callable] = None,
+        degradation_manager: Optional[Any] = None  # GracefulDegradationManager
+    ):
+        self.config = config
+        self.auth_handler = auth_handler
+        self.message_handler = message_handler
+        self.on_connect = on_connect
+        self.on_disconnect = on_disconnect
+        self.on_reconnect = on_reconnect
+        self.degradation_manager = degradation_manager
+
+        # State
+        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._running = False
+        self._connected = False
+        self._reconnect_attempts = 0
+        self._subscriptions: List[Dict[str, Any]] = []
+        self._last_pong: Optional[datetime] = None
+
+        # Tasks
+        self._receive_task: Optional[asyncio.Task] = None
+        self._ping_task: Optional[asyncio.Task] = None
+        self._reconnect_lock = asyncio.Lock()
+
+        # Statistics
+        self._stats = {
+            'connects': 0,
+            'disconnects': 0,
+            'reconnects': 0,
+            'messages_received': 0,
+            'messages_sent': 0,
+            'ping_failures': 0,
+            'last_connected': None,
+            'last_disconnected': None,
+            'total_uptime_seconds': 0
+        }
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if WebSocket is connected"""
+        return self._connected and self._ws is not None
+
+    async def connect(self) -> bool:
+        """
+        Establish WebSocket connection with auto-reconnect enabled.
+
+        Returns:
+            True if initial connection successful
+        """
+        if self._running:
+            return self._connected
+
+        self._running = True
+
+        try:
+            await self._establish_connection()
+            return True
+        except Exception as e:
+            logger.error(f"Initial WebSocket connection failed: {e}")
+            # Start reconnection loop in background
+            asyncio.create_task(self._reconnect_loop())
+            return False
+
+    async def disconnect(self) -> None:
+        """Gracefully disconnect WebSocket"""
+        self._running = False
+
+        # Cancel tasks
+        if self._receive_task:
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._ping_task:
+            self._ping_task.cancel()
+            try:
+                await self._ping_task
+            except asyncio.CancelledError:
+                pass
+
+        # Close connection
+        if self._ws:
+            await self._ws.close()
+            self._ws = None
+
+        self._connected = False
+        self._stats['disconnects'] += 1
+        self._stats['last_disconnected'] = datetime.now().isoformat()
+
+        logger.info("WebSocket disconnected gracefully")
+
+    async def subscribe(self, subscription: Dict[str, Any]) -> bool:
+        """
+        Subscribe to a channel. Subscription will be replayed on reconnect.
+
+        Args:
+            subscription: Subscription message to send
+
+        Returns:
+            True if subscription sent successfully
+        """
+        # Store for replay on reconnect
+        if subscription not in self._subscriptions:
+            self._subscriptions.append(subscription)
+
+        if self._connected and self._ws:
+            try:
+                await self._ws.send(json.dumps(subscription))
+                self._stats['messages_sent'] += 1
+                return True
+            except Exception as e:
+                logger.error(f"Failed to subscribe: {e}")
+                return False
+        return False
+
+    async def unsubscribe(self, subscription: Dict[str, Any]) -> bool:
+        """Remove subscription"""
+        if subscription in self._subscriptions:
+            self._subscriptions.remove(subscription)
+        return True
+
+    async def send(self, message: Dict[str, Any]) -> bool:
+        """Send message through WebSocket"""
+        if not self._connected or not self._ws:
+            logger.warning("Cannot send: WebSocket not connected")
+            return False
+
+        try:
+            await self._ws.send(json.dumps(message))
+            self._stats['messages_sent'] += 1
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send message: {e}")
+            await self._handle_disconnect()
+            return False
+
+    async def _establish_connection(self) -> None:
+        """Establish WebSocket connection"""
+        logger.info(f"Connecting to WebSocket: {self.config.url}")
+
+        self._ws = await websockets.connect(
+            self.config.url,
+            ping_interval=None,  # We handle pings ourselves
+            ping_timeout=None,
+            close_timeout=5.0
+        )
+
+        self._connected = True
+        self._reconnect_attempts = 0
+        self._last_pong = datetime.now()
+        self._stats['connects'] += 1
+        self._stats['last_connected'] = datetime.now().isoformat()
+
+        logger.info("WebSocket connected")
+
+        # Authenticate if handler provided
+        if self.auth_handler:
+            await self.auth_handler(self._ws)
+
+        # Replay subscriptions
+        for sub in self._subscriptions:
+            try:
+                await self._ws.send(json.dumps(sub))
+                self._stats['messages_sent'] += 1
+            except Exception as e:
+                logger.error(f"Failed to replay subscription: {e}")
+
+        # Start receive and ping tasks
+        self._receive_task = asyncio.create_task(self._receive_loop())
+        self._ping_task = asyncio.create_task(self._ping_loop())
+
+        # Notify callbacks
+        if self.on_connect:
+            try:
+                await self.on_connect() if asyncio.iscoroutinefunction(self.on_connect) else self.on_connect()
+            except Exception as e:
+                logger.error(f"on_connect callback error: {e}")
+
+    async def _receive_loop(self) -> None:
+        """Receive messages from WebSocket"""
+        while self._running and self._connected:
+            try:
+                message = await asyncio.wait_for(
+                    self._ws.recv(),
+                    timeout=self.config.ping_timeout * 2
+                )
+
+                self._stats['messages_received'] += 1
+
+                # Handle pong
+                if message == 'pong' or (isinstance(message, str) and '"type":"pong"' in message):
+                    self._last_pong = datetime.now()
+                    continue
+
+                # Handle message
+                if self.message_handler:
+                    try:
+                        await self.message_handler(message) if asyncio.iscoroutinefunction(self.message_handler) \
+                            else self.message_handler(message)
+                    except Exception as e:
+                        logger.error(f"Message handler error: {e}")
+
+            except asyncio.TimeoutError:
+                # No message received - check if connection is still alive
+                if self._last_pong:
+                    elapsed = (datetime.now() - self._last_pong).total_seconds()
+                    if elapsed > self.config.ping_timeout * 2:
+                        logger.warning(f"No pong received for {elapsed:.1f}s - reconnecting")
+                        await self._handle_disconnect()
+                        break
+
+            except websockets.ConnectionClosed as e:
+                logger.warning(f"WebSocket connection closed: {e}")
+                await self._handle_disconnect()
+                break
+
+            except Exception as e:
+                logger.error(f"WebSocket receive error: {e}")
+                await self._handle_disconnect()
+                break
+
+    async def _ping_loop(self) -> None:
+        """Send periodic pings to keep connection alive"""
+        while self._running and self._connected:
+            try:
+                await asyncio.sleep(self.config.ping_interval)
+
+                if self._ws and self._connected:
+                    try:
+                        await self._ws.ping()
+                    except Exception as e:
+                        logger.warning(f"Ping failed: {e}")
+                        self._stats['ping_failures'] += 1
+                        await self._handle_disconnect()
+                        break
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Ping loop error: {e}")
+
+    async def _handle_disconnect(self) -> None:
+        """Handle disconnection and trigger reconnect"""
+        async with self._reconnect_lock:
+            if not self._connected:
+                return
+
+            self._connected = False
+            self._stats['disconnects'] += 1
+            self._stats['last_disconnected'] = datetime.now().isoformat()
+
+            # Close WebSocket
+            if self._ws:
+                try:
+                    await self._ws.close()
+                except Exception:
+                    pass
+                self._ws = None
+
+            # Notify callbacks
+            if self.on_disconnect:
+                try:
+                    await self.on_disconnect() if asyncio.iscoroutinefunction(self.on_disconnect) \
+                        else self.on_disconnect()
+                except Exception as e:
+                    logger.error(f"on_disconnect callback error: {e}")
+
+            # Start reconnection if still running
+            if self._running:
+                asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self) -> None:
+        """Attempt reconnection with exponential backoff"""
+        while self._running and not self._connected:
+            self._reconnect_attempts += 1
+
+            # Check max attempts
+            if self.config.max_reconnect_attempts > 0:
+                if self._reconnect_attempts > self.config.max_reconnect_attempts:
+                    logger.error(f"Max reconnect attempts ({self.config.max_reconnect_attempts}) reached")
+                    self._running = False
+                    return
+
+            # Calculate delay with exponential backoff
+            delay = min(
+                self.config.initial_delay * (self.config.exponential_base ** (self._reconnect_attempts - 1)),
+                self.config.max_delay
+            )
+
+            # Add jitter
+            if self.config.jitter:
+                delay = delay * (1 + random.uniform(0, 0.5))
+
+            logger.info(
+                f"WebSocket reconnect attempt {self._reconnect_attempts} in {delay:.2f}s..."
+            )
+
+            await asyncio.sleep(delay)
+
+            try:
+                await self._establish_connection()
+
+                self._stats['reconnects'] += 1
+                logger.info(f"WebSocket reconnected after {self._reconnect_attempts} attempts")
+
+                # Notify reconnect callback
+                if self.on_reconnect:
+                    try:
+                        await self.on_reconnect() if asyncio.iscoroutinefunction(self.on_reconnect) \
+                            else self.on_reconnect()
+                    except Exception as e:
+                        logger.error(f"on_reconnect callback error: {e}")
+
+                # Notify degradation manager
+                if self.degradation_manager:
+                    try:
+                        self.degradation_manager.force_recovery(ComponentType.WEBSOCKET)
+                    except Exception as e:
+                        logger.debug(f"Could not notify degradation manager: {e}")
+
+                return
+
+            except Exception as e:
+                logger.warning(f"Reconnect attempt {self._reconnect_attempts} failed: {e}")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get connection statistics"""
+        return {
+            **self._stats,
+            'connected': self._connected,
+            'reconnect_attempts': self._reconnect_attempts,
+            'subscriptions': len(self._subscriptions),
+            'uptime_current': (
+                (datetime.now() - datetime.fromisoformat(self._stats['last_connected'])).total_seconds()
+                if self._connected and self._stats['last_connected']
+                else 0
+            )
+        }
+
+
+# Import for type hints
+try:
+    from ..core.graceful_degradation import ComponentType
+except ImportError:
+    # Fallback if not available
+    class ComponentType(Enum):
+        WEBSOCKET = "websocket"
 
 
 class ConnectionStatus(Enum):
@@ -445,6 +968,7 @@ class AlpacaBroker(BrokerAPI):
         except Exception as e:
             logger.error(f"Error handling WS message: {e}")
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def get_account(self) -> AccountInfo:
         """Get account information"""
         async with self._session.get(f"{self.base_url}/v2/account") as resp:
@@ -465,10 +989,18 @@ class AlpacaBroker(BrokerAPI):
                     currency=data.get('currency', 'USD'),
                     status=data.get('status', 'active')
                 )
+            elif resp.status in (502, 503, 504, 429):
+                # Raise retryable error
+                error = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
             else:
                 error = await resp.text()
                 raise Exception(f"Failed to get account: {error}")
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def get_positions(self) -> List[Position]:
         """Get all positions"""
         async with self._session.get(f"{self.base_url}/v2/positions") as resp:
@@ -477,10 +1009,17 @@ class AlpacaBroker(BrokerAPI):
                 positions = [self._parse_position(p) for p in data]
                 self._positions = {p.symbol: p for p in positions}
                 return positions
+            elif resp.status in (502, 503, 504, 429):
+                error = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
             else:
                 error = await resp.text()
                 raise Exception(f"Failed to get positions: {error}")
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def get_position(self, symbol: str) -> Optional[Position]:
         """Get position for symbol"""
         async with self._session.get(f"{self.base_url}/v2/positions/{symbol}") as resp:
@@ -491,10 +1030,17 @@ class AlpacaBroker(BrokerAPI):
                 return position
             elif resp.status == 404:
                 return None
+            elif resp.status in (502, 503, 504, 429):
+                error = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
             else:
                 error = await resp.text()
                 raise Exception(f"Failed to get position: {error}")
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def submit_order(self, order: OrderRequest) -> OrderResponse:
         """Submit order to Alpaca"""
         payload = {
@@ -530,42 +1076,70 @@ class AlpacaBroker(BrokerAPI):
                 )
 
                 return response
+            elif resp.status in (502, 503, 504, 429):
+                error = await resp.text()
+                logger.warning(f"Order submission got retryable error {resp.status}: {error}")
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
             else:
                 error = await resp.text()
                 logger.error(f"Order submission failed: {error}")
                 raise Exception(f"Order failed: {error}")
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def cancel_order(self, order_id: str) -> bool:
         """Cancel order"""
         async with self._session.delete(f"{self.base_url}/v2/orders/{order_id}") as resp:
-            success = resp.status in [200, 204]
-
-            if success:
+            if resp.status in [200, 204]:
                 audit_logger.log_order(
                     order_id=order_id,
                     symbol="",
                     action="CANCELLED",
                     details={'order_id': order_id}
                 )
+                return True
+            elif resp.status in (502, 503, 504, 429):
+                error = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
+            else:
+                return False
 
-            return success
-
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def cancel_all_orders(self) -> int:
         """Cancel all orders"""
         async with self._session.delete(f"{self.base_url}/v2/orders") as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return len(data)
+            elif resp.status in (502, 503, 504, 429):
+                error = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
             return 0
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def get_order(self, order_id: str) -> Optional[OrderResponse]:
         """Get order by ID"""
         async with self._session.get(f"{self.base_url}/v2/orders/{order_id}") as resp:
             if resp.status == 200:
                 data = await resp.json()
                 return self._parse_order(data)
+            elif resp.status in (502, 503, 504, 429):
+                error = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
             return None
 
+    @retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=8.0)
     async def get_orders(
         self,
         status: Optional[str] = None,
@@ -583,6 +1157,12 @@ class AlpacaBroker(BrokerAPI):
             if resp.status == 200:
                 data = await resp.json()
                 return [self._parse_order(o) for o in data]
+            elif resp.status in (502, 503, 504, 429):
+                error = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history,
+                    status=resp.status, message=error
+                )
             return []
 
     async def close_position(self, symbol: str) -> Optional[OrderResponse]:

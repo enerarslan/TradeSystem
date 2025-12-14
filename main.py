@@ -56,7 +56,7 @@ from src.strategy.mean_reversion import MeanReversionStrategy
 from src.risk.risk_manager import RiskManager, RiskLimits
 from src.risk.position_sizer import VolatilityPositionSizer, RiskParityPositionSizer
 from src.risk.portfolio import PortfolioManager
-from src.risk.bayesian_kelly import BayesianKellySizer
+from src.risk.bayesian_kelly import BayesianKellySizer, TradeOutcome
 from src.risk.correlation_breaker import CorrelationCircuitBreaker, CorrelationState
 
 from src.backtest.engine import BacktestEngine, BacktestConfig
@@ -149,6 +149,10 @@ class AlphaTradeSystem:
         self._market_data: Dict[str, pd.DataFrame] = {}
         self._last_reconciliation: Optional[datetime] = None
         self._model_trained_date: Optional[datetime] = None
+
+        # Track open positions for Bayesian Kelly outcome recording
+        # Key: symbol, Value: {entry_price, side, strategy, quantity, timestamp}
+        self._open_positions_for_kelly: Dict[str, Dict[str, Any]] = {}
 
         # Setup logging - FIXED: Use correct parameter names
         setup_logging(
@@ -952,6 +956,9 @@ class AlphaTradeSystem:
                     except Exception as e:
                         logger.warning(f"Reconciliation failed: {e}")
 
+            # Check for closed positions and record outcomes for Bayesian Kelly
+            await self._check_and_record_closed_positions()
+
             # Save state
             if self.state_manager:
                 try:
@@ -989,12 +996,15 @@ class AlphaTradeSystem:
 
                 # Calculate position size using Bayesian Kelly
                 if self.bayesian_kelly:
+                    # Get strategy name from signal
+                    strategy_name = getattr(signal, 'strategy_name', 'default')
+
                     kelly_result = self.bayesian_kelly.calculate_kelly(
                         symbol=symbol,
-                        predicted_probability=confidence,
-                        predicted_return=abs(signal.strength) * 0.02  # Estimated return
+                        strategy=strategy_name,
+                        signal_strength=confidence
                     )
-                    position_pct = kelly_result.position_size_pct
+                    position_pct = kelly_result.fractional_kelly  # Use fractional_kelly for position %
 
                     # Apply correlation breaker reduction if needed
                     if self.correlation_breaker:
@@ -1097,6 +1107,15 @@ class AlphaTradeSystem:
                                     'timestamp': datetime.now().isoformat()
                                 })
 
+                            # Track position for Bayesian Kelly outcome recording
+                            self._open_positions_for_kelly[symbol] = {
+                                'entry_price': current_price,
+                                'side': side,
+                                'strategy': strategy_name,
+                                'quantity': shares,
+                                'timestamp': datetime.now()
+                            }
+
                     except Exception as e:
                         logger.error(f"Protected position failed for {symbol}: {e}")
                         # Fall through to regular order manager
@@ -1120,8 +1139,111 @@ class AlphaTradeSystem:
                             f"@ ${current_price:.2f}"
                         )
 
+                        # Track position for Bayesian Kelly outcome recording
+                        strategy_name = getattr(signal, 'strategy_name', 'default')
+                        self._open_positions_for_kelly[symbol] = {
+                            'entry_price': current_price,
+                            'side': side,
+                            'strategy': strategy_name,
+                            'quantity': shares,
+                            'timestamp': datetime.now()
+                        }
+
             except Exception as e:
                 logger.error(f"Execution error for {symbol}: {e}")
+
+    def _record_trade_outcome(
+        self,
+        symbol: str,
+        exit_price: float
+    ) -> None:
+        """
+        Record trade outcome for Bayesian Kelly learning.
+
+        Called when a position is closed to update the Bayesian posterior
+        with the actual trade result.
+
+        Args:
+            symbol: Symbol that was closed
+            exit_price: Price at which the position was closed
+        """
+        if symbol not in self._open_positions_for_kelly:
+            logger.debug(f"No tracked position for {symbol} to record")
+            return
+
+        if not self.bayesian_kelly:
+            return
+
+        position_info = self._open_positions_for_kelly[symbol]
+        entry_price = position_info['entry_price']
+        side = position_info['side']
+        strategy = position_info['strategy']
+
+        # Calculate profit percentage
+        if side == 'buy':
+            profit_pct = (exit_price - entry_price) / entry_price
+        else:
+            profit_pct = (entry_price - exit_price) / entry_price
+
+        # Determine if win or loss
+        win = profit_pct > 0
+
+        # Create trade outcome
+        outcome = TradeOutcome(
+            symbol=symbol,
+            strategy=strategy,
+            win=win,
+            profit_pct=profit_pct,
+            timestamp=datetime.now()
+        )
+
+        # Record with Bayesian Kelly sizer
+        self.bayesian_kelly.record_outcome(outcome)
+
+        logger.info(
+            f"Recorded trade outcome for {symbol}: "
+            f"{'WIN' if win else 'LOSS'} {profit_pct*100:.2f}% "
+            f"(strategy: {strategy})"
+        )
+
+        # Clean up tracked position
+        del self._open_positions_for_kelly[symbol]
+
+    async def _check_and_record_closed_positions(self) -> None:
+        """
+        Check for closed positions and record outcomes for Bayesian Kelly.
+
+        This should be called periodically in the trading cycle to detect
+        positions that have been closed (via stop loss, take profit, or manual).
+        """
+        if not self.broker or not self._open_positions_for_kelly:
+            return
+
+        try:
+            # Get current positions from broker
+            current_positions = await self.broker.get_positions()
+            current_symbols = {p.symbol for p in current_positions}
+
+            # Find positions we were tracking that are now closed
+            tracked_symbols = set(self._open_positions_for_kelly.keys())
+            closed_symbols = tracked_symbols - current_symbols
+
+            # Get current prices for closed positions
+            for symbol in closed_symbols:
+                try:
+                    # Try to get the last price from market data
+                    if symbol in self._market_data and len(self._market_data[symbol]) > 0:
+                        exit_price = self._market_data[symbol]['close'].iloc[-1]
+                        self._record_trade_outcome(symbol, exit_price)
+                    else:
+                        logger.warning(f"No exit price available for closed position {symbol}")
+                        # Still clean up the tracked position
+                        del self._open_positions_for_kelly[symbol]
+                except Exception as e:
+                    logger.error(f"Error recording outcome for {symbol}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error checking closed positions: {e}")
 
     async def shutdown(self) -> None:
         """Graceful shutdown with all component cleanup."""
