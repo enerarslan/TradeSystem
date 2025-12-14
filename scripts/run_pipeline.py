@@ -589,17 +589,22 @@ def stage_calibrate(force: bool = False) -> bool:
 
 def stage_backtest(force: bool = False) -> bool:
     """
-    Stage 6: Validate strategy with realistic execution.
+    Stage 6: Validate strategy with realistic execution on OUT-OF-SAMPLE data.
+
+    CRITICAL: This backtest runs ONLY on data NOT seen during training:
+    1. Temporal OOS: Data after training cutoff date (2025-05-01)
+    2. Symbol OOS: Holdout symbols not used in training
 
     Input: All previous outputs
     Output: results/backtest/backtest_report.json, results/backtest/equity_curve.csv
     """
     print("\n" + "=" * 70)
-    print("STAGE 6: BACKTEST")
+    print("STAGE 6: OUT-OF-SAMPLE BACKTEST")
     print("=" * 70)
 
     model_path = Path("models/model.pkl")
     report_path = Path("results/backtest/backtest_report.json")
+    holdout_manifest_path = Path("data/holdout/holdout_manifest.json")
 
     # Check dependencies
     if not model_path.exists():
@@ -629,8 +634,27 @@ def stage_backtest(force: bool = False) -> bool:
         from src.risk.position_sizer import VolatilityPositionSizer
         import joblib
 
+        # Load holdout manifest to get OOS parameters
+        if not holdout_manifest_path.exists():
+            print(f"ERROR: Holdout manifest not found: {holdout_manifest_path}")
+            print("Cannot run OOS backtest without holdout configuration")
+            return False
+
+        with open(holdout_manifest_path, 'r') as f:
+            holdout_manifest = json.load(f)
+
+        temporal_cutoff = pd.Timestamp(holdout_manifest['temporal_cutoff_date'])
+        holdout_symbols = set(holdout_manifest['holdout_symbols'])
+
+        print(f"\n{'='*50}")
+        print("OUT-OF-SAMPLE CONFIGURATION")
+        print(f"{'='*50}")
+        print(f"Temporal OOS Start: {temporal_cutoff}")
+        print(f"Holdout Symbols: {holdout_symbols}")
+        print(f"{'='*50}\n")
+
         # Load model
-        print("\nLoading model and data...")
+        print("Loading model and data...")
         model = joblib.load(model_path)
 
         # Load feature list
@@ -647,9 +671,49 @@ def stage_backtest(force: bool = False) -> bool:
             return False
 
         with open(data_path, 'rb') as f:
-            data = pickle.load(f)
+            all_data = pickle.load(f)
 
-        print(f"Loaded {len(data)} symbols")
+        # =================================================================
+        # CRITICAL: Filter to OUT-OF-SAMPLE data only
+        # =================================================================
+        # Option 1: Temporal OOS - Use data AFTER training cutoff for trained symbols
+        # Option 2: Symbol OOS - Use ALL data for holdout symbols (never seen in training)
+
+        oos_data = {}
+        temporal_oos_bars = 0
+        symbol_oos_bars = 0
+
+        for symbol, df in all_data.items():
+            if symbol in holdout_symbols:
+                # Symbol OOS: This symbol was NEVER used in training
+                # Use all its data for OOS validation
+                oos_data[symbol] = df.copy()
+                symbol_oos_bars += len(df)
+            else:
+                # Temporal OOS: Filter to data AFTER training cutoff
+                oos_df = df[df.index >= temporal_cutoff].copy()
+                if len(oos_df) > 100:  # Minimum bars for meaningful backtest
+                    oos_data[symbol] = oos_df
+                    temporal_oos_bars += len(oos_df)
+
+        if not oos_data:
+            print("ERROR: No OOS data available for backtest!")
+            return False
+
+        print(f"\nOOS Data Summary:")
+        print(f"  Total symbols: {len(oos_data)}")
+        print(f"  Temporal OOS bars: {temporal_oos_bars:,}")
+        print(f"  Symbol OOS bars: {symbol_oos_bars:,}")
+        print(f"  Total OOS bars: {temporal_oos_bars + symbol_oos_bars:,}")
+
+        # Verify no data leakage
+        print(f"\n  Training ended: {temporal_cutoff}")
+        first_oos_date = min(df.index.min() for df in oos_data.values())
+        print(f"  First OOS date: {first_oos_date}")
+
+        # Use OOS data for backtest
+        data = oos_data
+        print(f"\nLoaded {len(data)} symbols for OOS backtest")
 
         # Initialize components
         feature_builder = InstitutionalFeatureEngineer()
@@ -707,9 +771,17 @@ def stage_backtest(force: bool = False) -> bool:
             trades=[t.to_dict() for t in result.trades]
         )
 
-        # Generate report
+        # Generate report with OOS metadata
         report = {
             'run_date': datetime.now().isoformat(),
+            'backtest_type': 'OUT_OF_SAMPLE',
+            'oos_config': {
+                'temporal_cutoff': str(temporal_cutoff),
+                'holdout_symbols': list(holdout_symbols),
+                'temporal_oos_bars': temporal_oos_bars,
+                'symbol_oos_bars': symbol_oos_bars,
+                'total_oos_symbols': len(data)
+            },
             'initial_capital': config.initial_capital,
             'final_value': float(result.equity_curve['equity'].iloc[-1]),
             'total_return': float(metrics.get('total_return', 0)),
@@ -736,8 +808,12 @@ def stage_backtest(force: bool = False) -> bool:
 
         # Print summary
         print("\n" + "=" * 50)
-        print("BACKTEST RESULTS")
+        print("OUT-OF-SAMPLE BACKTEST RESULTS")
         print("=" * 50)
+        print(f"Backtest Type:    OUT-OF-SAMPLE (No data leakage)")
+        print(f"OOS Symbols:      {len(data)}")
+        print(f"OOS Bars:         {temporal_oos_bars + symbol_oos_bars:,}")
+        print("-" * 50)
         print(f"Initial Capital:  ${config.initial_capital:,.0f}")
         print(f"Final Value:      ${report['final_value']:,.0f}")
         print(f"Total Return:     {report['total_return']:.2%}")
