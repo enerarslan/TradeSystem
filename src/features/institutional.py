@@ -150,8 +150,13 @@ class OptimalFracDiff:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
+            # Convert numpy values to native Python floats for YAML serialization
+            optimal_d_native = {
+                k: float(v) if hasattr(v, 'item') else float(v)
+                for k, v in self._optimal_d_cache.items()
+            }
             cache_data = {
-                'optimal_d': self._optimal_d_cache,
+                'optimal_d': optimal_d_native,
                 'last_updated': pd.Timestamp.now().isoformat()
             }
             with open(cache_path, 'w') as f:
@@ -634,7 +639,7 @@ class InstitutionalMicrostructure:
         )
 
         # Spread regime - POINT-IN-TIME SAFE
-        spread_pct = expanding_pct_rank(features['effective_spread'])
+        spread_pct = expanding_pct_rank_vectorized(features['effective_spread'])
         features['spread_regime'] = (spread_pct > 0.8).astype(int)  # Wide spread regime
 
         # Combined microstructure score
