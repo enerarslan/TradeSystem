@@ -183,6 +183,9 @@ circuit_breakers:
     consecutive_losses_halt: 5  # Halt after 5 consecutive losses
     win_rate_threshold: 0.30  # Halt if win rate < 30%
     win_rate_period: 20  # Over last 20 trades
+    # CRITICAL FIX: Added tighter intraday circuit breaker
+    intraday_loss_circuit_breaker: 0.03  # 3% intraday loss triggers circuit breaker
+    intraday_loss_warning: 0.010  # 1% intraday loss triggers warning & reduced sizing
 
   # Volatility triggers
   volatility_triggers:

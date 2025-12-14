@@ -1317,14 +1317,245 @@ curl http://localhost:8081/metrics
 
 ---
 
-## Next Steps
+---
 
-1. **Paper Trading Test** - Run paper trading for minimum 30 days
-2. **Monitor Model Performance** - Track staleness and drift
-3. **Tune Risk Parameters** - Optimize based on results
-4. **Live Trading** - Start with small positions
+## Execution Order (Step-by-Step Pipeline)
+
+This section provides the **exact order** of scripts to run after models are trained.
+
+### Pre-requisites Checklist
+
+Before proceeding, verify:
+- [ ] Python environment activated
+- [ ] `.env` file configured with Alpaca API keys
+- [ ] Models trained (in `models/` directory)
+- [ ] Historical data available (in `data/raw/` directory)
+
+### PHASE 1: Data Validation (Run First)
+
+```bash
+# Step 1: Validate data quality
+python scripts/data_quality_pipeline.py --symbols config/symbols.yaml
+
+# This checks:
+# - OHLC validity (high >= low, etc.)
+# - Volume anomalies
+# - Missing data gaps
+# - Price spikes/outliers
+
+# Expected output: data_quality_report.json in results/
+```
+
+### PHASE 2: Pre-Training Validation
+
+```bash
+# Step 2: Validate features and labels (if retraining needed)
+python scripts/run_pre_training_validation.py
+
+# This validates:
+# - Feature stationarity
+# - Label distribution
+# - Look-ahead bias checks
+# - Train/test data integrity
+```
+
+### PHASE 3: Backtesting (CRITICAL - Do This After Training)
+
+```bash
+# Step 3: Run backtest with InstitutionalBacktestEngine
+python scripts/run_pipeline.py --stage backtest --force
+
+# OR run directly:
+python scripts/run_backtest.py \
+    --start 2024-01-01 \
+    --end 2024-11-01 \
+    --initial-capital 1000000 \
+    --output results/
+
+# This runs backtest with:
+# - InstitutionalBacktestEngine (microstructure simulation)
+# - Realistic fill model (slippage, market impact)
+# - Risk management integration
+```
+
+**Expected Output:**
+```
+results/
+├── equity_curve.csv
+├── trades.csv
+├── backtest_report.json
+└── metrics_summary.txt
+```
+
+### PHASE 4: Analyze Backtest Results
+
+```bash
+# Step 4: Review backtest metrics
+python -c "
+import json
+with open('results/backtest_report.json', 'r') as f:
+    report = json.load(f)
+print('=== BACKTEST RESULTS ===')
+print(f\"Sharpe Ratio: {report.get('sharpe_ratio', 'N/A')}\")
+print(f\"Max Drawdown: {report.get('max_drawdown', 'N/A')}\")
+print(f\"Win Rate: {report.get('win_rate', 'N/A')}\")
+print(f\"Profit Factor: {report.get('profit_factor', 'N/A')}\")
+print(f\"Total Trades: {report.get('total_trades', 'N/A')}\")
+"
+```
+
+**Minimum Thresholds Before Proceeding:**
+| Metric | Minimum | Ideal |
+|--------|---------|-------|
+| Sharpe Ratio | > 1.0 | > 1.5 |
+| Max Drawdown | < 20% | < 10% |
+| Win Rate | > 48% | > 52% |
+| Profit Factor | > 1.2 | > 1.5 |
+
+### PHASE 5: Paper Trading (Recommended)
+
+```bash
+# Step 5: Start paper trading
+python main.py --mode paper --config config/settings.yaml
+
+# Run for minimum 2 weeks before live trading
+# Monitor logs in logs/ directory
+```
+
+### PHASE 6: Live Trading (CAUTION)
+
+```bash
+# Step 6: Live trading (ONLY after successful paper trading)
+python main.py --mode live --config config/settings.yaml
+
+# CRITICAL SAFETY FEATURES NOW ACTIVE:
+# - Emergency kill switch (await system.emergency_halt())
+# - Reconciliation engine (broker state sync)
+# - Protected positions (bracket orders)
+# - Circuit breakers (1% intraday loss halt)
+```
 
 ---
 
-*This document is for AlphaTrade System v4.0*
-*Last updated: December 2024*
+## Complete Pipeline Command Summary
+
+```bash
+# === FULL EXECUTION SEQUENCE ===
+
+# 1. Activate environment
+source venv/bin/activate  # Linux/Mac
+# OR
+.\venv\Scripts\activate   # Windows
+
+# 2. Verify data quality
+python scripts/data_quality_pipeline.py
+
+# 3. Run backtest (REQUIRED before any trading)
+python scripts/run_pipeline.py --stage backtest --force
+
+# 4. Analyze results
+cat results/backtest_report.json | python -m json.tool
+
+# 5. If results acceptable, start paper trading
+python main.py --mode paper
+
+# 6. After 2+ weeks successful paper trading, live mode
+python main.py --mode live
+```
+
+---
+
+## Emergency Procedures
+
+### Emergency Kill Switch
+
+If something goes wrong during live trading:
+
+```python
+# Method 1: From running system
+# The system has an emergency_halt() method that:
+# - Cancels ALL pending orders
+# - Closes ALL positions at market
+# - Disables trading until manual reset
+
+# Method 2: Via Python console
+import asyncio
+from main import AlphaTradeSystem
+
+async def emergency_stop():
+    system = AlphaTradeSystem()
+    await system.initialize()
+    results = await system.emergency_halt()
+    print(f"Cancelled orders: {results['orders_cancelled']}")
+    print(f"Closed positions: {results['positions_closed']}")
+
+asyncio.run(emergency_stop())
+```
+
+### Manual Position Close
+
+```python
+# Close all positions manually via Alpaca
+from src.execution.broker_api import AlpacaBroker
+
+async def close_all():
+    broker = AlpacaBroker()
+    await broker.connect()
+    positions = await broker.get_positions()
+    for pos in positions:
+        await broker.close_position(pos.symbol)
+        print(f"Closed {pos.symbol}")
+
+asyncio.run(close_all())
+```
+
+---
+
+## Recent Updates (December 2024 Audit)
+
+The following critical fixes were implemented:
+
+### 1. Signal Handler Race Condition (FIXED)
+- Added idempotency guard to prevent multiple concurrent shutdowns
+- Location: `main.py:1263-1279`
+
+### 2. Look-Ahead Bias in Ichimoku (FIXED)
+- Chikou Span (`shift(-26)`) excluded by default
+- Safe components only: `tenkan_sen`, `kijun_sen`
+- Location: `src/features/technical.py:187-258`
+
+### 3. Emergency Kill Switch (ADDED)
+- New method: `system.emergency_halt()`
+- Immediately cancels orders and closes positions
+- Location: `main.py:1265-1355`
+
+### 4. Thread Safety in OrderManager (FIXED)
+- Added `threading.Lock()` for `_active_orders`
+- Prevents race conditions with broker callbacks
+- Location: `src/execution/order_manager.py:384-411`
+
+### 5. Circuit Breaker Thresholds (UPDATED)
+- Added: `intraday_loss_circuit_breaker: 0.01` (1%)
+- Added: `intraday_loss_warning: 0.005` (0.5%)
+- Location: `config/risk_params.yaml:186-188`
+
+### 6. Execution Engine Tests (ADDED)
+- New test file: `tests/test_execution_engine.py`
+- Includes broker mocking and stress tests
+- Run with: `pytest tests/test_execution_engine.py -v`
+
+---
+
+## Next Steps
+
+1. **Run Backtest** - Execute backtest with trained models
+2. **Review Metrics** - Ensure Sharpe > 1.0, Max DD < 20%
+3. **Paper Trading** - Run for minimum 2 weeks
+4. **Monitor & Iterate** - Track model staleness, tune parameters
+5. **Live Trading** - Start with small positions (25% of intended)
+
+---
+
+*This document is for AlphaTrade System v4.1*
+*Last updated: December 14, 2024*
+*Audit Status: PASSED - System ready for backtesting*

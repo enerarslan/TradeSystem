@@ -191,36 +191,71 @@ class TechnicalIndicators:
         close: pd.Series,
         tenkan: int = 9,
         kijun: int = 26,
-        senkou_b: int = 52
+        senkou_b: int = 52,
+        include_unsafe: bool = False
     ) -> Dict[str, pd.Series]:
         """
         Ichimoku Cloud indicator
 
+        WARNING - LOOK-AHEAD BIAS RISK:
+        ===============================
+        The following components contain FORWARD-LOOKING data and must NOT
+        be used for ML training or backtesting without extreme caution:
+
+        - chikou_span: Uses shift(-kijun), which looks 26 bars INTO THE FUTURE
+        - senkou_span_a: Shifted forward by kijun periods (for visualization only)
+        - senkou_span_b: Shifted forward by kijun periods (for visualization only)
+
+        SAFE components for ML/backtesting:
+        - tenkan_sen: Point-in-time safe (uses rolling window on past data)
+        - kijun_sen: Point-in-time safe (uses rolling window on past data)
+
+        Args:
+            high: High price series
+            low: Low price series
+            close: Close price series
+            tenkan: Tenkan-sen period (default 9)
+            kijun: Kijun-sen period (default 26)
+            senkou_b: Senkou Span B period (default 52)
+            include_unsafe: If False (default), excludes look-ahead components.
+                            Set to True ONLY for charting/visualization purposes.
+
         Returns:
-            Dictionary with all Ichimoku components
+            Dictionary with Ichimoku components (safe ones only by default)
         """
-        # Tenkan-sen (Conversion Line)
+        # Tenkan-sen (Conversion Line) - SAFE: uses only past data
         tenkan_sen = (high.rolling(tenkan).max() + low.rolling(tenkan).min()) / 2
 
-        # Kijun-sen (Base Line)
+        # Kijun-sen (Base Line) - SAFE: uses only past data
         kijun_sen = (high.rolling(kijun).max() + low.rolling(kijun).min()) / 2
 
-        # Senkou Span A (Leading Span A)
-        senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(kijun)
-
-        # Senkou Span B (Leading Span B)
-        senkou_span_b = ((high.rolling(senkou_b).max() + low.rolling(senkou_b).min()) / 2).shift(kijun)
-
-        # Chikou Span (Lagging Span)
-        chikou_span = close.shift(-kijun)
-
-        return {
+        result = {
             'tenkan_sen': tenkan_sen,
             'kijun_sen': kijun_sen,
-            'senkou_span_a': senkou_span_a,
-            'senkou_span_b': senkou_span_b,
-            'chikou_span': chikou_span
         }
+
+        # Only include forward-looking components if explicitly requested
+        # These should NEVER be used for ML features or backtesting signals
+        if include_unsafe:
+            import warnings
+            warnings.warn(
+                "Including forward-looking Ichimoku components (senkou_span_a, "
+                "senkou_span_b, chikou_span). These MUST NOT be used for ML "
+                "training or backtesting - only for visualization!",
+                UserWarning
+            )
+            # Senkou Span A (Leading Span A) - UNSAFE: shifted forward
+            senkou_span_a = ((tenkan_sen + kijun_sen) / 2).shift(kijun)
+            # Senkou Span B (Leading Span B) - UNSAFE: shifted forward
+            senkou_span_b = ((high.rolling(senkou_b).max() + low.rolling(senkou_b).min()) / 2).shift(kijun)
+            # Chikou Span (Lagging Span) - CRITICAL LOOK-AHEAD: shift(-kijun) looks into future!
+            chikou_span = close.shift(-kijun)
+
+            result['senkou_span_a'] = senkou_span_a
+            result['senkou_span_b'] = senkou_span_b
+            result['chikou_span'] = chikou_span
+
+        return result
 
     @staticmethod
     def supertrend(

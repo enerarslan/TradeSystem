@@ -381,9 +381,13 @@ class OrderManager:
         self.max_pending_orders = max_pending_orders
         self._protected_manager = protected_manager
 
-        # Order tracking
+        # Order tracking with thread-safe lock
+        # CRITICAL FIX: Added threading.Lock to prevent race conditions
+        # when broker callbacks (potentially from different thread) modify
+        # order dictionaries while main thread is iterating
         self._orders: Dict[str, Order] = {}
         self._active_orders: Dict[str, Order] = {}
+        self._orders_lock = threading.Lock()  # Thread safety for order dicts
         self._order_queue = OrderQueue()
 
         # Order routing
@@ -688,10 +692,19 @@ class OrderManager:
             return False
 
     async def cancel_all(self) -> int:
-        """Cancel all active orders"""
+        """Cancel all active orders.
+
+        CRITICAL FIX: Uses thread-safe snapshot to prevent dictionary
+        mutation during iteration when broker callbacks fire.
+        """
         count = 0
 
-        for order_id in list(self._active_orders.keys()):
+        # Take thread-safe snapshot of order IDs to cancel
+        with self._orders_lock:
+            order_ids_to_cancel = list(self._active_orders.keys())
+
+        # Cancel orders outside the lock to avoid deadlock
+        for order_id in order_ids_to_cancel:
             if await self.cancel_order(order_id):
                 count += 1
 
@@ -743,18 +756,24 @@ class OrderManager:
                 await asyncio.sleep(1)
 
     def _on_broker_update(self, data: Dict) -> None:
-        """Handle broker order update"""
+        """Handle broker order update.
+
+        CRITICAL FIX: Uses thread-safe lock when accessing order dictionaries
+        since this callback may fire from broker's thread while main thread
+        is iterating.
+        """
         event = data.get('event', '')
         order_data = data.get('order', {})
 
         broker_order_id = order_data.get('id', '')
 
-        # Find matching order
+        # Find matching order (thread-safe)
         order = None
-        for o in self._orders.values():
-            if o.broker_order_id == broker_order_id:
-                order = o
-                break
+        with self._orders_lock:
+            for o in self._orders.values():
+                if o.broker_order_id == broker_order_id:
+                    order = o
+                    break
 
         if not order:
             return
@@ -769,8 +788,9 @@ class OrderManager:
                 order.add_fill(new_fill, fill_price)
 
                 if order.status == OrderStatus.FILLED:
-                    if order.order_id in self._active_orders:
-                        del self._active_orders[order.order_id]
+                    with self._orders_lock:
+                        if order.order_id in self._active_orders:
+                            del self._active_orders[order.order_id]
 
                     audit_logger.log_order(
                         order_id=order.order_id,

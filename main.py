@@ -145,6 +145,8 @@ class AlphaTradeSystem:
         # State
         self._running = False
         self._initialized = False
+        self._shutdown_in_progress = False  # CRITICAL: Idempotency guard for shutdown
+        self._emergency_halt = False  # CRITICAL: Emergency kill switch flag
         self._last_signals: Dict[str, Any] = {}
         self._market_data: Dict[str, pd.DataFrame] = {}
         self._last_reconciliation: Optional[datetime] = None
@@ -852,6 +854,11 @@ class AlphaTradeSystem:
         """Execute one trading cycle with all integrated components."""
         logger.debug("Starting trading cycle...")
 
+        # CRITICAL: Check emergency halt flag before any trading activity
+        if self._emergency_halt:
+            logger.warning("Trading cycle blocked - system is in EMERGENCY HALT state")
+            return
+
         with Timer() as timer:
             # ================================================================
             # PRE-TRADE CHECKS
@@ -1260,8 +1267,110 @@ class AlphaTradeSystem:
         except Exception as e:
             logger.error(f"Error checking closed positions: {e}")
 
+    async def emergency_halt(self) -> Dict[str, Any]:
+        """
+        EMERGENCY KILL SWITCH - Immediately stops all trading activity.
+
+        This method provides instant protection by:
+        1. Setting emergency halt flag (blocks all new trades immediately)
+        2. Cancelling ALL pending orders without waiting
+        3. Closing ALL positions at market price
+        4. Disabling trading permanently until manual reset
+
+        CRITICAL: This bypasses normal risk checks for emergency situations.
+        Should be callable via HTTP endpoint or manual trigger.
+
+        Returns:
+            Dict with emergency halt results
+        """
+        logger.critical("=" * 60)
+        logger.critical("!!! EMERGENCY HALT ACTIVATED !!!")
+        logger.critical("=" * 60)
+
+        self._emergency_halt = True
+        self._running = False
+
+        results = {
+            'timestamp': datetime.now().isoformat(),
+            'orders_cancelled': 0,
+            'positions_closed': 0,
+            'errors': []
+        }
+
+        # PHASE 1: Cancel all orders immediately (no waiting)
+        if self.order_manager:
+            try:
+                cancelled = await self.order_manager.cancel_all()
+                results['orders_cancelled'] = cancelled
+                logger.critical(f"Emergency: Cancelled {cancelled} orders")
+            except Exception as e:
+                error_msg = f"Failed to cancel orders: {e}"
+                results['errors'].append(error_msg)
+                logger.error(error_msg)
+
+        # PHASE 2: Close all positions at market
+        if self.broker:
+            try:
+                positions = await self.broker.get_positions()
+                for pos in positions:
+                    try:
+                        await self.broker.close_position(pos.symbol)
+                        results['positions_closed'] += 1
+                        logger.critical(f"Emergency: Closed position {pos.symbol}")
+                    except Exception as e:
+                        error_msg = f"Failed to close {pos.symbol}: {e}"
+                        results['errors'].append(error_msg)
+                        logger.error(error_msg)
+            except Exception as e:
+                error_msg = f"Failed to get positions: {e}"
+                results['errors'].append(error_msg)
+                logger.error(error_msg)
+
+        # PHASE 3: Log to audit trail
+        try:
+            from src.utils.logger import get_audit_logger
+            audit = get_audit_logger()
+            audit.log_risk_event(
+                event_type="EMERGENCY_HALT",
+                details=results
+            )
+        except Exception as e:
+            logger.error(f"Failed to log emergency halt: {e}")
+
+        logger.critical("=" * 60)
+        logger.critical(f"EMERGENCY HALT COMPLETE")
+        logger.critical(f"Orders cancelled: {results['orders_cancelled']}")
+        logger.critical(f"Positions closed: {results['positions_closed']}")
+        logger.critical(f"Errors: {len(results['errors'])}")
+        logger.critical("=" * 60)
+
+        return results
+
+    def is_emergency_halted(self) -> bool:
+        """Check if system is in emergency halt state."""
+        return self._emergency_halt
+
+    def reset_emergency_halt(self) -> None:
+        """
+        Reset emergency halt flag (requires manual intervention).
+
+        WARNING: Only call this after thorough review of what caused the emergency.
+        """
+        logger.warning("Emergency halt flag being reset - manual intervention")
+        self._emergency_halt = False
+
     async def shutdown(self) -> None:
-        """Graceful shutdown with all component cleanup."""
+        """Graceful shutdown with all component cleanup.
+
+        CRITICAL FIX: Added idempotency guard to prevent race conditions
+        when multiple shutdown signals are received in quick succession.
+        """
+        # Idempotency guard - prevent multiple concurrent shutdowns
+        if hasattr(self, '_shutdown_in_progress') and self._shutdown_in_progress:
+            logger.warning("Shutdown already in progress, ignoring duplicate signal")
+            return
+        self._shutdown_in_progress = True
+
         logger.info("=" * 60)
         logger.info("Initiating graceful shutdown...")
         logger.info("=" * 60)
