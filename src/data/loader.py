@@ -620,6 +620,144 @@ class MultiAssetLoader:
                 logger.error(f"Failed to convert {symbol} to parquet: {e}")
 
 
+def convert_all_csv_to_parquet(
+    data_dir: str = "data/raw",
+    output_dir: Optional[str] = None,
+    parallel: bool = True,
+    max_workers: int = 8
+) -> Dict[str, Any]:
+    """
+    Convert all CSV files to Parquet format for 5-10x faster loading.
+
+    OPTIMIZATION UTILITY:
+    - Parquet is a columnar format with compression
+    - 5-10x faster read times than CSV
+    - 3x smaller file size with Snappy compression
+
+    Args:
+        data_dir: Directory containing CSV files
+        output_dir: Output directory (default: same as input)
+        parallel: Use parallel processing
+        max_workers: Number of parallel workers
+
+    Returns:
+        Dict with conversion statistics
+    """
+    data_path = Path(data_dir)
+    output_path = Path(output_dir) if output_dir else data_path
+
+    # Find all CSV files
+    csv_files = list(data_path.glob("*.csv"))
+
+    if not csv_files:
+        logger.warning(f"No CSV files found in {data_path}")
+        return {'converted': 0, 'failed': 0, 'files': []}
+
+    logger.info(f"Found {len(csv_files)} CSV files to convert")
+
+    results = {
+        'converted': 0,
+        'failed': 0,
+        'total_csv_mb': 0,
+        'total_parquet_mb': 0,
+        'files': []
+    }
+
+    def convert_single(csv_path: Path) -> Dict[str, Any]:
+        """Convert a single CSV file to Parquet."""
+        try:
+            parquet_path = output_path / csv_path.with_suffix('.parquet').name
+
+            # Skip if parquet already exists and is newer
+            if parquet_path.exists():
+                if parquet_path.stat().st_mtime > csv_path.stat().st_mtime:
+                    return {
+                        'file': csv_path.name,
+                        'status': 'skipped',
+                        'reason': 'parquet is newer'
+                    }
+
+            # Read CSV
+            df = pd.read_csv(csv_path, parse_dates=[0], index_col=0)
+
+            # Standardize columns
+            df.columns = df.columns.str.lower()
+
+            # Get file sizes
+            csv_size = csv_path.stat().st_size / 1024 / 1024
+
+            # Write Parquet with Snappy compression
+            table = pa.Table.from_pandas(df)
+            pq.write_table(
+                table,
+                parquet_path,
+                compression='snappy',
+                use_dictionary=True
+            )
+
+            parquet_size = parquet_path.stat().st_size / 1024 / 1024
+
+            return {
+                'file': csv_path.name,
+                'status': 'success',
+                'rows': len(df),
+                'csv_mb': csv_size,
+                'parquet_mb': parquet_size,
+                'compression_ratio': csv_size / parquet_size if parquet_size > 0 else 0
+            }
+
+        except Exception as e:
+            return {
+                'file': csv_path.name,
+                'status': 'failed',
+                'error': str(e)
+            }
+
+    if parallel and len(csv_files) > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(convert_single, f): f for f in csv_files}
+
+            for future in as_completed(futures):
+                result = future.result()
+                results['files'].append(result)
+
+                if result['status'] == 'success':
+                    results['converted'] += 1
+                    results['total_csv_mb'] += result.get('csv_mb', 0)
+                    results['total_parquet_mb'] += result.get('parquet_mb', 0)
+                elif result['status'] == 'failed':
+                    results['failed'] += 1
+
+                print(f"  {result['file']}: {result['status']}")
+    else:
+        for csv_path in csv_files:
+            result = convert_single(csv_path)
+            results['files'].append(result)
+
+            if result['status'] == 'success':
+                results['converted'] += 1
+                results['total_csv_mb'] += result.get('csv_mb', 0)
+                results['total_parquet_mb'] += result.get('parquet_mb', 0)
+            elif result['status'] == 'failed':
+                results['failed'] += 1
+
+            print(f"  {result['file']}: {result['status']}")
+
+    # Summary
+    if results['total_csv_mb'] > 0:
+        results['overall_compression'] = results['total_csv_mb'] / results['total_parquet_mb']
+
+    logger.info(
+        f"Conversion complete: {results['converted']} converted, "
+        f"{results['failed']} failed, "
+        f"compression ratio: {results.get('overall_compression', 0):.1f}x"
+    )
+
+    return results
+
+
 class StreamingDataLoader:
     """
     Memory-efficient streaming loader for large datasets.

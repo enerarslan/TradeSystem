@@ -1,0 +1,68 @@
+# Backtest Optimization Configuration
+# JPMorgan/Two Sigma Level Performance Tuning
+# Target: Complete backtest in under 5 minutes
+
+optimization:
+  # Backtest Engine Selection
+  use_vectorized_backtest: true  # Use VectorizedBacktester for fast runs
+  use_microstructure: false      # Disable microstructure for fast mode
+
+  # Feature Caching
+  enable_feature_cache: true
+  cache_dir: "data/cache"
+  cache_ttl_hours: 168  # 1 week
+
+  # Parallelization
+  parallel_workers: 8  # CPU cores for parallel processing
+  use_multiprocessing: true  # Use ProcessPoolExecutor for features
+
+  # Fast Mode Settings (for development/iteration)
+  fast_mode: true
+  fast_mode_settings:
+    skip_microstructure: true
+    simplified_slippage: true
+    disable_partial_fills: true
+    reduce_logging: true
+
+  # Data Processing
+  chunk_size_days: 30  # Process in monthly chunks for memory efficiency
+  prefer_parquet: true  # Use Parquet over CSV when available
+
+  # HMM Regime Optimization
+  hmm_retrain_frequency: 500  # Retrain HMM every N bars (default 100)
+  hmm_min_train_samples: 500  # Minimum samples before HMM training
+  precompute_regime_features: true  # Pre-compute during feature stage
+
+  # FracDiff Optimization
+  cache_optimal_d: true  # Cache optimal d values per symbol
+  optimal_d_cache_file: "config/optimal_d_cache.yaml"
+
+  # Logging
+  logging_level: WARNING  # Reduce logging during backtest
+  batch_log_writes: true  # Buffer logs for batch writes
+
+performance_targets:
+  max_backtest_seconds: 300  # 5 minutes target
+  memory_limit_gb: 16
+  min_bars_per_second: 1000  # Processing speed target
+
+# Vectorized Backtest Configuration
+vectorized_backtest:
+  commission_pct: 0.001  # 10 bps
+  slippage_pct: 0.0005   # 5 bps
+  initial_capital: 1000000
+
+# Profiling Settings
+profiling:
+  enabled: false
+  output_dir: "results/profiling"
+  profile_features: true
+  profile_backtest: true
+  save_stats: true
+
+# Benchmark Settings
+benchmark:
+  test_symbol: "AAPL"
+  test_period_days: 252  # 1 year
+  run_iterations: 3
+  report_file: "results/benchmark/backtest_benchmark.json"
