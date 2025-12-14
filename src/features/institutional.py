@@ -520,30 +520,52 @@ class InstitutionalMicrostructure:
         features['effective_spread'] = self.compute_effective_spread(high, low, close)
 
         # Derived features
+        # CRITICAL FIX: Use EXPANDING windows for normalization to avoid look-ahead bias
+        # In batch backtesting, rolling stats can leak future info if not handled carefully.
+        # We use expanding windows for initial period, then rolling for adaptation.
 
-        # VPIN regime (toxic vs non-toxic flow)
-        vpin_mean = features['vpin'].rolling(100).mean()
-        vpin_std = features['vpin'].rolling(100).std()
-        features['vpin_zscore'] = (features['vpin'] - vpin_mean) / vpin_std
+        # VPIN regime (toxic vs non-toxic flow) - POINT-IN-TIME SAFE
+        # Use expanding for first 100 bars, then rolling
+        vpin_expanding_mean = features['vpin'].expanding(min_periods=20).mean()
+        vpin_expanding_std = features['vpin'].expanding(min_periods=20).std()
+        vpin_rolling_mean = features['vpin'].rolling(100, min_periods=20).mean()
+        vpin_rolling_std = features['vpin'].rolling(100, min_periods=20).std()
+
+        # Switch from expanding to rolling after sufficient history
+        vpin_mean = vpin_expanding_mean.where(
+            vpin_rolling_mean.isna() | (features.index < features.index[100] if len(features) > 100 else True),
+            vpin_rolling_mean
+        )
+        vpin_std = vpin_expanding_std.where(
+            vpin_rolling_std.isna() | (features.index < features.index[100] if len(features) > 100 else True),
+            vpin_rolling_std
+        )
+
+        features['vpin_zscore'] = (features['vpin'] - vpin_mean) / vpin_std.replace(0, np.nan)
         features['vpin_regime'] = (features['vpin_zscore'] > 1.5).astype(int)  # Toxic regime
 
-        # Kyle's Lambda regime (illiquid vs liquid)
-        lambda_pct = features['kyle_lambda'].rolling(100).apply(
-            lambda x: pd.Series(x).rank(pct=True).iloc[-1] if len(x) > 10 else 0.5
-        )
+        # Kyle's Lambda regime (illiquid vs liquid) - POINT-IN-TIME SAFE
+        # Use expanding percentile rank to avoid look-ahead
+        def expanding_pct_rank(series):
+            """Compute expanding percentile rank (point-in-time safe)"""
+            result = pd.Series(index=series.index, dtype=float)
+            for i in range(20, len(series)):
+                window = series.iloc[:i+1]
+                result.iloc[i] = (window < series.iloc[i]).sum() / len(window)
+            return result
+
+        lambda_pct = expanding_pct_rank(features['kyle_lambda'])
         features['kyle_lambda_pct'] = lambda_pct
         features['illiquidity_regime'] = (lambda_pct > 0.8).astype(int)
 
-        # OFI momentum (persistence of order flow)
+        # OFI momentum (persistence of order flow) - uses only past data, OK
         features['ofi_momentum'] = features['ofi'] - features['ofi'].rolling(10).mean()
         features['ofi_persistence'] = features['ofi'].rolling(5).apply(
             lambda x: (np.sign(x) == np.sign(x.iloc[-1])).mean() if len(x) > 1 else 0
         )
 
-        # Spread regime
-        spread_pct = features['effective_spread'].rolling(100).apply(
-            lambda x: pd.Series(x).rank(pct=True).iloc[-1] if len(x) > 10 else 0.5
-        )
+        # Spread regime - POINT-IN-TIME SAFE
+        spread_pct = expanding_pct_rank(features['effective_spread'])
         features['spread_regime'] = (spread_pct > 0.8).astype(int)  # Wide spread regime
 
         # Combined microstructure score
