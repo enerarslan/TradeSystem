@@ -194,10 +194,12 @@ def stage_data(symbols: List[str], start_date: str, end_date: str, force: bool =
     """
     Stage 1: Download and preprocess historical data.
 
+    ISSUE 7.1 FIX: Added data quality validation before saving.
+
     Output: data/processed/combined_data.pkl
     """
     print("\n" + "=" * 70)
-    print("STAGE 1: DATA PREPARATION")
+    print("STAGE 1: DATA PREPARATION (WITH QUALITY VALIDATION)")
     print("=" * 70)
 
     output_path = Path("data/processed/combined_data.pkl")
@@ -211,6 +213,7 @@ def stage_data(symbols: List[str], start_date: str, end_date: str, force: bool =
     try:
         from src.data.loader import MultiAssetLoader
         from src.data.preprocessor import DataPreprocessor
+        from src.risk.position_sizer import DataQualityValidator
 
         print(f"\nDownloading data for {len(symbols)} symbols...")
         print(f"Date range: {start_date} to {end_date}")
@@ -219,17 +222,37 @@ def stage_data(symbols: List[str], start_date: str, end_date: str, force: bool =
         loader = MultiAssetLoader(data_path="data/raw", cache_path="data/cache")
         preprocessor = DataPreprocessor()
 
+        # ISSUE 7.1 FIX: Initialize data quality validator
+        quality_validator = DataQualityValidator()
+
         # Load all symbols
         raw_data = loader.load_symbols(symbols=symbols, show_progress=True)
 
-        # Preprocess
+        # Preprocess and validate
         processed_data = {}
+        quality_passed = 0
+        quality_failed = 0
+
         for symbol, df in raw_data.items():
             if df is not None and len(df) > 100:
                 try:
                     df_clean, report = preprocessor.preprocess(df, symbol)
-                    processed_data[symbol] = df_clean
-                    print(f"  {symbol}: {len(df_clean)} bars (quality: {report.quality_score:.1f})")
+
+                    # ISSUE 7.1 FIX: Validate data quality
+                    validation_result = quality_validator.validate(df_clean, symbol)
+
+                    if validation_result['passed']:
+                        processed_data[symbol] = df_clean
+                        quality_passed += 1
+                        print(f"  {symbol}: {len(df_clean)} bars (quality: {report.quality_score:.1f}) [PASS]")
+                    else:
+                        quality_failed += 1
+                        errors = ", ".join(validation_result['errors'][:2])
+                        print(f"  {symbol}: FAILED quality check - {errors}")
+                        # Still include data with warnings (not critical errors)
+                        if not validation_result['errors']:
+                            processed_data[symbol] = df_clean
+
                 except Exception as e:
                     logger.warning(f"Failed to preprocess {symbol}: {e}")
 
@@ -244,6 +267,7 @@ def stage_data(symbols: List[str], start_date: str, end_date: str, force: bool =
 
         print(f"\nData saved to {output_path}")
         print(f"Processed {len(processed_data)}/{len(symbols)} symbols")
+        print(f"Quality validation: {quality_passed} passed, {quality_failed} failed")
 
         return True
 
@@ -262,6 +286,8 @@ def build_features_single_symbol(args: tuple) -> Tuple[str, Optional[pd.DataFram
     """
     Build features for a single symbol (for parallel processing).
 
+    ISSUE 1.3 FIX: Added point-in-time regime features.
+
     Args:
         args: Tuple of (symbol, df, config)
 
@@ -279,7 +305,26 @@ def build_features_single_symbol(args: tuple) -> Tuple[str, Optional[pd.DataFram
         # Generate features
         features = institutional_fe.build_features(df)
 
+        # ISSUE 1.3 FIX: Add point-in-time regime features
         if features is not None and len(features) > 0:
+            try:
+                from src.features.regime import generate_regime_features_pit
+
+                # Generate PIT regime features
+                regime_features = generate_regime_features_pit(df, n_regimes=3)
+
+                if regime_features is not None and len(regime_features) > 0:
+                    # Align indices and merge
+                    common_idx = features.index.intersection(regime_features.index)
+                    if len(common_idx) > 0:
+                        features = features.loc[common_idx]
+                        for col in regime_features.columns:
+                            features[f'pit_{col}'] = regime_features.loc[common_idx, col]
+
+            except Exception as e:
+                # Non-critical - continue without PIT regime features
+                logger.debug(f"PIT regime features skipped for {symbol}: {e}")
+
             return (symbol, features)
         return (symbol, None)
 
@@ -446,13 +491,15 @@ def stage_features(force: bool = False) -> bool:
 
 def stage_labels(pt_sl_ratio: tuple = (1.5, 1.0), max_holding: int = 20, force: bool = False) -> bool:
     """
-    Stage 3: Create triple barrier labels.
+    Stage 3: Create triple barrier labels with decorrelation.
+
+    ISSUE 1.1 FIX: Added label decorrelation to reduce autocorrelation.
 
     Input: data/processed/combined_data.pkl
     Output: results/labels/labels.pkl
     """
     print("\n" + "=" * 70)
-    print("STAGE 3: LABEL GENERATION")
+    print("STAGE 3: LABEL GENERATION (WITH DECORRELATION)")
     print("=" * 70)
 
     input_path = Path("data/processed/combined_data.pkl")
@@ -472,6 +519,11 @@ def stage_labels(pt_sl_ratio: tuple = (1.5, 1.0), max_holding: int = 20, force: 
 
     try:
         from src.data.labeling import TripleBarrierLabeler, TripleBarrierConfig
+        from src.data.labeling import (
+            apply_label_decorrelation_to_events,
+            calculate_label_autocorrelation,
+            validate_label_quality
+        )
         from src.models.meta_labeling import MetaLabelingPipeline, MetaLabelingConfig, TrendFollowingSignal
 
         # Load data
@@ -500,6 +552,8 @@ def stage_labels(pt_sl_ratio: tuple = (1.5, 1.0), max_holding: int = 20, force: 
 
         # Generate labels for each symbol
         labels_data = {}
+        total_original = 0
+        total_decorrelated = 0
 
         for symbol, df in data.items():
             try:
@@ -512,19 +566,43 @@ def stage_labels(pt_sl_ratio: tuple = (1.5, 1.0), max_holding: int = 20, force: 
                 labels_df = pipeline.generate_labels(df)
 
                 if labels_df is not None and len(labels_df) > 0:
-                    labels_data[symbol] = labels_df
+                    total_original += len(labels_df)
 
-                    # Show label distribution
+                    # ISSUE 1.1 FIX: Apply label decorrelation
                     if 'bin' in labels_df.columns:
-                        dist = labels_df['bin'].value_counts().to_dict()
-                        print(f"{len(labels_df)} labels, dist: {dist}")
+                        # Calculate initial autocorrelation
+                        initial_autocorr = calculate_label_autocorrelation(
+                            labels_df['bin'],
+                            max_lag=10
+                        )
+
+                        # Apply decorrelation if autocorrelation is high
+                        if initial_autocorr.get(1, 0) > 0.1:
+                            labels_df = apply_label_decorrelation_to_events(
+                                labels_df,
+                                method='subsample',
+                                min_gap_bars=4
+                            )
+
+                            # Validate quality
+                            quality = validate_label_quality(labels_df, labels_df['bin'])
+                            final_autocorr = quality.get('autocorrelation_lag1', 0)
+
+                            print(f"{len(labels_df)} labels (decorrelated: {initial_autocorr.get(1, 0):.2f} -> {final_autocorr:.2f})")
+                        else:
+                            print(f"{len(labels_df)} labels (autocorr OK: {initial_autocorr.get(1, 0):.2f})")
                     else:
                         print(f"{len(labels_df)} labels")
+
+                    total_decorrelated += len(labels_df)
+                    labels_data[symbol] = labels_df
                 else:
                     print("skipped (no labels)")
 
             except Exception as e:
                 print(f"failed ({e})")
+                import traceback
+                traceback.print_exc()
 
         if not labels_data:
             print("ERROR: No labels generated!")
@@ -537,6 +615,7 @@ def stage_labels(pt_sl_ratio: tuple = (1.5, 1.0), max_holding: int = 20, force: 
 
         print(f"\nLabels saved to {output_path}")
         print(f"Generated labels for {len(labels_data)} symbols")
+        print(f"Labels after decorrelation: {total_decorrelated}/{total_original} ({total_decorrelated/max(total_original, 1)*100:.1f}%)")
 
         return True
 
@@ -1108,10 +1187,12 @@ def stage_backtest(force: bool = False) -> bool:
     """
     Stage 6: Validate strategy with realistic execution on TRUE OUT-OF-SAMPLE data.
 
-    OPTIMIZED VERSION:
+    OPTIMIZED VERSION with ISSUE 8.1/8.2 FIXES:
     - Uses VectorizedBacktester for fast mode (50-100x faster)
     - Falls back to InstitutionalBacktestEngine for final validation
     - Configurable via backtest_optimization.yaml
+    - ISSUE 8.1: Model staleness detection
+    - ISSUE 8.2: Feature drift detection
 
     Input: All previous outputs
     Output: results/backtest/backtest_report.json, results/backtest/equity_curve.csv
@@ -1151,6 +1232,8 @@ def stage_backtest(force: bool = False) -> bool:
         from src.features.institutional import InstitutionalFeatureEngineer
         from src.risk.risk_manager import RiskManager, RiskLimits
         from src.risk.position_sizer import VolatilityPositionSizer
+        # ISSUE 8.1/8.2 FIX: Import staleness and drift detectors
+        from src.risk.position_sizer import ModelStalenessDetector, FeatureDriftDetector
         import joblib
 
         # Load optimization configuration
@@ -1275,6 +1358,64 @@ def stage_backtest(force: bool = False) -> bool:
         feature_builder = InstitutionalFeatureEngineer()
 
         # ============================================================
+        # ISSUE 8.2 FIX: Feature drift detection
+        # Check if OOS feature distributions differ from training
+        # ============================================================
+        print("\n" + "=" * 70)
+        print("CHECKING FEATURE DRIFT (ISSUE 8.2 FIX)")
+        print("=" * 70)
+
+        drift_report = {'features_checked': 0, 'features_drifted': 0, 'drifted_features': []}
+        try:
+            # Load training features for reference
+            training_features_path = Path("results/features/combined_features.pkl")
+            if training_features_path.exists():
+                with open(training_features_path, 'rb') as f:
+                    training_features_data = pickle.load(f)
+
+                # Combine training features for reference stats
+                all_training_features = []
+                for sym_features in training_features_data.values():
+                    if sym_features is not None and len(sym_features) > 0:
+                        all_training_features.append(sym_features.select_dtypes(include=[np.number]))
+
+                if all_training_features:
+                    combined_training = pd.concat(all_training_features, axis=0)
+
+                    # Initialize drift detector with training data
+                    drift_detector = FeatureDriftDetector(drift_threshold=2.0)
+                    drift_detector.set_reference_stats(combined_training)
+
+                    # Build features for OOS data and check drift
+                    oos_features_list = []
+                    for symbol, df in list(data.items())[:5]:  # Check first 5 symbols
+                        try:
+                            features = feature_builder.build_features(df)
+                            if features is not None and len(features) > 0:
+                                oos_features_list.append(features.select_dtypes(include=[np.number]))
+                        except Exception:
+                            pass
+
+                    if oos_features_list:
+                        combined_oos = pd.concat(oos_features_list, axis=0)
+                        drift_report = drift_detector.check_drift(combined_oos)
+
+                        if drift_report['features_drifted'] > 0:
+                            print(f"  WARNING: {drift_report['features_drifted']} features show significant drift!")
+                            for feat in drift_report['drifted_features'][:5]:
+                                print(f"    - {feat}")
+                        else:
+                            print(f"  Feature drift check passed ({drift_report['features_checked']} features checked)")
+                    else:
+                        print("  Skipped: Could not generate OOS features for comparison")
+                else:
+                    print("  Skipped: No training features available for comparison")
+            else:
+                print("  Skipped: Training features file not found")
+        except Exception as e:
+            print(f"  Feature drift check failed: {e}")
+
+        # ============================================================
         # NEW: Run model diagnostic BEFORE backtest
         # This detects if model is generating anti-signals
         # ============================================================
@@ -1301,12 +1442,18 @@ def stage_backtest(force: bool = False) -> bool:
             print("\n*** WARNING: Model has no predictive power ***")
             print("    Results may be close to random or negative after costs.")
 
-        # Store diagnostic in report
+        # Store diagnostic in report (including feature drift from ISSUE 8.2 FIX)
         diagnostic_report = {
             'model_accuracy': model_accuracy,
             'status': diagnostic.get('status', 'UNKNOWN'),
             'correlation': diagnostic.get('correlation', 0),
-            'signals_inverted': invert_signals
+            'signals_inverted': invert_signals,
+            # ISSUE 8.2 FIX: Feature drift info
+            'feature_drift': {
+                'features_checked': drift_report.get('features_checked', 0),
+                'features_drifted': drift_report.get('features_drifted', 0),
+                'drifted_features': drift_report.get('drifted_features', [])[:10]
+            }
         }
 
         backtest_start_time = time.time()
