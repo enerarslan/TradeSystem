@@ -431,11 +431,8 @@ class AlphaTradeSystem:
             await self.state_manager.start_auto_save()
 
             # Start a new trading session
-            await self.state_manager.start_session(
-                mode=self.mode,
-                symbols=self.symbols,
-                config=self.config
-            )
+            session_id = f"{self.mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            await self.state_manager.start_session(session_id)
 
             self._initialized = True
             logger.info("=" * 60)
@@ -464,8 +461,7 @@ class AlphaTradeSystem:
             self.graceful_degradation.register_component(
                 name="broker",
                 component_type=ComponentType.BROKER,
-                health_check=lambda: asyncio.create_task(self._check_broker_health()),
-                critical=True
+                health_check=lambda: asyncio.create_task(self._check_broker_health())
             )
 
         # Register data feed health check
@@ -473,16 +469,14 @@ class AlphaTradeSystem:
             self.graceful_degradation.register_component(
                 name="data_loader",
                 component_type=ComponentType.DATA_FEED,
-                health_check=lambda: True,  # Simplified check
-                critical=True
+                health_check=lambda: True  # Simplified check
             )
 
         # Register model health check
         self.graceful_degradation.register_component(
             name="ml_model",
             component_type=ComponentType.MODEL,
-            health_check=self._check_model_health,
-            critical=False  # Can degrade to rule-based strategies
+            health_check=self._check_model_health
         )
 
         # Register Redis health check
@@ -490,8 +484,7 @@ class AlphaTradeSystem:
             self.graceful_degradation.register_component(
                 name="state_manager",
                 component_type=ComponentType.REDIS,
-                health_check=lambda: self.state_manager._client is not None,
-                critical=False  # Can use in-memory fallback
+                health_check=lambda: self.state_manager._client is not None
             )
 
     async def _check_broker_health(self) -> bool:
