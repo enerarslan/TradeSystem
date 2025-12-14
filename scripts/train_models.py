@@ -79,6 +79,41 @@ from src.models.institutional_training import (
 logger = get_logger(__name__)
 
 
+def load_triple_barrier_params(config_path: str = "config/triple_barrier_params.yaml") -> dict:
+    """Load symbol-specific triple barrier parameters."""
+    try:
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.warning(f"Triple barrier params not found at {config_path}, using defaults")
+        return {}
+
+
+def get_symbol_params(symbol: str, tb_params: dict) -> Tuple[float, float, int]:
+    """
+    Get symbol-specific PT/SL ratios and max holding period from calibrated params.
+
+    Returns:
+        (profit_target_atr_mult, stop_loss_atr_mult, max_holding_period)
+    """
+    symbols_config = tb_params.get('symbols', {})
+    default_params = tb_params.get('default_params', {})
+
+    if symbol in symbols_config:
+        sym_params = symbols_config[symbol]
+        pt = sym_params.get('profit_target_atr_mult', default_params.get('profit_target_atr_mult', 1.5))
+        sl = sym_params.get('stop_loss_atr_mult', default_params.get('stop_loss_atr_mult', 1.0))
+        mhp = sym_params.get('max_holding_period', default_params.get('max_holding_period', 10))
+        return (pt, sl, mhp)
+    else:
+        # Use defaults
+        return (
+            default_params.get('profit_target_atr_mult', 1.5),
+            default_params.get('stop_loss_atr_mult', 1.0),
+            default_params.get('max_holding_period', 10)
+        )
+
+
 def load_config(path: str) -> dict:
     """Load YAML configuration."""
     with open(path, 'r') as f:
@@ -110,14 +145,24 @@ def process_symbol(
     feature_engineer: InstitutionalFeatureEngineer,
     use_meta_labeling: bool = True,
     pt_sl_ratio: Tuple[float, float] = (1.5, 1.0),
-    max_holding_period: int = 20
+    max_holding_period: int = 20,
+    tb_params: Optional[dict] = None
 ) -> Optional[Dict]:
     """
     Process a single symbol: load data, generate features, create labels.
 
+    Uses symbol-specific parameters from triple_barrier_params.yaml if available.
+
     Returns dict with X, y, weights, events or None if failed.
     """
     try:
+        # Get symbol-specific parameters from calibrated config
+        if tb_params:
+            pt, sl, mhp = get_symbol_params(symbol, tb_params)
+            pt_sl_ratio = (pt, sl)
+            max_holding_period = mhp
+            logger.debug(f"{symbol}: Using calibrated params PT={pt}, SL={sl}, MHP={mhp}")
+
         # Load data
         df = loader.loader.load(symbol)
         if df is None or len(df) < 500:
@@ -227,7 +272,7 @@ def train_model(
     use_meta_labeling: bool = True,
     model_type: str = 'catboost',
     n_estimators: int = 100,
-    n_splits: int = 5,
+    n_splits: int = 3,  # Changed from 5 to 3 for faster training
     embargo_pct: float = 0.05,
     pt_sl_ratio: Tuple[float, float] = (1.5, 1.0),
     max_holding_period: int = 20
@@ -241,12 +286,17 @@ def train_model(
         use_meta_labeling: Use meta-labeling (recommended)
         model_type: 'catboost', 'xgboost', or 'lightgbm'
         n_estimators: Number of bagging estimators
-        n_splits: Number of CV folds
+        n_splits: Number of CV folds (default: 3)
         embargo_pct: Embargo percentage for purged CV
-        pt_sl_ratio: (profit_take, stop_loss) ATR multipliers
-        max_holding_period: Maximum bars to hold position
+        pt_sl_ratio: (profit_take, stop_loss) ATR multipliers (overridden by triple_barrier_params.yaml)
+        max_holding_period: Maximum bars to hold position (overridden by triple_barrier_params.yaml)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load symbol-specific triple barrier parameters
+    tb_params = load_triple_barrier_params()
+    if tb_params:
+        logger.info(f"Loaded triple barrier params for {len(tb_params.get('symbols', {}))} symbols")
 
     # Initialize
     loader = MultiAssetLoader(data_path="data/processed")
@@ -264,8 +314,10 @@ def train_model(
     print(f"  Model type: {model_type}")
     print(f"  Bagging estimators: {n_estimators}")
     print(f"  CV folds: {n_splits}, Embargo: {embargo_pct:.0%}")
-    print(f"  PT/SL ratio: {pt_sl_ratio}")
-    print(f"  Max holding: {max_holding_period} bars")
+    print(f"  Default PT/SL ratio: {pt_sl_ratio}")
+    print(f"  Default max holding: {max_holding_period} bars")
+    if tb_params and tb_params.get('symbols'):
+        print(f"  Using calibrated params: config/triple_barrier_params.yaml ({len(tb_params['symbols'])} symbols)")
 
     print(f"\n[1/4] Processing {len(symbols)} symbols...")
 
@@ -284,7 +336,8 @@ def train_model(
                 feature_engineer=feature_engineer,
                 use_meta_labeling=use_meta_labeling,
                 pt_sl_ratio=pt_sl_ratio,
-                max_holding_period=max_holding_period
+                max_holding_period=max_holding_period,
+                tb_params=tb_params  # Use calibrated symbol-specific params
             )
             if result is not None:
                 result['X']['_symbol'] = symbol
@@ -515,8 +568,8 @@ def main():
                         help="Maximum holding period in bars (default: 20)")
 
     # CV options
-    parser.add_argument("--n-splits", type=int, default=5,
-                        help="Number of CV folds (default: 5)")
+    parser.add_argument("--n-splits", type=int, default=3,
+                        help="Number of CV folds (default: 3)")
     parser.add_argument("--embargo", type=float, default=0.05,
                         help="Embargo percentage (default: 0.05)")
 
