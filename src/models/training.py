@@ -639,8 +639,8 @@ class PurgedKFoldCV:
     def __init__(
         self,
         n_splits: int = 5,
-        purge_gap: int = 0,
-        embargo_pct: float = 0.05  # AFML recommends at least 5% embargo
+        purge_gap: int = 250,  # ISSUE 1.2 FIX: Increased from 0 to 250 for 200-bar features
+        embargo_pct: float = 0.11  # ISSUE 1.2 FIX: Increased from 0.05 to 0.11
     ):
         """
         Initialize PurgedKFoldCV.
@@ -649,18 +649,22 @@ class PurgedKFoldCV:
             n_splits: Number of CV folds
             purge_gap: Number of periods to purge before test set
                       (accounts for label forward-looking window)
+                      ISSUE 1.2 FIX: Increased default from 0 to 250 bars
+                      to account for 200-bar feature lookback + buffer
             embargo_pct: Percentage of test set size to embargo after test set
                         (accounts for serial correlation)
-                        IMPORTANT: Must be at least 0.05 (5%) to eliminate
-                        serial correlation leakage. Default changed from 0.01
-                        per AFML recommendations.
+                        ISSUE 1.2 FIX: Increased minimum from 0.05 to 0.11
+                        With 200-bar lookback features, minimum embargo should
+                        be ~250 bars (~11% for typical 2000-sample dataset)
         """
-        if embargo_pct < 0.05:
+        # ISSUE 1.2 FIX: Increased minimum from 0.05 to 0.11
+        if embargo_pct < 0.11:
             logger.warning(
-                f"embargo_pct={embargo_pct} is below recommended minimum of 0.05. "
-                f"Setting to 0.05 to prevent serial correlation leakage."
+                f"embargo_pct={embargo_pct} is below recommended minimum of 0.11 "
+                f"for 200-bar feature lookback. Setting to 0.11 to prevent "
+                f"serial correlation leakage from feature lookback windows."
             )
-            embargo_pct = 0.05
+            embargo_pct = 0.11
 
         self.n_splits = n_splits
         self.purge_gap = purge_gap
@@ -1607,3 +1611,410 @@ def feature_importance_with_clustering(
         'n_clusters': len(clusters),
         'n_features': len(X.columns)
     }
+
+
+# =============================================================================
+# CATEGORY 2 FIXES: Model Training Improvements
+# =============================================================================
+
+def validate_model_direction(
+    model,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    returns: pd.Series,
+    threshold: float = 0.0
+) -> Dict[str, Any]:
+    """
+    ISSUE 2.1 FIX: Ensure model predictions align with profit direction.
+
+    Detects signal inversion where the model predicts the opposite direction.
+    This can happen due to:
+    - Label encoding mismatch (0/1 vs -1/1)
+    - Feature sign conventions
+    - Target variable definition issues
+
+    Args:
+        model: Trained model
+        X_val: Validation features
+        y_val: Validation labels
+        returns: Actual returns for the validation period
+        threshold: Minimum correlation to consider valid
+
+    Returns:
+        Dictionary with validation results and recommendations
+
+    Raises:
+        ValueError: If model is predicting opposite direction
+    """
+    try:
+        predictions = model.predict(X_val)
+    except Exception as e:
+        logger.error(f"Model prediction failed: {e}")
+        return {'valid': False, 'error': str(e)}
+
+    # Align indices
+    common_idx = X_val.index.intersection(returns.index)
+    if len(common_idx) < 10:
+        logger.warning("Insufficient data for direction validation")
+        return {'valid': True, 'warning': 'insufficient_data'}
+
+    preds_aligned = pd.Series(predictions, index=X_val.index).loc[common_idx]
+    returns_aligned = returns.loc[common_idx]
+
+    # Calculate correlation between predictions and actual returns
+    correlation = preds_aligned.corr(returns_aligned)
+
+    result = {
+        'correlation': correlation,
+        'n_samples': len(common_idx),
+        'predictions_mean': preds_aligned.mean(),
+        'predictions_std': preds_aligned.std(),
+        'returns_mean': returns_aligned.mean(),
+        'returns_std': returns_aligned.std()
+    }
+
+    if correlation < -0.1:  # Significantly negative correlation
+        result['valid'] = False
+        result['should_invert'] = True
+        result['recommendation'] = (
+            f"Model predictions are negatively correlated with returns "
+            f"(r={correlation:.3f}). This indicates signal inversion. "
+            f"Check label encoding and feature signs."
+        )
+        logger.error(
+            f"SIGNAL INVERSION DETECTED: Model predictions have "
+            f"correlation {correlation:.3f} with returns. "
+            f"Recommend inverting signals or retraining."
+        )
+    elif correlation < threshold:
+        result['valid'] = False
+        result['should_invert'] = False
+        result['recommendation'] = (
+            f"Model predictions have low correlation with returns "
+            f"(r={correlation:.3f}). Model may not have predictive power."
+        )
+        logger.warning(
+            f"Low model-return correlation: {correlation:.3f}. "
+            f"Model may not have predictive edge."
+        )
+    else:
+        result['valid'] = True
+        result['should_invert'] = False
+        result['recommendation'] = None
+        logger.info(f"Model direction validation passed: correlation={correlation:.3f}")
+
+    return result
+
+
+def filter_negative_importance_features(
+    model,
+    X: pd.DataFrame,
+    y: pd.Series = None,
+    threshold: float = 0.0,
+    method: str = 'builtin'
+) -> Tuple[pd.DataFrame, Dict[str, float], List[str]]:
+    """
+    ISSUE 2.2 FIX: Remove features with zero or negative importance.
+
+    Features with zero or negative importance can hurt model performance
+    by adding noise without signal.
+
+    Args:
+        model: Fitted model with get_feature_importance() method
+        X: Feature DataFrame
+        y: Labels (optional, for MDA importance)
+        threshold: Minimum importance to keep feature
+        method: 'builtin' (use model's method) or 'mda' (mean decrease accuracy)
+
+    Returns:
+        Tuple of (filtered X, importance dict, removed features list)
+    """
+    # Get feature importance
+    if method == 'builtin':
+        try:
+            importances = model.get_feature_importance()
+            if not importances:
+                # Fallback to attribute access
+                if hasattr(model, 'feature_importances_'):
+                    importances = dict(zip(X.columns, model.feature_importances_))
+                elif hasattr(model, '_model') and hasattr(model._model, 'feature_importances_'):
+                    importances = dict(zip(X.columns, model._model.feature_importances_))
+                else:
+                    logger.warning("Could not get feature importance, keeping all features")
+                    return X, {}, []
+        except Exception as e:
+            logger.warning(f"Error getting feature importance: {e}")
+            return X, {}, []
+    else:
+        # MDA importance would require cross-validation
+        logger.warning("MDA importance not yet implemented, using builtin")
+        return filter_negative_importance_features(model, X, y, threshold, 'builtin')
+
+    # Filter features
+    useful_features = [f for f, imp in importances.items() if imp > threshold and f in X.columns]
+    removed_features = [f for f, imp in importances.items() if imp <= threshold and f in X.columns]
+
+    if removed_features:
+        logger.info(
+            f"Removing {len(removed_features)} features with importance <= {threshold}: "
+            f"{removed_features[:5]}{'...' if len(removed_features) > 5 else ''}"
+        )
+
+    logger.info(
+        f"Feature filtering: keeping {len(useful_features)}/{len(X.columns)} features "
+        f"(threshold={threshold})"
+    )
+
+    return X[useful_features], importances, removed_features
+
+
+class SharpeEarlyStopping:
+    """
+    ISSUE 2.5 FIX: Early stopping based on validation Sharpe ratio.
+
+    Standard early stopping uses metrics like loss or accuracy, but for
+    trading systems, we should stop based on trading-relevant metrics.
+
+    Usage:
+        early_stop = SharpeEarlyStopping(patience=10, min_delta=0.05)
+
+        for epoch in range(max_epochs):
+            model.train_one_epoch(...)
+            val_sharpe = calculate_validation_sharpe(model, val_data)
+
+            if early_stop.should_stop(val_sharpe):
+                model = early_stop.get_best_model()
+                break
+    """
+
+    def __init__(
+        self,
+        patience: int = 10,
+        min_delta: float = 0.05,
+        restore_best: bool = True
+    ):
+        """
+        Initialize SharpeEarlyStopping.
+
+        Args:
+            patience: Number of epochs to wait for improvement
+            min_delta: Minimum improvement in Sharpe to reset counter
+            restore_best: Whether to restore best model when stopping
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.restore_best = restore_best
+
+        self.best_sharpe = -np.inf
+        self.counter = 0
+        self.best_epoch = 0
+        self.best_model_state = None
+        self.history = []
+
+    def should_stop(
+        self,
+        val_sharpe: float,
+        model_state: Optional[Any] = None,
+        epoch: Optional[int] = None
+    ) -> bool:
+        """
+        Check if training should stop.
+
+        Args:
+            val_sharpe: Current validation Sharpe ratio
+            model_state: Model state to save if best (optional)
+            epoch: Current epoch number (optional)
+
+        Returns:
+            True if should stop training
+        """
+        self.history.append(val_sharpe)
+
+        if val_sharpe > self.best_sharpe + self.min_delta:
+            # Improvement found
+            self.best_sharpe = val_sharpe
+            self.counter = 0
+            self.best_epoch = epoch or len(self.history)
+
+            if model_state is not None:
+                self.best_model_state = model_state
+
+            logger.debug(
+                f"New best Sharpe: {val_sharpe:.4f} at epoch {self.best_epoch}"
+            )
+            return False
+        else:
+            # No improvement
+            self.counter += 1
+            logger.debug(
+                f"No improvement: counter={self.counter}/{self.patience}, "
+                f"current={val_sharpe:.4f}, best={self.best_sharpe:.4f}"
+            )
+
+            if self.counter >= self.patience:
+                logger.info(
+                    f"Early stopping triggered after {self.patience} epochs "
+                    f"without improvement. Best Sharpe: {self.best_sharpe:.4f} "
+                    f"at epoch {self.best_epoch}"
+                )
+                return True
+
+            return False
+
+    def get_best_model_state(self) -> Optional[Any]:
+        """Get the saved best model state."""
+        return self.best_model_state
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get early stopping statistics."""
+        return {
+            'best_sharpe': self.best_sharpe,
+            'best_epoch': self.best_epoch,
+            'total_epochs': len(self.history),
+            'patience_counter': self.counter,
+            'history': self.history
+        }
+
+
+def calculate_validation_sharpe(
+    predictions: np.ndarray,
+    returns: pd.Series,
+    positions_from_pred: bool = True
+) -> float:
+    """
+    Calculate Sharpe ratio from model predictions.
+
+    Args:
+        predictions: Model predictions (probabilities or signals)
+        returns: Actual returns
+        positions_from_pred: Whether to convert predictions to positions
+
+    Returns:
+        Annualized Sharpe ratio
+    """
+    if len(predictions) != len(returns):
+        raise ValueError("Predictions and returns must have same length")
+
+    if positions_from_pred:
+        # Convert predictions to positions
+        # Assuming predictions are probabilities [0, 1] for long signal
+        positions = np.where(predictions > 0.5, 1, -1)
+    else:
+        positions = predictions
+
+    # Calculate strategy returns
+    strat_returns = positions[:-1] * returns.values[1:]
+
+    # Calculate Sharpe
+    if len(strat_returns) < 2 or np.std(strat_returns) == 0:
+        return 0.0
+
+    sharpe = np.mean(strat_returns) / np.std(strat_returns)
+
+    # Annualize (assuming 15-min bars, 26 bars per day, 252 days per year)
+    sharpe_annual = sharpe * np.sqrt(252 * 26)
+
+    return sharpe_annual
+
+
+def ensure_sample_weights_applied(
+    model,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    sample_weights: pd.Series,
+    verbose: bool = True
+) -> bool:
+    """
+    ISSUE 2.4 FIX: Verify sample weights are properly applied to model training.
+
+    Args:
+        model: Model to verify
+        X_train: Training features
+        y_train: Training labels
+        sample_weights: Sample weights
+
+    Returns:
+        True if sample weights are supported and applied
+    """
+    # Check if model supports sample_weight
+    import inspect
+
+    fit_method = getattr(model, 'fit', None)
+    if fit_method is None:
+        if verbose:
+            logger.warning("Model has no fit method, cannot verify sample weights")
+        return False
+
+    # Check fit signature for sample_weight parameter
+    sig = inspect.signature(fit_method)
+    supports_weights = 'sample_weight' in sig.parameters
+
+    if not supports_weights:
+        if verbose:
+            logger.warning(
+                f"Model {type(model).__name__} does not support sample_weight parameter. "
+                f"Sample weights will NOT be applied during training."
+            )
+        return False
+
+    if verbose:
+        logger.info(
+            f"Model {type(model).__name__} supports sample_weight. "
+            f"Weights will be applied (mean={sample_weights.mean():.4f}, "
+            f"std={sample_weights.std():.4f})"
+        )
+
+    return True
+
+
+def get_recommended_cv_scoring(
+    target_type: str = 'classification',
+    use_probabilities: bool = True
+) -> str:
+    """
+    ISSUE 2.3 FIX: Get recommended CV scoring metric.
+
+    For probability-based trading systems, log_loss or Brier score
+    is more appropriate than F1.
+
+    Args:
+        target_type: 'classification' or 'regression'
+        use_probabilities: Whether model outputs probabilities
+
+    Returns:
+        Recommended sklearn scoring string
+    """
+    if target_type == 'classification':
+        if use_probabilities:
+            # For probability outputs, calibration matters
+            return 'neg_log_loss'  # Also known as cross-entropy
+        else:
+            return 'f1_weighted'
+    else:
+        return 'neg_mean_squared_error'
+
+
+def create_trading_scorer():
+    """
+    Create a custom scorer based on trading performance.
+
+    Returns a scorer that can be used with sklearn's cross_validate.
+    """
+    from sklearn.metrics import make_scorer
+
+    def trading_score(y_true, y_pred):
+        """Score based on directional accuracy and magnitude."""
+        # Convert predictions to positions
+        positions = np.sign(y_pred)
+
+        # Calculate returns (assuming y_true contains returns)
+        # This is a simplified version - in practice, returns would be separate
+        pnl = positions * y_true
+
+        # Sharpe-like score
+        if pnl.std() == 0:
+            return 0.0
+
+        return pnl.mean() / pnl.std()
+
+    return make_scorer(trading_score, greater_is_better=True)

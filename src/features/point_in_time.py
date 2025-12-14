@@ -353,46 +353,67 @@ class PointInTimeFeatureEngine:
         """
         Normalize feature using only point-in-time data.
 
+        ISSUE 1.4 FIX: Added .shift(1) before calculating statistics to ensure
+        normalization doesn't use current bar's value in computing mean/std.
+
         Key: Use EXPANDING window for initial period, then ROLLING.
         Never use the full series statistics (that's look-ahead).
+        Always shift(1) before computing statistics to exclude current bar.
         """
         if method == NormalizationMethod.ZSCORE:
+            # ISSUE 1.4 FIX: Use shift(1) before calculating mean/std
+            # This ensures we don't use current bar's value in normalization
+            shifted_series = series.shift(1)
+
             # Expanding mean/std for point-in-time
-            mean = series.expanding(min_periods=20).mean()
-            std = series.expanding(min_periods=20).std()
+            mean = shifted_series.expanding(min_periods=20).mean()
+            std = shifted_series.expanding(min_periods=20).std()
 
             # After enough history, switch to rolling for adaptation
             if len(series) > window:
-                mean_roll = series.rolling(window).mean()
-                std_roll = series.rolling(window).std()
+                mean_roll = shifted_series.rolling(window).mean()
+                std_roll = shifted_series.rolling(window).std()
 
                 # Use rolling where available, expanding otherwise
                 mean = mean.where(mean_roll.isna(), mean_roll)
                 std = std.where(std_roll.isna(), std_roll)
 
+            # Normalize using past-only statistics applied to current value
             return (series - mean) / std.replace(0, np.nan)
 
         elif method == NormalizationMethod.MINMAX:
-            # Expanding min/max
-            min_val = series.expanding(min_periods=20).min()
-            max_val = series.expanding(min_periods=20).max()
+            # ISSUE 1.4 FIX: Use shift(1) for min/max calculation
+            shifted_series = series.shift(1)
+
+            # Expanding min/max using only past data
+            min_val = shifted_series.expanding(min_periods=20).min()
+            max_val = shifted_series.expanding(min_periods=20).max()
             range_val = max_val - min_val
             return (series - min_val) / range_val.replace(0, np.nan)
 
         elif method == NormalizationMethod.RANK:
-            # Expanding rank is complex, use rolling approximation
-            def expanding_rank(x):
-                return x.rank(pct=True).iloc[-1]
+            # ISSUE 1.4 FIX: Expanding rank with past data only
+            def expanding_rank_pit(x):
+                """Compute percentile rank excluding current value."""
+                if len(x) < 2:
+                    return np.nan
+                # Compare current value to all past values (excluding current)
+                past_values = x[:-1]
+                current_value = x[-1]
+                return (past_values < current_value).mean()
 
             return series.expanding(min_periods=20).apply(
-                expanding_rank, raw=False
+                expanding_rank_pit, raw=True
             )
 
         elif method == NormalizationMethod.ROBUST:
-            # Median and IQR
-            median = series.expanding(min_periods=20).median()
-            q75 = series.expanding(min_periods=20).quantile(0.75)
-            q25 = series.expanding(min_periods=20).quantile(0.25)
+            # ISSUE 1.4 FIX: Use shift(1) for median/IQR calculation
+            shifted_series = series.shift(1)
+
+            # Median and IQR using only past data
+            median = shifted_series.expanding(min_periods=20).median()
+            q75 = shifted_series.expanding(min_periods=20).quantile(0.75)
+            q25 = shifted_series.expanding(min_periods=20).quantile(0.25)
             iqr = q75 - q25
             return (series - median) / iqr.replace(0, np.nan)
 

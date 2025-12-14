@@ -62,9 +62,11 @@ class InstitutionalTrainingConfig:
     """Configuration for institutional training pipeline."""
 
     # Cross-validation
+    # ISSUE 1.2 FIX: Increased embargo from 5% to 11% and purge_gap from 10 to 250
+    # With 200-bar lookback features, minimum embargo should be ~250 bars
     n_splits: int = 5
-    purge_gap: int = 10  # Samples to purge before test (label lookback)
-    embargo_pct: float = 0.05  # 5% embargo - AFML minimum recommendation
+    purge_gap: int = 250  # ISSUE 1.2 FIX: Increased from 10 to 250 for 200-bar features
+    embargo_pct: float = 0.11  # ISSUE 1.2 FIX: Increased from 0.05 to 0.11
     cv_method: str = 'purged_kfold'  # 'purged_kfold', 'combinatorial', 'walk_forward'
 
     # Sample weighting

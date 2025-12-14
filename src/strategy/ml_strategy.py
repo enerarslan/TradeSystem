@@ -598,3 +598,409 @@ class EnsembleMLStrategy(BaseStrategy):
                 }
 
         return contributions
+
+
+# =============================================================================
+# CATEGORY 4 FIXES: Signal Generation Improvements
+# =============================================================================
+
+class AdaptiveSignalThreshold:
+    """
+    ISSUE 4.1 FIX: Adaptive signal threshold based on recent accuracy.
+
+    Fixed min_confidence=0.6 and signal_threshold=0.5 don't adapt to market
+    conditions. This class adjusts thresholds based on recent performance.
+    """
+
+    def __init__(
+        self,
+        base_threshold: float = 0.6,
+        lookback: int = 100,
+        target_accuracy: float = 0.55,
+        min_threshold: float = 0.5,
+        max_threshold: float = 0.8
+    ):
+        """
+        Initialize AdaptiveSignalThreshold.
+
+        Args:
+            base_threshold: Base probability threshold
+            lookback: Number of trades to look back
+            target_accuracy: Target accuracy for threshold adjustment
+            min_threshold: Minimum allowed threshold
+            max_threshold: Maximum allowed threshold
+        """
+        self.base_threshold = base_threshold
+        self.lookback = lookback
+        self.target_accuracy = target_accuracy
+        self.min_threshold = min_threshold
+        self.max_threshold = max_threshold
+
+        self.predictions_history: List[float] = []
+        self.outcomes_history: List[int] = []  # 1 = correct, 0 = incorrect
+
+    def update(self, prediction: float, outcome: int) -> None:
+        """
+        Update history with new prediction and outcome.
+
+        Args:
+            prediction: Predicted probability
+            outcome: 1 if prediction was correct, 0 otherwise
+        """
+        self.predictions_history.append(prediction)
+        self.outcomes_history.append(outcome)
+
+        # Keep only lookback window
+        if len(self.predictions_history) > self.lookback:
+            self.predictions_history.pop(0)
+            self.outcomes_history.pop(0)
+
+    def get_threshold(self) -> float:
+        """
+        Get current adaptive threshold.
+
+        Returns:
+            Adjusted threshold based on recent accuracy
+        """
+        if len(self.predictions_history) < self.lookback:
+            return self.base_threshold
+
+        # Calculate recent accuracy
+        recent_accuracy = np.mean(self.outcomes_history)
+
+        # Adjust threshold based on accuracy gap
+        # If accuracy is low, increase threshold (be more selective)
+        # If accuracy is high, can decrease threshold (more trades)
+        accuracy_gap = self.target_accuracy - recent_accuracy
+        adjustment = accuracy_gap * 2  # Scale factor
+
+        new_threshold = self.base_threshold + adjustment
+        new_threshold = np.clip(new_threshold, self.min_threshold, self.max_threshold)
+
+        return new_threshold
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get threshold statistics."""
+        return {
+            'current_threshold': self.get_threshold(),
+            'base_threshold': self.base_threshold,
+            'recent_accuracy': np.mean(self.outcomes_history) if self.outcomes_history else None,
+            'n_samples': len(self.predictions_history)
+        }
+
+
+class SignalCooldown:
+    """
+    ISSUE 4.2 FIX: Signal cooldown to prevent rapid signal switching.
+
+    Without cooldown, rapid signal switching increases transaction costs.
+    This class enforces minimum time between signals.
+    """
+
+    def __init__(
+        self,
+        min_bars_between_signals: int = 4,
+        min_bars_same_direction: int = 2
+    ):
+        """
+        Initialize SignalCooldown.
+
+        Args:
+            min_bars_between_signals: Minimum bars between any signals
+            min_bars_same_direction: Minimum bars before same-direction signal
+        """
+        self.min_bars_between_signals = min_bars_between_signals
+        self.min_bars_same_direction = min_bars_same_direction
+
+        # Track last signal for each symbol
+        self._last_signal_time: Dict[str, datetime] = {}
+        self._last_signal_direction: Dict[str, str] = {}
+
+    def can_signal(
+        self,
+        symbol: str,
+        signal_direction: str,
+        current_time: datetime,
+        bar_duration_minutes: int = 15
+    ) -> Tuple[bool, str]:
+        """
+        Check if signal is allowed based on cooldown.
+
+        Args:
+            symbol: Trading symbol
+            signal_direction: 'long', 'short', or 'flat'
+            current_time: Current timestamp
+            bar_duration_minutes: Duration of one bar in minutes
+
+        Returns:
+            Tuple of (can_signal, reason)
+        """
+        last_time = self._last_signal_time.get(symbol)
+        last_direction = self._last_signal_direction.get(symbol)
+
+        if last_time is None:
+            return True, "no_previous_signal"
+
+        # Calculate bars since last signal
+        time_diff = (current_time - last_time).total_seconds() / 60
+        bars_since = time_diff / bar_duration_minutes
+
+        # Check minimum bars between signals
+        if bars_since < self.min_bars_between_signals:
+            return False, f"cooldown: {self.min_bars_between_signals - bars_since:.1f} bars remaining"
+
+        # Check same direction constraint
+        if signal_direction == last_direction and bars_since < self.min_bars_same_direction:
+            return False, f"same_direction_cooldown: {self.min_bars_same_direction - bars_since:.1f} bars"
+
+        return True, "allowed"
+
+    def record_signal(
+        self,
+        symbol: str,
+        signal_direction: str,
+        signal_time: datetime
+    ) -> None:
+        """Record that a signal was generated."""
+        self._last_signal_time[symbol] = signal_time
+        self._last_signal_direction[symbol] = signal_direction
+
+    def get_cooldown_status(self, symbol: str) -> Dict[str, Any]:
+        """Get cooldown status for a symbol."""
+        return {
+            'last_signal_time': self._last_signal_time.get(symbol),
+            'last_signal_direction': self._last_signal_direction.get(symbol)
+        }
+
+
+class SignalDecay:
+    """
+    ISSUE 4.3 FIX: Signal decay over time.
+
+    Old signals should decay over time, not remain at full strength.
+    This class applies exponential decay to signal strength.
+    """
+
+    def __init__(
+        self,
+        decay_rate: float = 0.1,
+        min_strength: float = 0.1
+    ):
+        """
+        Initialize SignalDecay.
+
+        Args:
+            decay_rate: Decay rate per bar (0.1 = 10% decay per bar)
+            min_strength: Minimum signal strength before signal is cancelled
+        """
+        self.decay_rate = decay_rate
+        self.min_strength = min_strength
+
+        # Track active signals
+        self._active_signals: Dict[str, Dict[str, Any]] = {}
+
+    def add_signal(
+        self,
+        symbol: str,
+        signal_strength: float,
+        signal_direction: str,
+        entry_time: datetime
+    ) -> None:
+        """Add a new signal to track."""
+        self._active_signals[symbol] = {
+            'initial_strength': signal_strength,
+            'current_strength': signal_strength,
+            'direction': signal_direction,
+            'entry_time': entry_time,
+            'bars_held': 0
+        }
+
+    def update(self, symbol: str, bars_elapsed: int = 1) -> float:
+        """
+        Update signal strength after bars have passed.
+
+        Args:
+            symbol: Trading symbol
+            bars_elapsed: Number of bars since last update
+
+        Returns:
+            Updated signal strength
+        """
+        if symbol not in self._active_signals:
+            return 0.0
+
+        signal = self._active_signals[symbol]
+        signal['bars_held'] += bars_elapsed
+
+        # Apply exponential decay
+        decay_factor = np.exp(-self.decay_rate * signal['bars_held'])
+        signal['current_strength'] = signal['initial_strength'] * decay_factor
+
+        return signal['current_strength']
+
+    def get_decayed_strength(self, symbol: str, bars_held: int) -> float:
+        """
+        Get decayed signal strength.
+
+        Args:
+            symbol: Trading symbol
+            bars_held: Bars since signal was generated
+
+        Returns:
+            Decayed signal strength
+        """
+        if symbol not in self._active_signals:
+            return 0.0
+
+        initial = self._active_signals[symbol]['initial_strength']
+        decay_factor = np.exp(-self.decay_rate * bars_held)
+        return initial * decay_factor
+
+    def is_signal_expired(self, symbol: str) -> bool:
+        """Check if signal has decayed below minimum threshold."""
+        if symbol not in self._active_signals:
+            return True
+
+        return self._active_signals[symbol]['current_strength'] < self.min_strength
+
+    def remove_signal(self, symbol: str) -> None:
+        """Remove a signal from tracking."""
+        self._active_signals.pop(symbol, None)
+
+
+class DynamicWeightedEnsemble:
+    """
+    ISSUE 4.4 FIX: Dynamic ensemble weighting based on recent performance.
+
+    Fixed weights don't adapt to changing market conditions.
+    This class adjusts strategy weights based on recent performance.
+    """
+
+    def __init__(
+        self,
+        strategy_names: List[str],
+        initial_weights: Optional[List[float]] = None,
+        lookback: int = 100,
+        method: str = 'inverse_volatility'
+    ):
+        """
+        Initialize DynamicWeightedEnsemble.
+
+        Args:
+            strategy_names: Names of strategies in ensemble
+            initial_weights: Initial weights (equal if not provided)
+            lookback: Lookback period for performance calculation
+            method: Weighting method ('inverse_volatility', 'sharpe', 'equal')
+        """
+        self.strategy_names = strategy_names
+        self.n_strategies = len(strategy_names)
+        self.lookback = lookback
+        self.method = method
+
+        if initial_weights is None:
+            initial_weights = [1.0 / self.n_strategies] * self.n_strategies
+
+        self.current_weights = dict(zip(strategy_names, initial_weights))
+        self._returns_history: Dict[str, List[float]] = {s: [] for s in strategy_names}
+
+    def update_returns(self, strategy_returns: Dict[str, float]) -> None:
+        """
+        Update returns history with new returns.
+
+        Args:
+            strategy_returns: Dict mapping strategy name to return
+        """
+        for strategy, ret in strategy_returns.items():
+            if strategy in self._returns_history:
+                self._returns_history[strategy].append(ret)
+
+                # Keep only lookback window
+                if len(self._returns_history[strategy]) > self.lookback:
+                    self._returns_history[strategy].pop(0)
+
+    def update_weights(self) -> Dict[str, float]:
+        """
+        Update weights based on recent performance.
+
+        Returns:
+            Updated weights dictionary
+        """
+        if not all(len(r) >= 20 for r in self._returns_history.values()):
+            # Not enough history, keep current weights
+            return self.current_weights
+
+        if self.method == 'inverse_volatility':
+            self.current_weights = self._inverse_volatility_weights()
+        elif self.method == 'sharpe':
+            self.current_weights = self._sharpe_weights()
+        elif self.method == 'equal':
+            self.current_weights = {s: 1.0 / self.n_strategies for s in self.strategy_names}
+        else:
+            raise ValueError(f"Unknown weighting method: {self.method}")
+
+        return self.current_weights
+
+    def _inverse_volatility_weights(self) -> Dict[str, float]:
+        """Calculate inverse-volatility weights."""
+        volatilities = {}
+        for strategy, returns in self._returns_history.items():
+            vol = np.std(returns) if len(returns) > 1 else 1.0
+            volatilities[strategy] = max(vol, 0.001)  # Prevent division by zero
+
+        total_inv_vol = sum(1 / v for v in volatilities.values())
+
+        weights = {}
+        for strategy, vol in volatilities.items():
+            weights[strategy] = (1 / vol) / total_inv_vol
+
+        return weights
+
+    def _sharpe_weights(self) -> Dict[str, float]:
+        """Calculate Sharpe-ratio based weights."""
+        sharpes = {}
+        for strategy, returns in self._returns_history.items():
+            if len(returns) < 2:
+                sharpes[strategy] = 0
+            else:
+                mean_ret = np.mean(returns)
+                std_ret = np.std(returns)
+                sharpes[strategy] = mean_ret / std_ret if std_ret > 0 else 0
+
+        # Convert to positive weights
+        min_sharpe = min(sharpes.values())
+        if min_sharpe < 0:
+            sharpes = {s: sh - min_sharpe + 0.1 for s, sh in sharpes.items()}
+
+        total_sharpe = sum(sharpes.values())
+        if total_sharpe <= 0:
+            return {s: 1.0 / self.n_strategies for s in self.strategy_names}
+
+        return {s: sh / total_sharpe for s, sh in sharpes.items()}
+
+    def get_weights(self) -> Dict[str, float]:
+        """Get current weights."""
+        return self.current_weights
+
+    def get_weighted_signal(
+        self,
+        strategy_signals: Dict[str, float]
+    ) -> float:
+        """
+        Get weighted ensemble signal.
+
+        Args:
+            strategy_signals: Dict mapping strategy name to signal value
+
+        Returns:
+            Weighted average signal
+        """
+        weighted_sum = 0.0
+        weight_sum = 0.0
+
+        for strategy, signal in strategy_signals.items():
+            if strategy in self.current_weights:
+                weight = self.current_weights[strategy]
+                weighted_sum += signal * weight
+                weight_sum += weight
+
+        return weighted_sum / weight_sum if weight_sum > 0 else 0.0

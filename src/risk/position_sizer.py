@@ -1464,3 +1464,881 @@ def create_position_sizer(
         raise ValueError(f"Unknown sizing method: {method}")
 
     return sizers[method](**kwargs)
+
+
+# =============================================================================
+# CATEGORY 5 FIXES: Position Sizing Improvements
+# =============================================================================
+
+class SafeKellySizer:
+    """
+    ISSUE 5.1 FIX: Kelly fraction calculation with multiple safety checks.
+
+    Raw Kelly sizing can produce extreme positions with poorly calibrated
+    probabilities. This implementation adds multiple safety checks.
+    """
+
+    def __init__(
+        self,
+        kelly_fraction: float = 0.5,  # Half-Kelly by default
+        max_position_pct: float = 0.10,
+        min_edge: float = 0.02,  # Minimum edge required (52% win rate)
+        min_probability: float = 0.52
+    ):
+        """
+        Initialize SafeKellySizer.
+
+        Args:
+            kelly_fraction: Fraction of Kelly to use (0.5 = Half-Kelly)
+            max_position_pct: Maximum position as percentage of capital
+            min_edge: Minimum edge required to take position
+            min_probability: Minimum probability required
+        """
+        self.kelly_fraction = kelly_fraction
+        self.max_position_pct = max_position_pct
+        self.min_edge = min_edge
+        self.min_probability = min_probability
+
+    def calculate_safe_kelly(
+        self,
+        probability: float,
+        odds_ratio: float = 1.0,
+        verbose: bool = False
+    ) -> Tuple[float, Dict[str, Any]]:
+        """
+        Calculate Kelly with multiple safety checks.
+
+        Args:
+            probability: Win probability
+            odds_ratio: Average win / average loss
+            verbose: Whether to return detailed info
+
+        Returns:
+            Tuple of (kelly_fraction, details_dict)
+        """
+        details = {
+            'raw_kelly': 0.0,
+            'adjusted_kelly': 0.0,
+            'checks_passed': [],
+            'checks_failed': [],
+            'final_position': 0.0
+        }
+
+        # Check minimum probability
+        if probability < self.min_probability:
+            details['checks_failed'].append(
+                f"probability {probability:.3f} < min {self.min_probability}"
+            )
+            return 0.0, details
+
+        details['checks_passed'].append('min_probability')
+
+        # Calculate raw Kelly
+        # Kelly = (p*b - q) / b where p=prob, q=1-p, b=odds ratio
+        q = 1 - probability
+        raw_kelly = (probability * odds_ratio - q) / odds_ratio
+        details['raw_kelly'] = raw_kelly
+
+        # Check if Kelly is positive (positive edge)
+        if raw_kelly <= 0:
+            details['checks_failed'].append(f"raw_kelly {raw_kelly:.3f} <= 0")
+            return 0.0, details
+
+        details['checks_passed'].append('positive_kelly')
+
+        # Check minimum edge
+        edge = probability - 0.5
+        if edge < self.min_edge:
+            details['checks_failed'].append(
+                f"edge {edge:.3f} < min_edge {self.min_edge}"
+            )
+            return 0.0, details
+
+        details['checks_passed'].append('min_edge')
+
+        # Apply fraction (e.g., Half-Kelly)
+        adjusted_kelly = raw_kelly * self.kelly_fraction
+        details['adjusted_kelly'] = adjusted_kelly
+
+        # Hard cap at max position
+        final_kelly = min(adjusted_kelly, self.max_position_pct)
+        details['final_position'] = final_kelly
+
+        # Sanity check
+        if final_kelly < 0 or final_kelly > 1:
+            logger.error(f"Invalid Kelly: {final_kelly}, prob={probability}")
+            details['checks_failed'].append(f"invalid_range: {final_kelly}")
+            return 0.0, details
+
+        details['checks_passed'].append('bounds_check')
+
+        if verbose:
+            logger.info(
+                f"SafeKelly: prob={probability:.3f}, odds={odds_ratio:.2f}, "
+                f"raw={raw_kelly:.3f}, adjusted={adjusted_kelly:.3f}, "
+                f"final={final_kelly:.3f}"
+            )
+
+        return final_kelly, details
+
+
+class CorrelationAdjustedSizer:
+    """
+    ISSUE 5.2 FIX: Position sizes adjusted for correlation with existing holdings.
+
+    High correlation between holdings reduces diversification benefit and
+    increases portfolio risk. This sizer reduces position sizes when
+    correlation with existing positions is high.
+    """
+
+    def __init__(
+        self,
+        lookback_days: int = 60,
+        high_corr_threshold: float = 0.7,
+        max_reduction_factor: float = 0.5
+    ):
+        """
+        Initialize CorrelationAdjustedSizer.
+
+        Args:
+            lookback_days: Days of data for correlation calculation
+            high_corr_threshold: Correlation threshold for adjustment
+            max_reduction_factor: Maximum reduction (0.5 = reduce by up to 50%)
+        """
+        self.lookback_days = lookback_days
+        self.high_corr_threshold = high_corr_threshold
+        self.max_reduction_factor = max_reduction_factor
+
+        # Cache for returns data
+        self._returns_cache: Dict[str, pd.Series] = {}
+
+    def update_returns(self, symbol: str, returns: pd.Series) -> None:
+        """Update returns cache for a symbol."""
+        self._returns_cache[symbol] = returns.tail(self.lookback_days * 26)  # 15-min bars
+
+    def get_correlation_with_portfolio(
+        self,
+        symbol: str,
+        current_positions: Dict[str, float]
+    ) -> float:
+        """
+        Calculate weighted average correlation with current positions.
+
+        Args:
+            symbol: Symbol to check
+            current_positions: Dict of symbol -> position weight
+
+        Returns:
+            Weighted average correlation
+        """
+        if symbol not in self._returns_cache or not current_positions:
+            return 0.0
+
+        symbol_returns = self._returns_cache[symbol]
+        correlations = []
+        weights = []
+
+        for pos_symbol, weight in current_positions.items():
+            if pos_symbol in self._returns_cache and pos_symbol != symbol:
+                pos_returns = self._returns_cache[pos_symbol]
+
+                # Align and calculate correlation
+                aligned = pd.concat([symbol_returns, pos_returns], axis=1).dropna()
+                if len(aligned) > 20:
+                    corr = aligned.iloc[:, 0].corr(aligned.iloc[:, 1])
+                    if not pd.isna(corr):
+                        correlations.append(corr)
+                        weights.append(abs(weight))
+
+        if not correlations:
+            return 0.0
+
+        # Weighted average correlation
+        total_weight = sum(weights)
+        if total_weight > 0:
+            return sum(c * w for c, w in zip(correlations, weights)) / total_weight
+
+        return np.mean(correlations)
+
+    def adjust_for_correlation(
+        self,
+        symbol: str,
+        base_size: float,
+        current_positions: Dict[str, float]
+    ) -> Tuple[float, Dict[str, Any]]:
+        """
+        Reduce position size if highly correlated with existing positions.
+
+        Args:
+            symbol: Symbol for new position
+            base_size: Base position size (as pct of capital)
+            current_positions: Current positions {symbol: weight}
+
+        Returns:
+            Tuple of (adjusted size, details dict)
+        """
+        avg_corr = self.get_correlation_with_portfolio(symbol, current_positions)
+
+        details = {
+            'base_size': base_size,
+            'avg_correlation': avg_corr,
+            'correlation_factor': 1.0,
+            'adjusted_size': base_size
+        }
+
+        if avg_corr > self.high_corr_threshold:
+            # Reduce position based on correlation
+            excess_corr = avg_corr - self.high_corr_threshold
+            max_excess = 1.0 - self.high_corr_threshold
+
+            # Linear reduction up to max_reduction_factor
+            reduction = (excess_corr / max_excess) * self.max_reduction_factor
+            correlation_factor = 1 - reduction
+
+            adjusted_size = base_size * correlation_factor
+            details['correlation_factor'] = correlation_factor
+            details['adjusted_size'] = adjusted_size
+
+            logger.info(
+                f"Position adjusted for correlation: {symbol} "
+                f"corr={avg_corr:.2f}, factor={correlation_factor:.2f}, "
+                f"size {base_size:.3f} -> {adjusted_size:.3f}"
+            )
+
+            return adjusted_size, details
+
+        return base_size, details
+
+
+class SectorConcentrationChecker:
+    """
+    ISSUE 5.3 FIX: Check and enforce sector concentration limits.
+
+    Can over-concentrate in a single sector even if individual positions
+    are within limits.
+    """
+
+    def __init__(
+        self,
+        max_sector_pct: float = 0.30,
+        sector_map: Optional[Dict[str, str]] = None
+    ):
+        """
+        Initialize SectorConcentrationChecker.
+
+        Args:
+            max_sector_pct: Maximum exposure per sector
+            sector_map: Dict mapping symbol -> sector name
+        """
+        self.max_sector_pct = max_sector_pct
+        self.sector_map = sector_map or {}
+
+    def set_sector_map(self, sector_map: Dict[str, str]) -> None:
+        """Update sector mappings."""
+        self.sector_map = sector_map
+
+    def get_sector(self, symbol: str) -> str:
+        """Get sector for a symbol."""
+        return self.sector_map.get(symbol, 'Unknown')
+
+    def check_sector_concentration(
+        self,
+        symbol: str,
+        new_position: float,
+        current_positions: Dict[str, float]
+    ) -> Tuple[float, Dict[str, Any]]:
+        """
+        Check if new position would exceed sector concentration limits.
+
+        Args:
+            symbol: New symbol
+            new_position: Proposed position size (as pct of capital)
+            current_positions: Current positions {symbol: pct}
+
+        Returns:
+            Tuple of (allowed_size, details_dict)
+        """
+        sector = self.get_sector(symbol)
+
+        # Calculate current sector exposure
+        current_sector_exposure = sum(
+            pos for sym, pos in current_positions.items()
+            if self.get_sector(sym) == sector
+        )
+
+        details = {
+            'symbol': symbol,
+            'sector': sector,
+            'current_sector_exposure': current_sector_exposure,
+            'proposed_position': new_position,
+            'max_sector_pct': self.max_sector_pct,
+            'allowed_position': new_position
+        }
+
+        # Check if would exceed limit
+        if current_sector_exposure + new_position > self.max_sector_pct:
+            allowed = max(0, self.max_sector_pct - current_sector_exposure)
+            details['allowed_position'] = allowed
+            details['limited'] = True
+
+            logger.warning(
+                f"Sector {sector} at limit: current={current_sector_exposure:.1%}, "
+                f"proposed={new_position:.1%}, allowed={allowed:.1%}"
+            )
+
+            return allowed, details
+
+        details['limited'] = False
+        return new_position, details
+
+
+# =============================================================================
+# CATEGORY 6 FIXES: Risk Management Improvements
+# =============================================================================
+
+class TieredDrawdownControl:
+    """
+    ISSUE 6.1 FIX: Multi-level drawdown response system.
+
+    20% max drawdown stop triggers too late. This implements tiered
+    responses at different drawdown levels.
+    """
+
+    # Default levels: (drawdown_threshold, action, parameter)
+    DEFAULT_LEVELS = [
+        (0.05, "reduce_leverage", 0.5),   # At 5% DD, reduce leverage by 50%
+        (0.10, "reduce_positions", 0.3),  # At 10% DD, reduce position count by 30%
+        (0.15, "halt_new_trades", None),  # At 15% DD, stop new entries
+        (0.20, "liquidate_all", None),    # At 20% DD, close everything
+    ]
+
+    def __init__(
+        self,
+        levels: Optional[List[Tuple[float, str, Optional[float]]]] = None
+    ):
+        """
+        Initialize TieredDrawdownControl.
+
+        Args:
+            levels: List of (threshold, action, param) tuples
+        """
+        self.levels = levels or self.DEFAULT_LEVELS
+        self._current_level_idx = -1
+
+    def check_drawdown(
+        self,
+        current_drawdown: float
+    ) -> Tuple[Optional[str], Optional[float], Dict[str, Any]]:
+        """
+        Check drawdown and determine required action.
+
+        Args:
+            current_drawdown: Current drawdown (positive number, e.g., 0.08 = 8%)
+
+        Returns:
+            Tuple of (action, parameter, details)
+        """
+        current_drawdown = abs(current_drawdown)  # Ensure positive
+
+        details = {
+            'current_drawdown': current_drawdown,
+            'triggered_level': None,
+            'action': None,
+            'parameter': None,
+            'previous_level': self._current_level_idx
+        }
+
+        # Find which level is triggered
+        triggered_action = None
+        triggered_param = None
+        triggered_level = -1
+
+        for i, (threshold, action, param) in enumerate(self.levels):
+            if current_drawdown >= threshold:
+                triggered_level = i
+                triggered_action = action
+                triggered_param = param
+
+        if triggered_level > self._current_level_idx:
+            # New level triggered
+            details['triggered_level'] = triggered_level
+            details['action'] = triggered_action
+            details['parameter'] = triggered_param
+
+            logger.warning(
+                f"DRAWDOWN LEVEL {triggered_level} TRIGGERED: "
+                f"DD={current_drawdown:.1%}, Action={triggered_action}"
+            )
+
+            self._current_level_idx = triggered_level
+
+        return triggered_action, triggered_param, details
+
+    def reset(self) -> None:
+        """Reset drawdown level tracking."""
+        self._current_level_idx = -1
+
+
+class IntradayRiskLimits:
+    """
+    ISSUE 6.2 FIX: Real-time intraday risk monitoring.
+
+    Only tracking daily loss limit but no intraday limits.
+    """
+
+    def __init__(
+        self,
+        max_intraday_loss: float = -0.01,  # -1% intraday limit
+        max_intraday_trades: int = 50,
+        max_intraday_drawdown: float = 0.015  # 1.5% max intraday DD
+    ):
+        """
+        Initialize IntradayRiskLimits.
+
+        Args:
+            max_intraday_loss: Maximum intraday loss percentage
+            max_intraday_trades: Maximum trades per day
+            max_intraday_drawdown: Maximum intraday drawdown
+        """
+        self.max_intraday_loss = max_intraday_loss
+        self.max_intraday_trades = max_intraday_trades
+        self.max_intraday_drawdown = max_intraday_drawdown
+
+        # Tracking
+        self.intraday_pnl = 0.0
+        self.intraday_trades = 0
+        self.intraday_high = 0.0
+        self._trading_halted = False
+        self._halt_reason = None
+
+    def reset_day(self) -> None:
+        """Reset for new trading day."""
+        self.intraday_pnl = 0.0
+        self.intraday_trades = 0
+        self.intraday_high = 0.0
+        self._trading_halted = False
+        self._halt_reason = None
+
+    def update_pnl(self, pnl_change: float) -> None:
+        """Update intraday P&L."""
+        self.intraday_pnl += pnl_change
+        if self.intraday_pnl > self.intraday_high:
+            self.intraday_high = self.intraday_pnl
+
+    def record_trade(self) -> None:
+        """Record that a trade was executed."""
+        self.intraday_trades += 1
+
+    def can_trade(self) -> Tuple[bool, str]:
+        """
+        Check if trading is allowed based on intraday limits.
+
+        Returns:
+            Tuple of (can_trade, reason)
+        """
+        if self._trading_halted:
+            return False, f"halted: {self._halt_reason}"
+
+        # Check intraday loss limit
+        if self.intraday_pnl < self.max_intraday_loss:
+            self._trading_halted = True
+            self._halt_reason = f"intraday_loss_limit ({self.intraday_pnl:.2%})"
+            logger.warning(f"Intraday loss limit hit: {self.intraday_pnl:.2%}")
+            return False, self._halt_reason
+
+        # Check trade count
+        if self.intraday_trades >= self.max_intraday_trades:
+            self._trading_halted = True
+            self._halt_reason = f"trade_count_limit ({self.intraday_trades})"
+            logger.warning(f"Intraday trade limit hit: {self.intraday_trades}")
+            return False, self._halt_reason
+
+        # Check intraday drawdown
+        intraday_dd = self.intraday_high - self.intraday_pnl
+        if intraday_dd > self.max_intraday_drawdown:
+            self._trading_halted = True
+            self._halt_reason = f"intraday_drawdown ({intraday_dd:.2%})"
+            logger.warning(f"Intraday drawdown limit hit: {intraday_dd:.2%}")
+            return False, self._halt_reason
+
+        return True, "allowed"
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current intraday risk status."""
+        return {
+            'intraday_pnl': self.intraday_pnl,
+            'intraday_trades': self.intraday_trades,
+            'intraday_high': self.intraday_high,
+            'intraday_drawdown': self.intraday_high - self.intraday_pnl,
+            'trading_halted': self._trading_halted,
+            'halt_reason': self._halt_reason
+        }
+
+
+class VolatilityRegimeAdjuster:
+    """
+    ISSUE 6.3 FIX: Adjust risk parameters based on market volatility regime.
+
+    Risk parameters don't adjust based on market volatility regime.
+    """
+
+    def __init__(
+        self,
+        base_max_position: float = 0.10,
+        base_stop_loss_mult: float = 1.0,
+        base_gross_exposure: float = 0.80
+    ):
+        """
+        Initialize VolatilityRegimeAdjuster.
+
+        Args:
+            base_max_position: Base maximum position size
+            base_stop_loss_mult: Base stop loss multiplier
+            base_gross_exposure: Base max gross exposure
+        """
+        self.base_max_position = base_max_position
+        self.base_stop_loss_mult = base_stop_loss_mult
+        self.base_gross_exposure = base_gross_exposure
+
+    def get_adjusted_risk_params(
+        self,
+        vix_level: float
+    ) -> Dict[str, float]:
+        """
+        Get risk parameters adjusted for VIX level.
+
+        Args:
+            vix_level: Current VIX level
+
+        Returns:
+            Dict of adjusted risk parameters
+        """
+        if vix_level > 30:  # High volatility regime
+            return {
+                'max_position_pct': self.base_max_position * 0.5,
+                'stop_loss_mult': self.base_stop_loss_mult * 1.5,  # Wider stops
+                'max_gross_exposure': 0.5,
+                'regime': 'high_volatility'
+            }
+        elif vix_level > 20:  # Elevated volatility
+            return {
+                'max_position_pct': self.base_max_position * 0.7,
+                'stop_loss_mult': self.base_stop_loss_mult * 1.2,
+                'max_gross_exposure': 0.65,
+                'regime': 'elevated_volatility'
+            }
+        elif vix_level < 15:  # Low volatility regime
+            return {
+                'max_position_pct': self.base_max_position * 1.2,
+                'stop_loss_mult': self.base_stop_loss_mult * 0.8,  # Tighter stops
+                'max_gross_exposure': 0.9,
+                'regime': 'low_volatility'
+            }
+        else:  # Normal volatility
+            return {
+                'max_position_pct': self.base_max_position,
+                'stop_loss_mult': self.base_stop_loss_mult,
+                'max_gross_exposure': self.base_gross_exposure,
+                'regime': 'normal_volatility'
+            }
+
+
+# =============================================================================
+# CATEGORY 7 FIXES: Data Pipeline Improvements
+# =============================================================================
+
+class DataQualityValidator:
+    """
+    ISSUE 7.1 FIX: Validate data quality before training.
+
+    No systematic validation that downloaded data meets quality standards.
+    """
+
+    REQUIREMENTS = {
+        'min_bars_per_day': 20,  # At least 20 15-min bars per day
+        'max_missing_pct': 0.05,  # Max 5% missing data
+        'max_zero_volume_pct': 0.01,  # Max 1% zero volume bars
+        'min_price': 1.0,  # No penny stocks
+        'max_price_gap_pct': 0.20,  # Max 20% gap between bars
+    }
+
+    def __init__(self, requirements: Optional[Dict[str, float]] = None):
+        """
+        Initialize DataQualityValidator.
+
+        Args:
+            requirements: Custom requirements (uses defaults if not provided)
+        """
+        self.requirements = requirements or self.REQUIREMENTS.copy()
+
+    def validate(
+        self,
+        df: pd.DataFrame,
+        symbol: str
+    ) -> Dict[str, Any]:
+        """
+        Validate data quality for a symbol.
+
+        Args:
+            df: OHLCV DataFrame
+            symbol: Symbol name
+
+        Returns:
+            Dict with validation results
+        """
+        results = {
+            'symbol': symbol,
+            'total_bars': len(df),
+            'passed': True,
+            'warnings': [],
+            'errors': []
+        }
+
+        if len(df) == 0:
+            results['passed'] = False
+            results['errors'].append("Empty DataFrame")
+            return results
+
+        # Calculate metrics
+        results['bars_per_day'] = len(df) / max(1, df.index.normalize().nunique())
+        results['missing_pct'] = df.isnull().mean().mean()
+        results['zero_volume_pct'] = (df['volume'] == 0).mean() if 'volume' in df.columns else 0
+        results['min_price'] = df['close'].min() if 'close' in df.columns else 0
+        results['max_price'] = df['close'].max() if 'close' in df.columns else 0
+
+        # Calculate price gaps
+        if 'close' in df.columns:
+            returns = df['close'].pct_change().abs()
+            results['max_gap_pct'] = returns.max()
+        else:
+            results['max_gap_pct'] = 0
+
+        # Check requirements
+        if results['bars_per_day'] < self.requirements['min_bars_per_day']:
+            results['errors'].append(
+                f"bars_per_day {results['bars_per_day']:.1f} < "
+                f"min {self.requirements['min_bars_per_day']}"
+            )
+            results['passed'] = False
+
+        if results['missing_pct'] > self.requirements['max_missing_pct']:
+            results['errors'].append(
+                f"missing_pct {results['missing_pct']:.1%} > "
+                f"max {self.requirements['max_missing_pct']:.1%}"
+            )
+            results['passed'] = False
+
+        if results['zero_volume_pct'] > self.requirements['max_zero_volume_pct']:
+            results['warnings'].append(
+                f"zero_volume_pct {results['zero_volume_pct']:.1%} > "
+                f"max {self.requirements['max_zero_volume_pct']:.1%}"
+            )
+
+        if results['min_price'] < self.requirements['min_price']:
+            results['errors'].append(
+                f"min_price ${results['min_price']:.2f} < "
+                f"${self.requirements['min_price']:.2f}"
+            )
+            results['passed'] = False
+
+        if results['max_gap_pct'] > self.requirements['max_price_gap_pct']:
+            results['warnings'].append(
+                f"max_gap {results['max_gap_pct']:.1%} > "
+                f"threshold {self.requirements['max_price_gap_pct']:.1%}"
+            )
+
+        # Log results
+        status = "PASSED" if results['passed'] else "FAILED"
+        logger.info(
+            f"Data quality validation {status} for {symbol}: "
+            f"{len(results['errors'])} errors, {len(results['warnings'])} warnings"
+        )
+
+        return results
+
+
+# =============================================================================
+# CATEGORY 8 FIXES: Production Readiness
+# =============================================================================
+
+class ModelStalenessDetector:
+    """
+    ISSUE 8.1 FIX: Detect when model performance degrades over time.
+
+    No mechanism to detect when model needs retraining.
+    """
+
+    def __init__(
+        self,
+        performance_window: int = 100,
+        min_sharpe: float = 0.3,
+        min_accuracy: float = 0.50
+    ):
+        """
+        Initialize ModelStalenessDetector.
+
+        Args:
+            performance_window: Number of trades to evaluate
+            min_sharpe: Minimum Sharpe ratio threshold
+            min_accuracy: Minimum accuracy threshold
+        """
+        self.performance_window = performance_window
+        self.min_sharpe = min_sharpe
+        self.min_accuracy = min_accuracy
+
+        self.recent_returns: List[float] = []
+        self.recent_predictions: List[int] = []  # 1 = correct, 0 = incorrect
+
+    def update(
+        self,
+        trade_return: float,
+        prediction_correct: bool
+    ) -> None:
+        """Update with new trade result."""
+        self.recent_returns.append(trade_return)
+        self.recent_predictions.append(1 if prediction_correct else 0)
+
+        # Keep only window
+        if len(self.recent_returns) > self.performance_window:
+            self.recent_returns.pop(0)
+            self.recent_predictions.pop(0)
+
+    def is_stale(self) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Check if model has become stale.
+
+        Returns:
+            Tuple of (is_stale, details)
+        """
+        details = {
+            'n_trades': len(self.recent_returns),
+            'sufficient_data': len(self.recent_returns) >= self.performance_window,
+            'sharpe': None,
+            'accuracy': None,
+            'sharpe_stale': False,
+            'accuracy_stale': False,
+            'is_stale': False
+        }
+
+        if len(self.recent_returns) < self.performance_window:
+            return False, details
+
+        returns = np.array(self.recent_returns)
+        predictions = np.array(self.recent_predictions)
+
+        # Calculate Sharpe
+        if returns.std() > 0:
+            sharpe = returns.mean() / returns.std() * np.sqrt(252 * 26)
+        else:
+            sharpe = 0
+        details['sharpe'] = sharpe
+
+        # Calculate accuracy
+        accuracy = predictions.mean()
+        details['accuracy'] = accuracy
+
+        # Check thresholds
+        if sharpe < self.min_sharpe:
+            details['sharpe_stale'] = True
+            logger.warning(
+                f"Model staleness: Sharpe {sharpe:.2f} < min {self.min_sharpe}"
+            )
+
+        if accuracy < self.min_accuracy:
+            details['accuracy_stale'] = True
+            logger.warning(
+                f"Model staleness: Accuracy {accuracy:.1%} < min {self.min_accuracy:.1%}"
+            )
+
+        details['is_stale'] = details['sharpe_stale'] or details['accuracy_stale']
+
+        return details['is_stale'], details
+
+
+class FeatureDriftDetector:
+    """
+    ISSUE 8.2 FIX: Detect feature distribution drift.
+
+    No monitoring for feature distribution drift.
+    """
+
+    def __init__(
+        self,
+        drift_threshold: float = 2.0  # Z-score threshold
+    ):
+        """
+        Initialize FeatureDriftDetector.
+
+        Args:
+            drift_threshold: Z-score threshold for drift detection
+        """
+        self.drift_threshold = drift_threshold
+        self._reference_stats: Dict[str, Dict[str, float]] = {}
+
+    def set_reference_stats(
+        self,
+        features: pd.DataFrame
+    ) -> None:
+        """
+        Set reference statistics from training data.
+
+        Args:
+            features: Training features DataFrame
+        """
+        self._reference_stats = {}
+        for col in features.columns:
+            self._reference_stats[col] = {
+                'mean': features[col].mean(),
+                'std': features[col].std(),
+                'min': features[col].min(),
+                'max': features[col].max()
+            }
+
+        logger.info(f"Set reference stats for {len(self._reference_stats)} features")
+
+    def check_drift(
+        self,
+        current_features: pd.DataFrame
+    ) -> Dict[str, Any]:
+        """
+        Check for feature drift.
+
+        Args:
+            current_features: Current features DataFrame
+
+        Returns:
+            Dict with drift detection results
+        """
+        drift_report = {
+            'features_checked': 0,
+            'features_drifted': 0,
+            'drifted_features': [],
+            'details': {}
+        }
+
+        for feature in current_features.columns:
+            if feature not in self._reference_stats:
+                continue
+
+            drift_report['features_checked'] += 1
+            ref = self._reference_stats[feature]
+
+            current_mean = current_features[feature].mean()
+            zscore = (current_mean - ref['mean']) / ref['std'] if ref['std'] > 0 else 0
+
+            drift_report['details'][feature] = {
+                'ref_mean': ref['mean'],
+                'current_mean': current_mean,
+                'zscore': zscore,
+                'drifted': abs(zscore) > self.drift_threshold
+            }
+
+            if abs(zscore) > self.drift_threshold:
+                drift_report['features_drifted'] += 1
+                drift_report['drifted_features'].append(feature)
+                logger.warning(
+                    f"Feature drift detected: {feature} "
+                    f"z-score={zscore:.2f} (threshold={self.drift_threshold})"
+                )
+
+        return drift_report

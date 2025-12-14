@@ -554,3 +554,215 @@ class RegimeDetector:
         }
 
         return market_regime.map(multiplier_map).fillna(0.5)
+
+    # =========================================================================
+    # ISSUE 1.3 FIX: Point-in-Time HMM Regime Detection
+    # =========================================================================
+
+    def compute_hmm_regime_pit(
+        self,
+        returns: pd.Series,
+        n_states: int = 3,
+        min_samples: int = 252,
+        refit_frequency: int = 21
+    ) -> pd.DataFrame:
+        """
+        Point-in-Time HMM regime detection.
+
+        FIXES Issue 1.3: HMM models trained on entire dataset cause look-ahead
+        bias. This method uses expanding window - at each point, HMM is fit
+        using only past data.
+
+        Args:
+            returns: Return series
+            n_states: Number of hidden states
+            min_samples: Minimum samples needed before fitting HMM
+            refit_frequency: How often to refit the HMM (bars)
+
+        Returns:
+            DataFrame with point-in-time HMM predictions
+        """
+        try:
+            from hmmlearn import hmm
+        except ImportError:
+            logger.warning("hmmlearn not installed, using fallback PIT method")
+            return self._fallback_hmm_pit(returns, min_samples)
+
+        returns_clean = returns.dropna()
+        n_samples = len(returns_clean)
+
+        if n_samples < min_samples:
+            logger.warning(
+                f"Insufficient samples ({n_samples}) for PIT HMM. "
+                f"Need at least {min_samples}."
+            )
+            return self._fallback_hmm_pit(returns, min_samples)
+
+        # Initialize result arrays
+        result = pd.DataFrame(index=returns.index)
+        result['hmm_state_pit'] = np.nan
+        result['hmm_regime_pit'] = np.nan
+        result['hmm_confidence_pit'] = np.nan
+
+        # Track last fit index to avoid refitting every bar
+        last_fit_idx = 0
+        current_model = None
+        current_regime_map = None
+
+        for i in range(min_samples, n_samples):
+            current_idx = returns_clean.index[i]
+
+            # Check if we need to refit
+            should_refit = (
+                current_model is None or
+                (i - last_fit_idx) >= refit_frequency
+            )
+
+            if should_refit:
+                # Fit HMM using only data up to current point (not including current)
+                train_data = returns_clean.iloc[:i].values.reshape(-1, 1)
+
+                try:
+                    model = hmm.GaussianHMM(
+                        n_components=n_states,
+                        covariance_type="full",
+                        n_iter=50,  # Fewer iterations for speed
+                        random_state=42
+                    )
+                    model.fit(train_data)
+                    current_model = model
+                    last_fit_idx = i
+
+                    # Create regime mapping based on state means
+                    state_means = model.means_.flatten()
+                    state_order = np.argsort(state_means)
+
+                    current_regime_map = {
+                        state_order[0]: 'bear',
+                        state_order[-1]: 'bull',
+                    }
+                    if len(state_order) > 2:
+                        for j in state_order[1:-1]:
+                            current_regime_map[j] = 'neutral'
+
+                except Exception as e:
+                    logger.debug(f"HMM fit failed at index {i}: {e}")
+                    continue
+
+            # Predict current state using past-only model
+            if current_model is not None:
+                try:
+                    current_return = returns_clean.iloc[[i]].values.reshape(-1, 1)
+                    state = current_model.predict(current_return)[0]
+                    proba = current_model.predict_proba(current_return)[0]
+
+                    result.loc[current_idx, 'hmm_state_pit'] = state
+                    result.loc[current_idx, 'hmm_regime_pit'] = current_regime_map.get(state, 'unknown')
+                    result.loc[current_idx, 'hmm_confidence_pit'] = np.max(proba)
+
+                except Exception as e:
+                    logger.debug(f"HMM predict failed at index {i}: {e}")
+
+        # Log statistics
+        valid_count = result['hmm_state_pit'].notna().sum()
+        logger.info(
+            f"PIT HMM regime detection complete: {valid_count}/{len(returns)} "
+            f"predictions, refit every {refit_frequency} bars"
+        )
+
+        return result
+
+    def _fallback_hmm_pit(
+        self,
+        returns: pd.Series,
+        min_samples: int = 252
+    ) -> pd.DataFrame:
+        """
+        Point-in-time fallback when hmmlearn not available.
+
+        Uses expanding window volatility percentile ranking.
+        """
+        result = pd.DataFrame(index=returns.index)
+        result['hmm_state_pit'] = np.nan
+        result['hmm_regime_pit'] = np.nan
+        result['hmm_confidence_pit'] = np.nan
+
+        returns_clean = returns.dropna()
+
+        for i in range(min_samples, len(returns_clean)):
+            current_idx = returns_clean.index[i]
+
+            # Use only past data for percentile calculation
+            past_returns = returns_clean.iloc[:i]
+
+            # Calculate rolling volatility
+            vol = past_returns.rolling(20).std()
+            current_vol = vol.iloc[-1]
+
+            # Percentile rank within past data only
+            vol_percentile = (vol < current_vol).mean()
+
+            # Classify
+            if vol_percentile < 0.33:
+                state = 0
+                regime = 'low_vol'
+            elif vol_percentile < 0.67:
+                state = 1
+                regime = 'normal'
+            else:
+                state = 2
+                regime = 'high_vol'
+
+            result.loc[current_idx, 'hmm_state_pit'] = state
+            result.loc[current_idx, 'hmm_regime_pit'] = regime
+            result.loc[current_idx, 'hmm_confidence_pit'] = abs(vol_percentile - 0.5) * 2
+
+        return result
+
+    def generate_regime_features_pit(
+        self,
+        prices: pd.Series,
+        window: int = 20,
+        min_samples: int = 252
+    ) -> pd.DataFrame:
+        """
+        Generate point-in-time regime features (no look-ahead bias).
+
+        FIXES Issue 1.3: This is the preferred method for generating regime
+        features for model training. Uses expanding window approach where
+        each feature only uses data available at that point in time.
+
+        Args:
+            prices: Price series
+            window: Lookback window for basic regime detection
+            min_samples: Minimum samples for HMM fitting
+
+        Returns:
+            DataFrame with point-in-time regime features
+        """
+        returns = prices.pct_change()
+        features = pd.DataFrame(index=prices.index)
+
+        # Basic regime detection (already point-in-time as it uses rolling windows)
+        basic_regime = self.detect_regime(prices, returns, window)
+        features = pd.concat([features, basic_regime], axis=1)
+
+        # Point-in-time HMM regime (ISSUE 1.3 FIX)
+        try:
+            hmm_regime_pit = self.compute_hmm_regime_pit(returns, min_samples=min_samples)
+            features = pd.concat([features, hmm_regime_pit], axis=1)
+        except Exception as e:
+            logger.warning(f"PIT HMM regime detection failed: {e}")
+
+        # Regime-based adjustments
+        features['regime_vol_adjustment'] = self._calculate_vol_adjustment(
+            features.get('vol_regime', pd.Series(index=prices.index))
+        )
+
+        features['regime_position_multiplier'] = self._calculate_position_multiplier(
+            features.get('market_regime', pd.Series(index=prices.index))
+        )
+
+        logger.info("Generated point-in-time regime features (no look-ahead bias)")
+
+        return features

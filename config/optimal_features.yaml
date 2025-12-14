@@ -207,8 +207,12 @@ training:
   cv:
     method: purged_kfold
     n_splits: 5
-    embargo_pct: 0.05
-    purge_gap: 10
+    # ISSUE 1.2 FIX: Increased from 0.05 to 0.11 to account for 200-bar
+    # feature lookback. With 200-bar lookback features + buffer, minimum
+    # embargo should be ~250 bars (~11% for typical 2000-sample dataset)
+    embargo_pct: 0.11
+    # ISSUE 1.2 FIX: Increased from 10 to 250 to match feature lookback
+    purge_gap: 250
 
   # Ensemble
   ensemble:

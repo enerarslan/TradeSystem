@@ -2414,3 +2414,516 @@ class WalkForwardOptimizer:
                 key=lambda x: x['test_sharpe']
             )['best_params']
         }
+
+
+# =============================================================================
+# CATEGORY 3 FIXES: Backtest Engine Improvements
+# =============================================================================
+
+class RealisticSlippageModel:
+    """
+    ISSUE 3.1 FIX: Institutional-grade slippage estimation.
+
+    Fixed 5 bps slippage doesn't account for:
+    - Order size relative to ADV
+    - Market volatility
+    - Time of day
+    - Spread regime
+
+    This model uses the square-root market impact model (JPMorgan standard).
+    """
+
+    def __init__(
+        self,
+        base_spread_bps: float = 5.0,
+        impact_coefficient: float = 0.1,
+        max_slippage_pct: float = 0.05
+    ):
+        """
+        Initialize RealisticSlippageModel.
+
+        Args:
+            base_spread_bps: Base bid-ask spread in basis points
+            impact_coefficient: Market impact coefficient (k in impact formula)
+            max_slippage_pct: Maximum slippage cap (default 5%)
+        """
+        self.base_spread_bps = base_spread_bps
+        self.impact_coefficient = impact_coefficient
+        self.max_slippage_pct = max_slippage_pct
+
+        # Cache for ADV (would be loaded from data in production)
+        self._adv_cache: Dict[str, float] = {}
+
+    def set_adv(self, symbol: str, adv: float) -> None:
+        """Set average daily volume for a symbol."""
+        self._adv_cache[symbol] = adv
+
+    def calculate_slippage(
+        self,
+        symbol: str,
+        quantity: int,
+        price: float,
+        current_volume: float,
+        volatility: float,
+        time_of_day: Optional[datetime] = None,
+        adv: Optional[float] = None
+    ) -> float:
+        """
+        Calculate realistic slippage for an order.
+
+        Uses square-root market impact model:
+        Impact = k * sigma * sqrt(participation_rate)
+
+        Args:
+            symbol: Trading symbol
+            quantity: Order quantity (shares)
+            price: Current price
+            current_volume: Current bar's volume
+            volatility: Current volatility (daily)
+            time_of_day: Time of day for time-based adjustments
+            adv: Average daily volume (optional, uses cache if not provided)
+
+        Returns:
+            Total slippage as a percentage (e.g., 0.001 = 0.1%)
+        """
+        # Get ADV
+        adv = adv or self._adv_cache.get(symbol)
+        if adv is None or adv <= 0:
+            # Fallback to using current volume * estimated multiplier
+            adv = current_volume * 26  # Assume 26 bars per day
+
+        if adv <= 0:
+            return self.base_spread_bps / 10000  # Return base spread
+
+        # Calculate participation rate
+        participation_rate = abs(quantity) / adv if adv > 0 else 0.01
+
+        # Square-root market impact model (JPMorgan standard)
+        # Impact = k * sigma * sqrt(Q/ADV)
+        market_impact = self.impact_coefficient * volatility * np.sqrt(participation_rate)
+
+        # Add bid-ask spread (half spread for crossing)
+        spread_cost = (self.base_spread_bps / 10000) / 2
+
+        # Time-of-day adjustment (spreads wider at open/close)
+        time_multiplier = 1.0
+        if time_of_day is not None:
+            hour = time_of_day.hour
+            minute = time_of_day.minute
+
+            # First 30 min and last 30 min have wider spreads
+            if hour == 9 and minute < 60:  # First hour
+                time_multiplier = 1.5
+            elif hour >= 15 and minute >= 30:  # Last 30 min
+                time_multiplier = 1.3
+            elif hour == 12:  # Lunch hour (lower liquidity)
+                time_multiplier = 1.2
+
+        # Volatility adjustment (higher vol = wider impact)
+        vol_multiplier = 1.0 + max(0, (volatility - 0.01) * 10)  # Increase above 1% daily vol
+
+        # Total slippage
+        total_slippage = (market_impact + spread_cost) * time_multiplier * vol_multiplier
+
+        # Cap at maximum
+        total_slippage = min(total_slippage, self.max_slippage_pct)
+
+        logger.debug(
+            f"Slippage for {symbol}: impact={market_impact:.4f}, spread={spread_cost:.4f}, "
+            f"total={total_slippage:.4f} (participation={participation_rate:.4f})"
+        )
+
+        return total_slippage
+
+    def estimate_impact_for_order_size(
+        self,
+        symbol: str,
+        target_value: float,
+        price: float,
+        volatility: float,
+        adv: float
+    ) -> Dict[str, float]:
+        """
+        Estimate impact for different order sizes.
+
+        Useful for determining optimal order sizing.
+
+        Returns:
+            Dict with order sizes and estimated impacts
+        """
+        results = {}
+        for pct_adv in [0.01, 0.05, 0.10, 0.25, 0.50]:
+            quantity = int(pct_adv * adv)
+            slippage = self.calculate_slippage(
+                symbol, quantity, price, adv / 26, volatility, adv=adv
+            )
+            results[f'{int(pct_adv * 100)}%_adv'] = {
+                'quantity': quantity,
+                'value': quantity * price,
+                'slippage_pct': slippage,
+                'slippage_cost': quantity * price * slippage
+            }
+
+        return results
+
+
+class LiquidityAwareFillModel:
+    """
+    ISSUE 3.2 FIX: Fill model that considers liquidity constraints.
+
+    Orders fill based on available volume, with partial fills when
+    order size exceeds available liquidity.
+    """
+
+    def __init__(
+        self,
+        participation_limit: float = 0.10,
+        min_fill_ratio: float = 0.25
+    ):
+        """
+        Initialize LiquidityAwareFillModel.
+
+        Args:
+            participation_limit: Maximum fraction of bar volume to fill (default 10%)
+            min_fill_ratio: Minimum fill ratio (reject if below this)
+        """
+        self.participation_limit = participation_limit
+        self.min_fill_ratio = min_fill_ratio
+
+    def calculate_fill(
+        self,
+        order_quantity: int,
+        bar_volume: float,
+        order_type: str = 'market'
+    ) -> Tuple[int, int, str]:
+        """
+        Calculate fill quantity considering liquidity.
+
+        Args:
+            order_quantity: Requested order quantity
+            bar_volume: Current bar's volume
+            order_type: 'market', 'limit', etc.
+
+        Returns:
+            Tuple of (filled_quantity, remaining_quantity, fill_status)
+        """
+        available_volume = int(bar_volume * self.participation_limit)
+
+        if order_quantity <= available_volume:
+            # Full fill
+            return order_quantity, 0, 'filled'
+
+        # Partial fill
+        filled_quantity = available_volume
+        remaining = order_quantity - filled_quantity
+
+        fill_ratio = filled_quantity / order_quantity
+
+        if fill_ratio < self.min_fill_ratio:
+            # Reject - insufficient liquidity
+            logger.warning(
+                f"Order rejected: insufficient liquidity. "
+                f"Requested {order_quantity}, available {available_volume}"
+            )
+            return 0, order_quantity, 'rejected'
+
+        logger.info(
+            f"Partial fill: {filled_quantity}/{order_quantity} ({fill_ratio:.1%})"
+        )
+        return filled_quantity, remaining, 'partial'
+
+
+class TieredCommissionModel:
+    """
+    ISSUE 3.3 FIX: Institutional tiered commission structure.
+
+    Flat $0.005/share doesn't reflect tiered pricing most institutions use.
+    """
+
+    # Default tier structure (per-share rates)
+    DEFAULT_TIERS = [
+        (100_000, 0.0035),      # First 100K shares: $0.0035/share
+        (1_000_000, 0.0020),    # Next 900K: $0.0020/share
+        (float('inf'), 0.0015)  # Above 1M: $0.0015/share
+    ]
+
+    def __init__(
+        self,
+        tiers: Optional[List[Tuple[float, float]]] = None,
+        min_commission: float = 1.0
+    ):
+        """
+        Initialize TieredCommissionModel.
+
+        Args:
+            tiers: List of (volume_threshold, per_share_rate) tuples
+            min_commission: Minimum commission per order
+        """
+        self.tiers = tiers or self.DEFAULT_TIERS
+        self.min_commission = min_commission
+
+        # Track monthly volume for tier calculation
+        self._monthly_volume = 0
+
+    def reset_monthly_volume(self) -> None:
+        """Reset monthly volume counter."""
+        self._monthly_volume = 0
+
+    def add_volume(self, shares: int) -> None:
+        """Add to monthly volume."""
+        self._monthly_volume += abs(shares)
+
+    def calculate_commission(
+        self,
+        shares: int,
+        include_monthly_tier: bool = True
+    ) -> float:
+        """
+        Calculate commission for an order.
+
+        Args:
+            shares: Number of shares
+            include_monthly_tier: Whether to consider monthly volume for tiering
+
+        Returns:
+            Commission amount in dollars
+        """
+        shares = abs(shares)
+
+        if include_monthly_tier:
+            # Determine effective rate based on monthly volume
+            volume_for_tiers = self._monthly_volume + shares
+        else:
+            volume_for_tiers = shares
+
+        # Find applicable tier
+        rate = self.tiers[-1][1]  # Default to highest tier rate
+        for threshold, tier_rate in self.tiers:
+            if volume_for_tiers <= threshold:
+                rate = tier_rate
+                break
+
+        commission = shares * rate
+        commission = max(commission, self.min_commission)
+
+        return commission
+
+    def get_effective_rate(self) -> float:
+        """Get current effective per-share rate based on monthly volume."""
+        for threshold, rate in self.tiers:
+            if self._monthly_volume < threshold:
+                return rate
+        return self.tiers[-1][1]
+
+
+class OvernightGapHandler:
+    """
+    ISSUE 3.4 FIX: Handle overnight gaps in stop-loss calculation.
+
+    Strategy doesn't account for overnight gaps which can blow through
+    stop-losses. This class detects gaps and adjusts stop-loss execution.
+    """
+
+    def __init__(
+        self,
+        gap_threshold: float = 0.02,
+        use_gap_open_for_stops: bool = True
+    ):
+        """
+        Initialize OvernightGapHandler.
+
+        Args:
+            gap_threshold: Minimum gap size to consider (default 2%)
+            use_gap_open_for_stops: Whether to use open price when gapped through stop
+        """
+        self.gap_threshold = gap_threshold
+        self.use_gap_open_for_stops = use_gap_open_for_stops
+
+    def check_overnight_gap(
+        self,
+        prev_close: float,
+        current_open: float,
+        position_side: str,
+        stop_loss: float
+    ) -> Dict[str, Any]:
+        """
+        Check for overnight gap and determine actual exit price.
+
+        Args:
+            prev_close: Previous bar's close price
+            current_open: Current bar's open price
+            position_side: 'long' or 'short'
+            stop_loss: Stop loss price
+
+        Returns:
+            Dictionary with gap analysis and recommended exit
+        """
+        gap_pct = (current_open - prev_close) / prev_close
+
+        result = {
+            'has_gap': abs(gap_pct) >= self.gap_threshold,
+            'gap_pct': gap_pct,
+            'gap_direction': 'up' if gap_pct > 0 else 'down',
+            'gapped_through_stop': False,
+            'actual_exit_price': None,
+            'slippage_from_stop': 0.0
+        }
+
+        if not result['has_gap']:
+            return result
+
+        # Check if gap went through stop loss
+        if position_side == 'long':
+            if current_open < stop_loss and prev_close >= stop_loss:
+                result['gapped_through_stop'] = True
+                if self.use_gap_open_for_stops:
+                    result['actual_exit_price'] = current_open
+                    result['slippage_from_stop'] = (stop_loss - current_open) / stop_loss
+                else:
+                    result['actual_exit_price'] = stop_loss
+
+                logger.warning(
+                    f"Long position gapped through stop: "
+                    f"stop={stop_loss:.2f}, open={current_open:.2f}, "
+                    f"slippage={result['slippage_from_stop']:.2%}"
+                )
+
+        elif position_side == 'short':
+            if current_open > stop_loss and prev_close <= stop_loss:
+                result['gapped_through_stop'] = True
+                if self.use_gap_open_for_stops:
+                    result['actual_exit_price'] = current_open
+                    result['slippage_from_stop'] = (current_open - stop_loss) / stop_loss
+                else:
+                    result['actual_exit_price'] = stop_loss
+
+                logger.warning(
+                    f"Short position gapped through stop: "
+                    f"stop={stop_loss:.2f}, open={current_open:.2f}, "
+                    f"slippage={result['slippage_from_stop']:.2%}"
+                )
+
+        return result
+
+
+def verify_position_limits(
+    positions_df: pd.DataFrame,
+    max_position_pct: float,
+    capital: float
+) -> Dict[str, Any]:
+    """
+    ISSUE 3.5 FIX: Verify position limits are properly enforced.
+
+    Args:
+        positions_df: DataFrame with position values (columns = symbols)
+        max_position_pct: Maximum position as percentage of capital
+        capital: Total capital
+
+    Returns:
+        Dictionary with validation results
+    """
+    if positions_df.empty:
+        return {'valid': True, 'violations': []}
+
+    # Calculate position percentages
+    position_pcts = positions_df.abs() / capital
+
+    # Find violations
+    violations = []
+    for col in position_pcts.columns:
+        col_max = position_pcts[col].max()
+        if col_max > max_position_pct:
+            violation_idx = position_pcts[position_pcts[col] > max_position_pct].index
+            violations.append({
+                'symbol': col,
+                'max_pct': col_max,
+                'limit': max_position_pct,
+                'violation_times': list(violation_idx[:5])  # First 5 violations
+            })
+
+    if violations:
+        logger.error(
+            f"Position limit violations detected for {len(violations)} symbols: "
+            f"{[v['symbol'] for v in violations]}"
+        )
+
+    return {
+        'valid': len(violations) == 0,
+        'violations': violations,
+        'max_position_pct_observed': position_pcts.max().max() if not position_pcts.empty else 0
+    }
+
+
+class EnhancedBacktestConfig:
+    """
+    Enhanced backtest configuration with all Category 3 fixes integrated.
+
+    Usage:
+        config = EnhancedBacktestConfig(
+            initial_capital=1_000_000,
+            use_realistic_slippage=True,
+            use_liquidity_aware_fills=True,
+            use_tiered_commissions=True,
+            handle_overnight_gaps=True
+        )
+    """
+
+    def __init__(
+        self,
+        initial_capital: float = 1_000_000,
+        use_realistic_slippage: bool = True,
+        use_liquidity_aware_fills: bool = True,
+        use_tiered_commissions: bool = True,
+        handle_overnight_gaps: bool = True,
+        max_position_pct: float = 0.10,
+        participation_limit: float = 0.10,
+        base_spread_bps: float = 5.0,
+        impact_coefficient: float = 0.1
+    ):
+        """
+        Initialize EnhancedBacktestConfig.
+
+        Args:
+            initial_capital: Starting capital
+            use_realistic_slippage: Enable market impact model
+            use_liquidity_aware_fills: Enable liquidity-aware fills
+            use_tiered_commissions: Enable tiered commissions
+            handle_overnight_gaps: Enable overnight gap handling
+            max_position_pct: Maximum position size as pct of capital
+            participation_limit: Max fraction of volume to take
+            base_spread_bps: Base bid-ask spread
+            impact_coefficient: Market impact coefficient
+        """
+        self.initial_capital = initial_capital
+        self.max_position_pct = max_position_pct
+
+        # Initialize components based on flags
+        self.slippage_model = None
+        self.fill_model = None
+        self.commission_model = None
+        self.gap_handler = None
+
+        if use_realistic_slippage:
+            self.slippage_model = RealisticSlippageModel(
+                base_spread_bps=base_spread_bps,
+                impact_coefficient=impact_coefficient
+            )
+
+        if use_liquidity_aware_fills:
+            self.fill_model = LiquidityAwareFillModel(
+                participation_limit=participation_limit
+            )
+
+        if use_tiered_commissions:
+            self.commission_model = TieredCommissionModel()
+
+        if handle_overnight_gaps:
+            self.gap_handler = OvernightGapHandler()
+
+        logger.info(
+            f"EnhancedBacktestConfig initialized: "
+            f"slippage={use_realistic_slippage}, "
+            f"liquidity={use_liquidity_aware_fills}, "
+            f"tiered_comm={use_tiered_commissions}, "
+            f"gaps={handle_overnight_gaps}"
+        )
