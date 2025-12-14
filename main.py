@@ -351,7 +351,7 @@ class AlphaTradeSystem:
                 min_accuracy_threshold=0.52,
                 min_samples_for_eval=100
             )
-            self.staleness_detector.register_alert_handler(self._on_staleness_alert)
+            self.staleness_detector.add_alert_handler(self._on_staleness_alert)
 
             # ================================================================
             # PHASE 6: Execution Infrastructure

@@ -269,22 +269,41 @@ def train_model(
 
     print(f"\n[1/4] Processing {len(symbols)} symbols...")
 
-    all_data = []
+    # Use parallel processing for feature engineering (biggest speedup)
+    from joblib import Parallel, delayed
+    import multiprocessing
 
-    for symbol in tqdm(symbols, desc="Loading & engineering"):
-        result = process_symbol(
-            symbol=symbol,
-            loader=loader,
-            feature_engineer=feature_engineer,
-            use_meta_labeling=use_meta_labeling,
-            pt_sl_ratio=pt_sl_ratio,
-            max_holding_period=max_holding_period
-        )
+    n_jobs = min(multiprocessing.cpu_count() - 1, 8)  # Leave 1 core free, max 8
 
-        if result is not None:
-            result['X']['_symbol'] = symbol  # Track symbol
-            all_data.append(result)
-            logger.info(f"{symbol}: {result['n_samples']} samples")
+    def _process_symbol_wrapper(symbol):
+        """Wrapper for parallel processing."""
+        try:
+            result = process_symbol(
+                symbol=symbol,
+                loader=loader,
+                feature_engineer=feature_engineer,
+                use_meta_labeling=use_meta_labeling,
+                pt_sl_ratio=pt_sl_ratio,
+                max_holding_period=max_holding_period
+            )
+            if result is not None:
+                result['X']['_symbol'] = symbol
+                return result
+        except Exception as e:
+            logger.warning(f"{symbol} failed: {e}")
+        return None
+
+    # Parallel processing - much faster for 46 symbols
+    all_data = Parallel(n_jobs=n_jobs, prefer="threads", verbose=1)(
+        delayed(_process_symbol_wrapper)(symbol) for symbol in symbols
+    )
+
+    # Filter out None results
+    all_data = [d for d in all_data if d is not None]
+
+    for d in all_data:
+        symbol = d['X']['_symbol'].iloc[0] if '_symbol' in d['X'].columns else 'unknown'
+        logger.info(f"{symbol}: {d['n_samples']} samples")
 
     if not all_data:
         raise ValueError("No data processed for any symbol!")
@@ -343,7 +362,9 @@ def train_model(
             'depth': 5,
             'learning_rate': 0.03,
             'l2_leaf_reg': 3.0,
-            'verbose': 0
+            'verbose': 0,
+            'task_type': 'GPU',
+            'devices': '0'
         },
         'xgboost': {
             'n_estimators': 500,

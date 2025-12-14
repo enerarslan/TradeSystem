@@ -654,11 +654,12 @@ class HMMRegimeDetector:
                 logger.warning("Insufficient data for HMM fitting")
                 return self
 
-            # Fit Gaussian HMM
+            # Fit Gaussian HMM (optimized for speed)
             model = hmm.GaussianHMM(
                 n_components=n_states,
-                covariance_type="full",
-                n_iter=n_iterations,
+                covariance_type="diag",  # Faster than "full"
+                n_iter=min(n_iterations, 50),  # Usually converges by 50
+                tol=1e-3,  # Looser tolerance for speed
                 random_state=42
             )
 
@@ -711,8 +712,9 @@ class HMMRegimeDetector:
 
             model = hmm.GaussianHMM(
                 n_components=n_states,
-                covariance_type="full",
-                n_iter=100,
+                covariance_type="diag",  # Faster than "full"
+                n_iter=50,  # Usually converges by 50
+                tol=1e-3,  # Looser tolerance for speed
                 random_state=42
             )
 
