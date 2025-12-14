@@ -59,7 +59,7 @@ from src.risk.portfolio import PortfolioManager
 from src.risk.bayesian_kelly import BayesianKellySizer, TradeOutcome
 from src.risk.correlation_breaker import CorrelationCircuitBreaker, CorrelationState
 
-from src.backtest.engine import BacktestEngine, BacktestConfig
+from src.backtest.engine import InstitutionalBacktestEngine, BacktestConfig
 from src.backtest.metrics import MetricsCalculator, ReportGenerator
 from src.backtest.realistic_fills import RealisticFillSimulator, FillModel
 
@@ -774,12 +774,20 @@ class AlphaTradeSystem:
             strategy = self.strategies[0]
             logger.warning(f"ML strategy not found, falling back to '{strategy.name}'")
 
-        # Run backtest
-        engine = BacktestEngine(
+        # Run backtest with institutional-grade microstructure simulation
+        engine = InstitutionalBacktestEngine(
             strategy=strategy,
             config=config,
             position_sizer=self.position_sizer,
-            risk_manager=self.risk_manager
+            risk_manager=self.risk_manager,
+            enable_microstructure=True,
+            microstructure_config={
+                'base_spread_bps': 5,
+                'latency_mean_ms': 10,
+                'latency_std_ms': 5,
+                'partial_fill_prob': 0.1,
+                'adverse_selection_factor': 0.3
+            }
         )
 
         result = engine.run(data)
@@ -803,6 +811,13 @@ class AlphaTradeSystem:
         logger.info("Starting live trading...")
 
         self._running = True
+
+        # ===== START RECONCILIATION LOOP =====
+        # This ensures local state stays synchronized with broker
+        if self.reconciliation_engine:
+            asyncio.create_task(self.reconciliation_engine.start())
+            logger.info("Reconciliation engine started in background")
+        # =====================================
 
         # Register signal handlers
         loop = asyncio.get_event_loop()

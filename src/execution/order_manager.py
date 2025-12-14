@@ -11,7 +11,7 @@ Features:
 """
 
 import asyncio
-from typing import Dict, List, Optional, Any, Callable, Union
+from typing import Dict, List, Optional, Any, Callable, Union, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -24,6 +24,7 @@ from .broker_api import (
     BrokerAPI, OrderRequest, OrderResponse,
     OrderSide, OrderType, TimeInForce
 )
+from .protected_positions import ProtectedPositionManager, ProtectionConfig
 from ..risk.risk_manager import RiskManager, PreTradeRiskCheck
 from ..utils.logger import get_logger, get_audit_logger
 
@@ -365,17 +366,20 @@ class OrderManager:
     - Order routing
     - Lifecycle management
     - Event handling
+    - Protected position management (bracket orders with SL/TP)
     """
 
     def __init__(
         self,
         broker: BrokerAPI,
         risk_manager: Optional[RiskManager] = None,
-        max_pending_orders: int = 100
+        max_pending_orders: int = 100,
+        protected_manager: Optional[ProtectedPositionManager] = None
     ):
         self.broker = broker
         self.risk_manager = risk_manager
         self.max_pending_orders = max_pending_orders
+        self._protected_manager = protected_manager
 
         # Order tracking
         self._orders: Dict[str, Order] = {}
@@ -585,6 +589,60 @@ class OrderManager:
             logger.error(f"Order submission failed: {e}")
             self._emit('order_rejected', order)
             return False
+
+    async def submit_order_with_protection(
+        self,
+        order: Order,
+        stop_loss_pct: float = 0.02,
+        take_profit_pct: float = 0.04
+    ) -> Tuple[Order, bool]:
+        """
+        Submit order with bracket protection (server-side SL/TP).
+
+        Delegates to ProtectedPositionManager for proper SL/TP handling.
+        This ensures every position has broker-side protection via bracket orders.
+
+        Args:
+            order: Order to submit
+            stop_loss_pct: Stop loss percentage from entry (default 2%)
+            take_profit_pct: Take profit percentage from entry (default 4%)
+
+        Returns:
+            Tuple of (Order, success_bool)
+        """
+        if self._protected_manager is None:
+            # Fallback to basic submission without protection
+            logger.warning("No protected manager available, submitting without bracket orders")
+            success = await self.submit_order(order)
+            return order, success
+
+        # Use protected manager for bracket orders
+        position, success = await self._protected_manager.open_position_with_protection(
+            symbol=order.symbol,
+            side=order.side.value,
+            quantity=order.quantity,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct
+        )
+
+        if success:
+            order.status = OrderStatus.FILLED
+            order.broker_order_id = position.position_id
+            self._orders[order.order_id] = order
+            logger.info(
+                f"Protected order submitted: {order.symbol} "
+                f"SL: {stop_loss_pct:.1%} TP: {take_profit_pct:.1%}"
+            )
+        else:
+            order.status = OrderStatus.FAILED
+            order.notes.append("Protected position failed")
+
+        return order, success
+
+    def set_protected_manager(self, manager: ProtectedPositionManager) -> None:
+        """Set the protected position manager for bracket order support."""
+        self._protected_manager = manager
+        logger.info("Protected position manager attached to OrderManager")
 
     async def cancel_order(self, order_id: str) -> bool:
         """Cancel order"""

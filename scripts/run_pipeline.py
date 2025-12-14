@@ -620,7 +620,7 @@ def stage_backtest(force: bool = False) -> bool:
         return True
 
     try:
-        from src.backtest.engine import BacktestEngine, BacktestConfig
+        from src.backtest.engine import InstitutionalBacktestEngine, BacktestConfig
         from src.backtest.metrics import MetricsCalculator, ReportGenerator
         from src.backtest.realistic_fills import RealisticFillSimulator, FillModel
         from src.strategy.ml_strategy import MLStrategy
@@ -680,14 +680,22 @@ def stage_backtest(force: bool = False) -> bool:
             warmup_period=100
         )
 
-        # Run backtest
-        print("\nRunning backtest with realistic fills...")
+        # Run backtest with institutional-grade microstructure simulation
+        print("\nRunning backtest with institutional microstructure simulation...")
 
-        engine = BacktestEngine(
+        engine = InstitutionalBacktestEngine(
             strategy=strategy,
             config=config,
             position_sizer=position_sizer,
-            risk_manager=risk_manager
+            risk_manager=risk_manager,
+            enable_microstructure=True,
+            microstructure_config={
+                'base_spread_bps': 5,
+                'latency_mean_ms': 10,
+                'latency_std_ms': 5,
+                'partial_fill_prob': 0.1,
+                'adverse_selection_factor': 0.3
+            }
         )
 
         result = engine.run(data)
