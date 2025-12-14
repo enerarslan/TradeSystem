@@ -1,9 +1,9 @@
-training_date: '2025-12-14T07:27:24.542877'
+training_date: '2025-12-14T14:22:44.668361'
 configuration:
   model_type: catboost
   meta_labeling: true
   n_estimators: 100
-  n_splits: 5
+  n_splits: 3
   embargo_pct: 0.05
   pt_sl_ratio:
   - 1.5
@@ -61,31 +61,31 @@ data:
   n_samples: 449763
   n_features: 51
 performance:
-  train_accuracy: 0.5834450588421013
-  train_precision: 0.583581485783753
-  train_recall: 0.5834450588421013
-  train_f1: 0.5831686336099696
-  cv_accuracy: 0.5637458054445224
-  cv_accuracy_std: 0.001238511173078443
+  train_accuracy: 0.5775397264781674
+  train_precision: 0.5777028473779587
+  train_recall: 0.5775397264781674
+  train_f1: 0.5772352467147437
+  cv_accuracy: 0.5512325380255824
+  cv_accuracy_std: 0.0013447375491103474
 top_features:
-  primary_signal: 13.13388212791927
-  close_ffd: 7.612673026867354
-  vol_60: 6.955178738188921
-  micro_amihud_illiq: 5.5461779484188565
-  vol_20: 5.091767108841989
-  micro_vpin: 4.827441573375265
-  micro_kyle_lambda: 3.8554768118609797
-  micro_vpin_zscore: 3.826691666758509
-  regime_vol_percentile: 3.5587158502459637
-  micro_ofi: 3.4066946586721305
-  vol_gk: 3.3217041042866837
-  vol_10: 2.950126003176822
-  vol_parkinson: 2.895681697389234
-  return_60: 2.524736320846719
-  log_return_60: 2.3985332569762354
-  micro_micro_score: 2.305022583690998
-  micro_kyle_lambda_pct: 2.085958585938486
-  signal_confidence: 2.0475429530403337
-  log_return_20: 1.9253390728631559
-  volume_ffd: 1.9117154966819634
-training_time_seconds: 7822.666042089462
+  primary_signal: 10.622402332665194
+  close_ffd: 6.847248106686334
+  vol_60: 6.5696150322530436
+  micro_amihud_illiq: 5.450029932347418
+  micro_vpin_zscore: 4.178698434881054
+  micro_vpin: 4.001352032763783
+  vol_10: 3.9567562501829863
+  vol_gk: 3.892948908265911
+  micro_kyle_lambda: 3.7011458217531152
+  vol_20: 3.528400141899366
+  micro_kyle_lambda_pct: 3.3954571886006097
+  regime_vol_percentile: 3.228352605457732
+  micro_ofi: 3.024481428664698
+  vol_parkinson: 2.9466374403470104
+  log_return_60: 2.8263297661872016
+  return_60: 2.5277178189773273
+  signal_confidence: 2.361216712081537
+  micro_micro_score: 2.2202338834646307
+  volume_ffd: 2.052003356746825
+  regime_prob_neutral: 1.8845305287797525
+training_time_seconds: 4670.893971204758
