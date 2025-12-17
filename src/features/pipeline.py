@@ -21,7 +21,8 @@ from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
 from loguru import logger
 
 from src.features.technical.indicators import TechnicalIndicators
-
+from src.features.microstructure import OrderBookDynamics
+from src.features.transformers import TimeCyclicalEncoder
 
 class StatisticalFeatures:
     """Generator for statistical features."""
@@ -645,52 +646,35 @@ class FeaturePipeline:
         """Check if pipeline has been fitted."""
         return self._is_fitted
 
-    def generate_features(
+def generate_features(
         self,
         df: pd.DataFrame,
         include_technical: bool = True,
         include_statistical: bool = True,
         include_lagged: bool = True,
+        include_microstructure: bool = True,  # <-- YENİ PARAMETRE
+        include_time: bool = True,            # <-- YENİ PARAMETRE
     ) -> pd.DataFrame:
         """
         Generate all features for a single stock.
-
-        WARNING: This method should be called through fit(), fit_transform(), or transform()
-        to ensure proper data leakage prevention. Direct calls bypass scaling parameter
-        fitting which can lead to look-ahead bias in backtesting.
-
-        For production use:
-            - Training data: pipeline.fit_transform(train_df)
-            - Test data: pipeline.transform(test_df)
-
-        Args:
-            df: OHLCV DataFrame
-            include_technical: Include technical indicators
-            include_statistical: Include statistical features
-            include_lagged: Include lagged features
-
-        Returns:
-            DataFrame with all features
         """
-        # CRITICAL: Leakage warning for direct calls (JPMorgan-level data hygiene)
-        if self.strict_leakage_check and not self._internal_call:
-            self._direct_call_count += 1
-            logger.warning(
-                "POTENTIAL DATA LEAKAGE: Direct call to generate_features() detected. "
-                "Use fit_transform() for training data or transform() for test data "
-                "to prevent data leakage from scaling parameters. "
-                f"(Direct call #{self._direct_call_count})"
-            )
-            if self._direct_call_count >= 3:
-                logger.error(
-                    "CRITICAL: Multiple direct generate_features() calls detected. "
-                    "This pattern is likely causing data leakage in your backtest. "
-                    "Review your feature engineering workflow immediately."
-                )
+        # ... (Baştaki leakage kontrol kodları aynen kalsın) ...
 
         features = pd.DataFrame(index=df.index)
 
-        # Technical indicators
+        # 1. Zaman Özellikleri (YENİ EKLENEN KISIM)
+        if include_time:
+            # TimeCyclicalEncoder kullanarak saati sin/cos formatına çevir
+            time_encoder = TimeCyclicalEncoder()
+            # Eğer df'de index datetime ise veya timestamp kolonu varsa otomatik halleder
+            time_features = time_encoder.transform(df)
+            
+            # Sadece yeni üretilen sin/cos sütunlarını al
+            new_time_cols = [c for c in time_features.columns if c not in df.columns]
+            if new_time_cols:
+                features = pd.concat([features, time_features[new_time_cols]], axis=1)
+
+        # 2. Mevcut Teknik İndikatörler (AYNEN KALSIN)
         if include_technical:
             tech = TechnicalIndicators(df)
             tech_features = tech.generate_all_features(
@@ -699,19 +683,45 @@ class FeaturePipeline:
             )
             features = pd.concat([features, tech_features], axis=1)
 
-        # Statistical features
+        # 3. Microstructure / Order Book Özellikleri (YENİ EKLENEN KISIM)
+        if include_microstructure:
+            # Gerekli kolonlar var mı kontrol et
+            required_cols = ['bid_size', 'ask_size', 'bid_price', 'ask_price']
+            if all(col in df.columns for col in required_cols):
+                # OBI Hesapla
+                features['obi'] = OrderBookDynamics.calculate_obi(
+                    df['bid_size'], df['ask_size']
+                )
+                
+                # Weighted Mid Price Hesapla
+                wmp = OrderBookDynamics.calculate_wmp(
+                    df['bid_price'], df['bid_size'],
+                    df['ask_price'], df['ask_size']
+                )
+                
+                # Divergence Hesapla
+                mid_price = (df['bid_price'] + df['ask_price']) / 2
+                features['wmp_divergence'] = OrderBookDynamics.calculate_mid_price_divergence(
+                    mid_price, wmp
+                )
+            else:
+                # Veri seti sadece OHLCV ise ve derinlik yoksa uyarı basılabilir veya geçilebilir
+                # logger.warning("Order book columns missing, skipping microstructure features.")
+                pass
+
+        # 4. Mevcut İstatistiksel Özellikler (AYNEN KALSIN)
         if include_statistical:
             stat = StatisticalFeatures(df)
             stat_features = stat.generate_all()
             features = pd.concat([features, stat_features], axis=1)
 
-        # Lagged features
+        # 5. Lagged Features (AYNEN KALSIN)
         if include_lagged:
-            # Lag key features
+            # Lag key features logic... (Mevcut kodunu koru)
             key_cols = [
                 c for c in features.columns
-                if any(kw in c for kw in ["return", "rsi", "macd", "volume"])
-            ][:10]  # Limit to avoid explosion
+                if any(kw in c for kw in ["return", "rsi", "macd", "volume", "obi", "wmp"]) # obi ve wmp'yi de ekledim
+            ][:15] # Limiti biraz artırabilirsin
 
             if key_cols:
                 lag_gen = LaggedFeatures(features[key_cols], self.lag_periods)

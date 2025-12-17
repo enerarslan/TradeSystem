@@ -16,7 +16,7 @@ Designed for institutional requirements:
 - Memory-preserving transformations
 - Regime detection
 """
-
+from .transformers import TimeCyclicalEncoder
 from src.features.technical.indicators import TechnicalIndicators
 from src.features.pipeline import (
     FeaturePipeline,

@@ -20,7 +20,7 @@ from .order_flow_imbalance import OrderFlowImbalance, calculate_ofi
 from .vpin import VPIN, calculate_vpin
 from .kyle_lambda import KyleLambda, calculate_kyle_lambda
 from .roll_spread import RollSpread, AmihudIlliquidity
-
+from .order_book_dynamics import OrderBookDynamics
 __all__ = [
     "OrderFlowImbalance",
     "calculate_ofi",
