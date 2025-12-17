@@ -150,20 +150,129 @@ class PolarsDataLoader:
 
     def __init__(
         self,
+        data_dir: Union[str, Path, None] = None,
         validate_schema: bool = True,
         default_schema: dict[str, Any] = None,
         n_threads: Optional[int] = None,
+        file_format: str = "csv",
     ):
+        """
+        Initialize PolarsDataLoader.
+
+        Args:
+            data_dir: Directory containing data files (for DataLoader API compatibility)
+            validate_schema: Validate data against schema
+            default_schema: Default schema for validation
+            n_threads: Number of threads for parallel loading
+            file_format: File format (csv, parquet)
+        """
         if not POLARS_AVAILABLE:
             raise ImportError(
                 "Polars is required for PolarsDataLoader. "
                 "Install with: pip install polars"
             )
 
+        self.data_dir = Path(data_dir) if data_dir else None
         self.validate_schema = validate_schema
         self.default_schema = default_schema or OHLCV_SCHEMA
         self.n_threads = n_threads
+        self.file_format = file_format
         self.validator = SchemaValidator(self.default_schema)
+        self._symbols: Optional[list[str]] = None
+        self._data_cache: dict[str, "pl.DataFrame"] = {}
+
+    @property
+    def symbols(self) -> list[str]:
+        """Get list of available symbols (DataLoader API compatibility)."""
+        if self._symbols is None:
+            self._symbols = self._discover_symbols()
+        return self._symbols
+
+    def _discover_symbols(self) -> list[str]:
+        """Discover available symbols from data directory."""
+        if self.data_dir is None:
+            return []
+
+        # Try primary format first (SYMBOL_15min.csv)
+        pattern_15min = f"*_15min.{self.file_format}"
+        files_15min = list(self.data_dir.glob(pattern_15min))
+
+        symbols = []
+        for f in files_15min:
+            symbol = f.stem.replace("_15min", "")
+            if symbol and not symbol.startswith("."):
+                symbols.append(symbol)
+
+        # Fallback to simple format (SYMBOL.csv)
+        if not symbols:
+            pattern_simple = f"*.{self.file_format}"
+            files_simple = list(self.data_dir.glob(pattern_simple))
+            for f in files_simple:
+                symbol = f.stem
+                if symbol and not symbol.startswith(".") and symbol not in ["symbol_metadata"]:
+                    symbols.append(symbol)
+
+        symbols.sort()
+        logger.info(f"PolarsDataLoader discovered {len(symbols)} symbols")
+        return symbols
+
+    def load_symbol(
+        self,
+        symbol: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        Load data for a single symbol (DataLoader API compatibility).
+
+        Returns pandas DataFrame for compatibility with existing code.
+
+        Args:
+            symbol: Symbol to load
+            start_date: Start date filter (optional)
+            end_date: End date filter (optional)
+
+        Returns:
+            pandas DataFrame with OHLCV data
+        """
+        if self.data_dir is None:
+            raise ValueError("data_dir must be set to use load_symbol")
+
+        # Check cache
+        cache_key = f"{symbol}_{start_date}_{end_date}"
+        if cache_key in self._data_cache:
+            return self._data_cache[cache_key].to_pandas()
+
+        # Find file
+        file_path = self.data_dir / f"{symbol}_15min.{self.file_format}"
+        if not file_path.exists():
+            file_path = self.data_dir / f"{symbol}.{self.file_format}"
+        if not file_path.exists():
+            raise FileNotFoundError(f"No data file found for {symbol}")
+
+        # Load with Polars (fast)
+        if self.file_format == "csv":
+            lf = self.load_csv(file_path, lazy=True)
+        else:
+            lf = self.load_parquet(file_path, lazy=True)
+
+        # Apply date filters
+        if start_date:
+            lf = lf.filter(pl.col("timestamp") >= pl.lit(start_date).str.to_datetime())
+        if end_date:
+            lf = lf.filter(pl.col("timestamp") <= pl.lit(end_date).str.to_datetime())
+
+        # Collect and cache
+        df = lf.collect()
+        self._data_cache[cache_key] = df
+
+        # Convert to pandas with timestamp as index (for compatibility)
+        pdf = df.to_pandas()
+        if "timestamp" in pdf.columns:
+            pdf["timestamp"] = pd.to_datetime(pdf["timestamp"])
+            pdf = pdf.set_index("timestamp")
+
+        return pdf
 
     def load_csv(
         self,

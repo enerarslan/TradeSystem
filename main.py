@@ -543,14 +543,14 @@ def load_data(
         logger.error(f"Data directory not found: {data_path}")
         return {}
 
-    # Initialize components - Use Polars for JPMorgan-level performance (10-100x faster)
+    # Initialize data loader - Use Polars for JPMorgan-level performance (10-100x faster)
     if POLARS_AVAILABLE:
         from src.data.loaders.polars_loader import PolarsDataLoader
         loader = PolarsDataLoader(data_dir=str(data_dir))
-        logger.info("Using PolarsDataLoader (high-performance)")
+        logger.info("Using PolarsDataLoader (high-performance, 10-100x faster)")
     else:
         loader = DataLoader(data_dir=str(data_dir))
-        logger.warning("Polars not available, using pandas DataLoader (slower)")
+        logger.warning("Polars not available - using pandas DataLoader (slower)")
 
     validator = DataValidator()
     processor = DataProcessor()
