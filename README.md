@@ -1,6 +1,29 @@
 # AlphaTrade System
 
-An institutional-grade algorithmic trading platform designed for systematic, multi-strategy trading. Built with production-quality code following JPMorgan-level design standards.
+An **institutional-grade algorithmic trading platform** designed for systematic, multi-strategy trading. Built with production-quality code following **JPMorgan-level** design standards.
+
+**Version 2.0.0** - Complete institutional upgrade based on comprehensive architectural audit.
+
+## What's New in v2.0.0
+
+### Critical Bug Fixes
+- **Data Leakage Prevention**: Proper fit/transform separation in feature pipeline
+- **Target Variable Leakage Fix**: Embargo period implementation for ML strategies
+- **Purge Gap Calculation**: Dynamic calculation (horizon + lookback + buffer = 215)
+- **Infinite Liquidity Fix**: Order book execution with partial fills enabled by default
+
+### New Institutional Modules
+- **Point-in-Time (PIT) Data Infrastructure**: Survivorship bias handling, as-of queries
+- **Regime Detection**: HMM, GARCH volatility, correlation regimes, structural breaks
+- **Microstructure Features**: OFI, VPIN, Kyle's Lambda, Roll Spread, Amihud
+- **Black-Litterman Portfolio Optimization**: View-based portfolio construction
+- **L2/L3 Order Book Support**: Full order book reconstruction and features
+- **Hyperparameter Management**: YAML-based versioned hyperparameter storage
+
+### Enhanced Metrics
+- **Deflated Sharpe Ratio (DSR)**: Primary optimization metric with multiple testing correction
+- **Probabilistic Sharpe Ratio (PSR)**: Statistical significance of Sharpe
+- **Minimum Track Record Length (MinTRL)**: Required history for statistical validity
 
 ## Key Features
 
@@ -15,6 +38,7 @@ An institutional-grade algorithmic trading platform designed for systematic, mul
 - **Deep Learning**: LSTM with attention, Temporal Fusion Transformer (PyTorch Lightning)
 - **Experiment Tracking**: MLflow integration for reproducibility
 - **Model Registry**: Staging workflow (None -> Staging -> Production -> Archived)
+- **Combinatorial Purged CV (CPCV)**: Mandatory default for institutional-grade validation
 
 ### Feature Engineering
 - **Technical Indicators**: 50+ indicators (trend, momentum, volatility, volume)
@@ -22,24 +46,40 @@ An institutional-grade algorithmic trading platform designed for systematic, mul
 - **Statistical Arbitrage**: Cointegration testing, Ornstein-Uhlenbeck estimation
 - **Macroeconomic Features**: FRED integration (GDP, CPI, yields, spreads)
 - **Feature Store**: Point-in-time feature serving with versioning
+- **Microstructure Features**: Order flow imbalance, VPIN, Kyle's lambda
+- **GARCH Volatility Models**: GARCH(1,1), EGARCH, GJR-GARCH
+
+### Data Infrastructure
+- **Point-in-Time Queries**: Historical data as it was known at any point
+- **Survivorship Bias Handling**: UniverseManager tracks delistings, M&A
+- **Corporate Action Adjustment**: Splits, dividends, spinoffs
+- **L2/L3 Order Book**: Full depth data support with reconstruction
 
 ### Backtesting
 - **Vectorized Engine**: High-performance numpy-based backtesting
 - **Event-Driven Engine**: Microsecond-precision event simulation
 - **Market Impact Models**: Almgren-Chriss optimal execution
+- **Realistic Execution**: Partial fills, order rejection, latency simulation
 - **Monte Carlo Analysis**: Block bootstrap, Probabilistic Sharpe Ratio
 
 ### Risk Management
 - **Position Sizing**: Kelly, volatility targeting, risk parity
-- **VaR/CVaR**: Historical, parametric, and Monte Carlo methods
+- **VaR/CVaR**: Historical, parametric, and Monte Carlo methods (99% confidence)
 - **Drawdown Controls**: Automatic position scaling based on drawdown
 - **Correlation Monitoring**: Rolling correlation and regime detection
+- **ADV-Based Limits**: Maximum participation rate (2% of ADV)
 
 ### Portfolio Optimization
 - **Mean-Variance**: Classic Markowitz optimization
 - **Risk Parity**: Equal risk contribution
 - **Hierarchical Risk Parity**: Clustering-based allocation
-- **Black-Litterman**: View-based optimization
+- **Black-Litterman**: View-based optimization with ML integration
+
+### Regime Detection
+- **HMM Regime Detector**: Hidden Markov Model for market state classification
+- **Volatility Regimes**: GARCH-based volatility regime detection
+- **Correlation Regimes**: Dynamic correlation breakdown detection
+- **Structural Breaks**: CUSUM and Bai-Perron tests
 
 ### Reporting
 - **Interactive Dashboards**: Plotly-based visualizations
@@ -88,6 +128,9 @@ pip install -e ".[timescale]"
 # FRED macroeconomic data
 pip install -e ".[macro]"
 
+# Institutional features (GARCH, HMM, etc.)
+pip install -e ".[institutional]"
+
 # Development tools
 pip install -e ".[dev]"
 
@@ -105,274 +148,259 @@ AlphaTrade_System/
 │   ├── trading_config.yaml          # Trading parameters
 │   ├── strategy_params.yaml         # Strategy configuration
 │   ├── risk_limits.yaml             # Risk management limits
-│   └── logging_config.yaml          # Logging configuration
+│   ├── institutional_defaults.yaml  # Institutional-grade defaults
+│   └── hyperparameters/             # Versioned hyperparameters
+│       ├── lightgbm_defaults.yaml
+│       └── xgboost_defaults.yaml
 ├── data/
 │   ├── raw/                         # Raw OHLCV data
 │   ├── processed/                   # Processed data
 │   ├── features/                    # Feature store cache
 │   └── cache/                       # General cache
-├── scripts/
-│   └── migrate_csv_to_timescale.py  # Data migration script
 ├── src/
 │   ├── data/                        # Data layer
 │   │   ├── loaders/                 # Data loaders
-│   │   │   ├── data_loader.py       # CSV/Parquet loader
-│   │   │   └── polars_loader.py     # High-performance Polars loader
-│   │   ├── validators/              # Data validation
-│   │   ├── processors/              # Data processing
+│   │   ├── pit/                     # Point-in-Time infrastructure
+│   │   │   ├── universe_manager.py  # Survivorship bias handling
+│   │   │   ├── pit_loader.py        # PIT data loader
+│   │   │   ├── corporate_actions.py # Split/dividend adjustment
+│   │   │   └── as_of_query.py       # As-of timestamp queries
+│   │   ├── orderbook/               # L2/L3 order book support
+│   │   │   ├── order_book.py        # Order book data structures
+│   │   │   ├── book_builder.py      # Book reconstruction
+│   │   │   └── book_features.py     # Order book features
 │   │   └── storage/                 # Storage backends
-│   │       ├── cache.py             # In-memory caching
-│   │       └── timescale_client.py  # TimescaleDB client
 │   ├── features/                    # Feature engineering
 │   │   ├── technical/               # Technical indicators
-│   │   │   └── indicators.py        # 50+ indicators
+│   │   ├── regime/                  # Regime detection
+│   │   │   ├── hmm_regime.py        # HMM regime detector
+│   │   │   ├── volatility_regime.py # GARCH volatility regimes
+│   │   │   ├── correlation_regime.py # Correlation breakdown
+│   │   │   └── structural_breaks.py # CUSUM, Bai-Perron tests
+│   │   ├── microstructure/          # Microstructure features
+│   │   │   ├── order_flow_imbalance.py # OFI
+│   │   │   ├── vpin.py              # Volume-Synchronized PIN
+│   │   │   ├── kyle_lambda.py       # Kyle's lambda
+│   │   │   └── roll_spread.py       # Roll spread, Amihud
 │   │   ├── fractional_diff.py       # Fractional differentiation
-│   │   ├── cointegration.py         # Statistical arbitrage features
-│   │   ├── macro_features.py        # FRED macroeconomic features
-│   │   ├── feature_store.py         # Feature store implementation
-│   │   └── pipeline.py              # Feature pipeline
+│   │   ├── cointegration.py         # Statistical arbitrage
+│   │   ├── macro_features.py        # FRED macroeconomic
+│   │   └── pipeline.py              # Feature pipeline (fit/transform)
 │   ├── training/                    # ML training module
-│   │   ├── experiment_tracker.py    # MLflow integration
-│   │   ├── model_registry.py        # Model lifecycle management
-│   │   ├── model_factory.py         # Standardized model creation
-│   │   ├── trainer.py               # Training orchestrator
-│   │   ├── validation.py            # Purged K-Fold CV
-│   │   ├── optimization.py          # Optuna hyperparameter optimization
+│   │   ├── validation.py            # Purged CV, CPCV, Walk-Forward
+│   │   ├── optimization.py          # Optuna optimization
+│   │   ├── hyperparameters/         # Hyperparameter management
+│   │   │   └── manager.py           # HyperparameterManager
 │   │   └── deep_learning/           # Deep learning models
-│   │       ├── losses.py            # Financial loss functions
-│   │       ├── lstm.py              # LSTM with attention
-│   │       └── transformer.py       # Temporal Fusion Transformer
+│   ├── validation/                  # Data validation
+│   │   └── leakage_detector.py      # Feature leakage detection
 │   ├── strategies/                  # Trading strategies
-│   │   ├── base.py                  # Base strategy class
-│   │   ├── momentum/                # Momentum strategies
-│   │   ├── mean_reversion/          # Mean reversion strategies
 │   │   ├── ml_based/                # ML strategies
-│   │   ├── multi_factor/            # Multi-factor strategies
+│   │   │   └── ml_alpha.py          # ML Alpha with embargo
 │   │   └── ensemble.py              # Ensemble strategy
 │   ├── risk/                        # Risk management
-│   │   ├── position_sizing.py       # Position sizing algorithms
-│   │   ├── var_models.py            # VaR/CVaR models
-│   │   ├── drawdown.py              # Drawdown controls
-│   │   └── correlation.py           # Correlation analysis
 │   ├── portfolio/                   # Portfolio management
-│   │   ├── optimizer.py             # Portfolio optimization
-│   │   ├── rebalancer.py            # Rebalancing logic
-│   │   └── allocation.py            # Asset allocation
+│   │   ├── optimizer.py             # MVO, Risk Parity, HRP
+│   │   └── black_litterman.py       # Black-Litterman optimizer
 │   ├── backtesting/                 # Backtesting engine
-│   │   ├── engine.py                # Vectorized backtest engine
-│   │   ├── event_engine.py          # Event-driven backtest engine
-│   │   ├── events/                  # Event system
-│   │   │   ├── base.py              # Base event classes
-│   │   │   ├── market.py            # Market events (tick, bar, order book)
-│   │   │   ├── signal.py            # Signal events
-│   │   │   ├── order.py             # Order events
-│   │   │   ├── fill.py              # Fill events
-│   │   │   └── queue.py             # Event queue and dispatcher
+│   │   ├── engine.py                # Vectorized backtest
+│   │   ├── event_engine.py          # Event-driven (order book exec)
 │   │   ├── market_impact.py         # Almgren-Chriss model
-│   │   ├── monte_carlo.py           # Monte Carlo analysis
-│   │   ├── metrics.py               # Performance metrics
-│   │   ├── analysis.py              # Result analysis
-│   │   └── reports/                 # Report generation
-│   │       ├── report_generator.py  # HTML reports
-│   │       └── dashboard.py         # Interactive dashboards
-│   ├── execution/                   # Order execution
-│   │   ├── order_manager.py         # Order management
-│   │   ├── slippage.py              # Slippage models
-│   │   └── transaction_cost.py      # Transaction cost models
+│   │   └── metrics.py               # DSR, PSR, MinTRL
 │   └── utils/                       # Utilities
-│       ├── logger.py                # Logging utilities
-│       ├── decorators.py            # Common decorators
-│       └── helpers.py               # Helper functions
 ├── tests/                           # Test suite
-│   ├── unit/                        # Unit tests
-│   └── integration/                 # Integration tests
+│   ├── unit/
+│   │   ├── test_feature_leakage.py  # Leakage detection tests
+│   │   ├── test_purged_cv.py        # Cross-validation tests
+│   │   └── test_market_impact.py    # Market impact tests
+│   └── integration/
 ├── main.py                          # Main entry point
+├── run.py                           # Unified launcher
 └── pyproject.toml                   # Project configuration
 ```
 
 ## Quick Start
 
-### Running a Backtest (Vectorized)
-
-```python
-from src.data.loaders.data_loader import DataLoader
-from src.strategies.momentum.multi_factor_momentum import MultiFactorMomentumStrategy
-from src.backtesting.engine import BacktestEngine
-
-# Load data
-loader = DataLoader(data_path="data/raw")
-data = loader.load_all()
-
-# Create strategy
-strategy = MultiFactorMomentumStrategy(params={
-    "lookback_periods": [5, 10, 20],
-    "top_n_long": 5,
-})
-
-# Run backtest
-engine = BacktestEngine(
-    initial_capital=1_000_000,
-    commission_pct=0.001,
-    slippage_pct=0.0005,
-)
-result = engine.run(strategy, data)
-
-# Print metrics
-print(f"Total Return: {result.metrics['total_return']:.2%}")
-print(f"Sharpe Ratio: {result.metrics['sharpe_ratio']:.2f}")
-print(f"Max Drawdown: {result.metrics['max_drawdown']:.2%}")
+### First Time Setup
+```bash
+python run.py setup
 ```
 
-### Event-Driven Backtesting
-
-```python
-from src.backtesting import EventDrivenEngine, EventEngineConfig
-from src.backtesting.events import BarEvent
-
-# Configure engine
-config = EventEngineConfig(
-    initial_capital=1_000_000,
-    slippage_bps=1.0,
-    commission_per_share=0.005,
-)
-
-engine = EventDrivenEngine(config)
-
-# Define strategy callback
-def on_bar(event: BarEvent):
-    # Your strategy logic here
-    if event.close > event.open:
-        # Generate buy signal
-        pass
-
-engine.register_strategy(on_bar=on_bar)
-
-# Run backtest
-result = engine.run(data)
+### Running a Full Pipeline
+```bash
+python run.py                    # Full pipeline (train + backtest)
+python run.py backtest           # Backtest only
+python run.py train              # Train ML model
+python run.py train --deep       # Train deep learning
 ```
 
-### ML Training Pipeline
+### Running with Institutional Defaults
+```bash
+python main.py --config config/institutional_defaults.yaml
+```
 
+### Backtest with Event-Driven Engine (Order Book Execution)
+```bash
+python main.py --mode backtest --engine event-driven
+```
+
+### ML Training with CPCV
 ```python
-from src.training import Trainer, ModelFactory, OptunaOptimizer
-from src.training.validation import PurgedKFoldCV
+from src.training import Trainer, ModelFactory
+from src.training.validation import CombinatorialPurgedKFoldCV
 
 # Create model
 model = ModelFactory.create("lightgbm")
 
-# Setup cross-validation
-cv = PurgedKFoldCV(n_splits=5, purge_gap=5, embargo_pct=0.01)
-
-# Optuna optimization
-optimizer = OptunaOptimizer(
-    model_type="lightgbm",
-    cv=cv,
-    metric="sharpe_ratio",
-    n_trials=100,
+# Setup CPCV (institutional standard)
+cv = CombinatorialPurgedKFoldCV(
+    n_splits=6,
+    n_test_splits=2,
+    purge_gap=215,  # horizon(5) + lookback(200) + buffer(10)
+    embargo_pct=0.02,
 )
-best_params = optimizer.optimize(X_train, y_train)
 
-# Train with best params
+# Train
 trainer = Trainer(model=model, cv=cv)
 result = trainer.train(X_train, y_train)
 ```
 
-### Feature Engineering
-
+### Black-Litterman Portfolio Optimization
 ```python
-from src.features import (
-    TechnicalIndicators,
-    FractionalDiffTransformer,
-    MacroFeatureGenerator,
-    FeatureStore,
+from src.portfolio import (
+    BlackLittermanOptimizer,
+    create_absolute_view,
+    create_relative_view,
 )
 
-# Technical indicators
-indicators = TechnicalIndicators(data)
-features = indicators.add_all()
+optimizer = BlackLittermanOptimizer(
+    risk_free_rate=0.02,
+    tau=0.05,
+)
 
-# Fractional differentiation
-frac_diff = FractionalDiffTransformer(d=0.4)
-stationary_prices = frac_diff.fit_transform(prices)
+# Add views
+optimizer.add_view(create_absolute_view(
+    asset="AAPL",
+    expected_return=0.15,
+    confidence=0.7,
+))
 
-# Macro features
-macro_gen = MacroFeatureGenerator()
-macro_features = macro_gen.get_all_features()
+optimizer.add_view(create_relative_view(
+    long_asset="GOOGL",
+    short_asset="META",
+    expected_outperformance=0.03,
+    confidence=0.5,
+))
 
-# Feature store
-store = FeatureStore(storage_path="data/features")
-store.materialize(data, feature_names=["returns_1d", "volatility_20d"])
-features = store.get_historical_features(entity_df, ["returns_1d"])
+# Optimize
+result = optimizer.optimize(returns)
+print(result.optimal_weights)
 ```
 
-### Generate Performance Report
-
+### Regime Detection
 ```python
-from src.backtesting.reports import create_tear_sheet, PerformanceDashboard
-
-# Generate tear sheet
-html = create_tear_sheet(
-    returns=result.returns,
-    benchmark_returns=benchmark_returns,
-    strategy_name="Multi-Factor Momentum",
-    output_path="reports/tear_sheet.html",
+from src.features.regime import (
+    HMMRegimeDetector,
+    VolatilityRegimeDetector,
 )
 
-# Interactive dashboard
-dashboard = PerformanceDashboard(
-    returns=result.returns,
-    benchmark_returns=benchmark_returns,
-)
-dashboard.generate_tear_sheet(output_path="reports/dashboard.html")
+# HMM regime detection
+hmm = HMMRegimeDetector(n_regimes=3)
+regimes = hmm.fit_predict(returns)
+
+# GARCH volatility regimes
+vol_detector = VolatilityRegimeDetector()
+vol_regimes = vol_detector.detect(returns)
 ```
 
-## Configuration
+### Microstructure Features
+```python
+from src.features.microstructure import (
+    OrderFlowImbalance,
+    VPIN,
+    KyleLambda,
+)
 
-### ML Configuration (config/ml_config.yaml)
+# Order Flow Imbalance
+ofi = OrderFlowImbalance()
+ofi_values = ofi.calculate(prices, volumes, trades)
+
+# VPIN
+vpin = VPIN(bucket_size=1000)
+vpin_values = vpin.calculate(trades)
+
+# Kyle's Lambda
+kyle = KyleLambda()
+lambda_values = kyle.estimate(returns, volumes)
+```
+
+## Institutional Configuration
+
+### Key Settings (config/institutional_defaults.yaml)
 
 ```yaml
-random_seed: 42
-periods_per_year: 252
+data:
+  point_in_time: true
+  survivorship_bias_correction: true
+  corporate_action_adjustment: true
+  min_adv_filter: 1_000_000
 
-feature_selection:
-  method: importance
-  top_k: 50
-  min_importance: 0.001
+features:
+  max_lookback_periods: 200
+  microstructure_enabled: true
+  garch_volatility: true
+  leakage_check: strict
 
 cross_validation:
-  n_splits: 5
-  purge_gap: 5
-  embargo_pct: 0.01
+  type: combinatorial_purged_kfold
+  n_splits: 6
+  n_test_splits: 2
+  purge_gap: auto  # Calculated: horizon + lookback + buffer
+  embargo_pct: auto
+  min_train_samples: 1000
 
 optimization:
-  n_trials: 100
-  timeout_seconds: 3600
-  metric: sharpe_ratio
+  primary_metric: deflated_sharpe_ratio
+  multiple_testing_correction: true
+  min_track_record_months: 12
 
-models:
-  lightgbm:
-    objective: regression
-    n_estimators: 1000
-    learning_rate: 0.05
+backtesting:
+  execution_simulator: order_book
+  partial_fills: true
+  max_participation_rate: 0.02
+  latency_ms: 50
+  rejection_rate: 0.02
+
+risk:
+  var_confidence: 0.99
+  max_position_adv_pct: 5.0
+  max_sector_exposure: 0.25
+  drawdown_flatten_threshold: 0.15
 ```
 
-### Risk Configuration (config/risk_limits.yaml)
+## Performance Metrics
 
-```yaml
-position_limits:
-  max_position_pct: 0.05
-  max_sector_pct: 0.25
-  max_leverage: 1.0
+### Statistical Metrics
+- **Deflated Sharpe Ratio (DSR)**: Adjusts for multiple testing bias
+- **Probabilistic Sharpe Ratio (PSR)**: Probability of true Sharpe > benchmark
+- **Minimum Track Record Length**: Required history for statistical significance
 
-drawdown_controls:
-  warning_threshold: 0.05
-  reduction_threshold: 0.08
-  flatten_threshold: 0.15
+### Return Metrics
+- Total Return, CAGR, MTD/QTD/YTD
+- Best/Worst Day, Month, Year
 
-var_limits:
-  confidence_level: 0.95
-  max_var_pct: 0.02
-```
+### Risk-Adjusted Metrics
+- Sharpe Ratio, Sortino Ratio, Calmar Ratio
+- Omega Ratio, Information Ratio
+
+### Risk Metrics
+- Volatility, Max Drawdown, Avg Drawdown
+- VaR (95%, 99%), CVaR (Expected Shortfall)
+- Skewness, Kurtosis
+
+### Trading Metrics
+- Win Rate, Profit Factor
+- Average Win/Loss, Max Consecutive Wins/Losses
 
 ## Testing
 
@@ -380,19 +408,35 @@ var_limits:
 # Run all tests
 pytest tests/ -v
 
-# Run unit tests
-pytest tests/unit/ -v
+# Run leakage detection tests
+pytest tests/unit/test_feature_leakage.py -v
 
-# Run integration tests
-pytest tests/integration/ -v
+# Run purged CV tests
+pytest tests/unit/test_purged_cv.py -v
+
+# Run market impact tests
+pytest tests/unit/test_market_impact.py -v
 
 # Run with coverage
 pytest tests/ --cov=src --cov-report=html
-
-# Run specific markers
-pytest -m "not slow"  # Skip slow tests
-pytest -m integration  # Only integration tests
 ```
+
+## Audit Compliance
+
+This system has been audited against institutional standards. All critical issues identified in `audit_report.md` have been addressed:
+
+| Issue | Status |
+|-------|--------|
+| Data leakage in feature pipeline | FIXED |
+| Target variable construction leakage | FIXED |
+| Purged CV not enforced in optimization | FIXED |
+| Infinite liquidity assumption | FIXED |
+| No survivorship bias handling | FIXED |
+| Missing PIT data infrastructure | IMPLEMENTED |
+| Missing regime detection | IMPLEMENTED |
+| Missing microstructure features | IMPLEMENTED |
+| Missing test coverage | IMPLEMENTED |
+| Magic numbers in code | EXTERNALIZED |
 
 ## Environment Variables
 
@@ -412,31 +456,12 @@ TIMESCALE_USER=postgres
 TIMESCALE_PASSWORD=password
 ```
 
-## Performance Metrics
+## References
 
-The system calculates comprehensive performance metrics:
-
-**Return Metrics:**
-- Total Return, CAGR, MTD/QTD/YTD
-- Best/Worst Day, Month, Year
-
-**Risk-Adjusted Metrics:**
-- Sharpe Ratio, Sortino Ratio, Calmar Ratio
-- Omega Ratio, Information Ratio
-
-**Risk Metrics:**
-- Volatility, Max Drawdown, Avg Drawdown
-- VaR (95%, 99%), CVaR (Expected Shortfall)
-- Skewness, Kurtosis
-
-**Statistical Tests:**
-- Probabilistic Sharpe Ratio (PSR)
-- Deflated Sharpe Ratio (DSR)
-- Minimum Track Record Length
-
-**Trading Metrics:**
-- Win Rate, Profit Factor
-- Average Win/Loss, Max Consecutive Wins/Losses
+- Lopez de Prado, M. (2018). *Advances in Financial Machine Learning*
+- Black, F. and Litterman, R. (1992). *Global Portfolio Optimization*
+- Cartea, A. et al. (2015). *Algorithmic and High-Frequency Trading*
+- Lehalle, C.A. and Laruelle, S. (2018). *Market Microstructure in Practice*
 
 ## License
 
