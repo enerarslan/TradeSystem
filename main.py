@@ -1571,10 +1571,26 @@ def main():
 
     # Training mode
     if args.mode in ["train", "full"]:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
         if args.deep_learning:
-            train_deep_learning(data, features, config)
+            model = train_deep_learning(data, features, config)
+            # Deep Learning modelini kaydet
+            save_path = f"models/deep_learning_{timestamp}.pth"
+            # PyTorch veya özel save metodunu buraya ekle (Model tipine göre değişebilir)
+            import torch
+            torch.save(model, save_path)
+            logger.info(f"Deep Learning Model saved to {save_path}")
+            
         else:
-            train_ml_model(data, features, config)
+            # ML Modelini eğit
+            result = train_ml_model(data, features, config)
+            
+            # Sonucu ve Modeli Kaydet
+            model_filename = f"models/{args.model}_{timestamp}.pkl"
+            with open(model_filename, "wb") as f:
+                pickle.dump(result, f)
+            logger.info(f"Trained Model ({args.model}) saved to {model_filename}")
 
     # Backtest mode
     if args.mode in ["backtest", "full"]:
