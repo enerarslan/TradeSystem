@@ -583,7 +583,12 @@ class FeatureProcessor(BaseEstimator, TransformerMixin):
 
 class FeaturePipeline:
     """
-    Complete feature engineering pipeline.
+    Complete feature engineering pipeline with proper fit/transform separation
+    to prevent data leakage.
+
+    CRITICAL: This pipeline enforces strict separation between fit() and transform()
+    to prevent look-ahead bias in backtesting. The processor is ONLY fitted on
+    training data, and the fitted parameters are applied to test data.
 
     Combines technical, statistical, and cross-sectional features
     with preprocessing.
@@ -615,6 +620,25 @@ class FeaturePipeline:
 
         self.processor = FeatureProcessor(scaling=scaling)
         self._feature_names: list[str] = []
+        self._is_fitted: bool = False
+
+        # Track max lookback for purge gap calculation
+        self._max_lookback: int = max(self.ma_periods) if self.ma_periods else 200
+
+    @property
+    def max_lookback(self) -> int:
+        """
+        Get maximum lookback period used in feature calculation.
+
+        This is critical for calculating proper purge_gap in cross-validation:
+            purge_gap = prediction_horizon + max_lookback + buffer
+        """
+        return self._max_lookback
+
+    @property
+    def is_fitted(self) -> bool:
+        """Check if pipeline has been fitted."""
+        return self._is_fitted
 
     def generate_features(
         self,
@@ -670,35 +694,89 @@ class FeaturePipeline:
 
         return features
 
+    def fit(
+        self,
+        df: pd.DataFrame,
+        **kwargs,
+    ) -> "FeaturePipeline":
+        """
+        Fit the pipeline on TRAINING data only.
+
+        CRITICAL: This method should ONLY be called with training data.
+        The processor learns scaling parameters (mean, std, etc.) from
+        this data, which will then be applied to test data via transform().
+
+        Args:
+            df: OHLCV DataFrame (TRAINING DATA ONLY)
+            **kwargs: Arguments for generate_features
+
+        Returns:
+            self (for method chaining)
+        """
+        features = self.generate_features(df, **kwargs)
+        self.processor.fit(features)
+        self._is_fitted = True
+        logger.info(f"Pipeline fitted on {len(features)} training samples")
+        return self
+
     def fit_transform(
         self,
         df: pd.DataFrame,
         **kwargs,
     ) -> pd.DataFrame:
         """
-        Generate and process features.
+        Fit and transform TRAINING data.
+
+        WARNING: This method should ONLY be used with training data.
+        For test/validation data, use transform() after fitting on training data.
+
+        DEPRECATED PATTERN: Do not use fit_transform() on the entire dataset
+        before train/test split. This causes data leakage.
+
+        CORRECT USAGE:
+            # Split data first
+            train_df = df.iloc[:split_idx]
+            test_df = df.iloc[split_idx:]
+
+            # Fit on training, transform both
+            train_features = pipeline.fit_transform(train_df)  # OK
+            test_features = pipeline.transform(test_df)        # Uses fitted params
 
         Args:
-            df: OHLCV DataFrame
+            df: OHLCV DataFrame (TRAINING DATA ONLY)
             **kwargs: Arguments for generate_features
 
         Returns:
             Processed feature DataFrame
         """
         features = self.generate_features(df, **kwargs)
+        self._is_fitted = True
         return self.processor.fit_transform(features)
 
     def transform(self, df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """
         Transform new data using fitted pipeline.
 
+        CRITICAL: Pipeline must be fitted first via fit() or fit_transform()
+        on training data. This method applies the fitted scaling parameters
+        to new data WITHOUT refitting (preventing data leakage).
+
         Args:
-            df: OHLCV DataFrame
+            df: OHLCV DataFrame (can be test/validation data)
             **kwargs: Arguments for generate_features
 
         Returns:
             Processed feature DataFrame
+
+        Raises:
+            ValueError: If pipeline has not been fitted
         """
+        if not self._is_fitted:
+            raise ValueError(
+                "Pipeline not fitted. Call fit() or fit_transform() on training data first. "
+                "This error prevents data leakage by ensuring scaling parameters are "
+                "learned only from training data."
+            )
         features = self.generate_features(df, **kwargs)
         return self.processor.transform(features)
 
@@ -706,6 +784,27 @@ class FeaturePipeline:
     def feature_names(self) -> list[str]:
         """Get list of feature names."""
         return self._feature_names
+
+    def get_purge_gap_recommendation(self, prediction_horizon: int, buffer: int = 10) -> int:
+        """
+        Calculate recommended purge gap for cross-validation.
+
+        The purge gap should be at least: prediction_horizon + max_lookback + buffer
+        to prevent information leakage from features that use historical data.
+
+        Args:
+            prediction_horizon: Number of bars ahead being predicted
+            buffer: Safety buffer (default: 10)
+
+        Returns:
+            Recommended minimum purge gap in bars
+        """
+        recommended = prediction_horizon + self._max_lookback + buffer
+        logger.info(
+            f"Recommended purge_gap={recommended} "
+            f"(horizon={prediction_horizon} + lookback={self._max_lookback} + buffer={buffer})"
+        )
+        return recommended
 
 
 def create_feature_matrix(

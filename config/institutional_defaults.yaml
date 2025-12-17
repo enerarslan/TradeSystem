@@ -1,0 +1,249 @@
+# =============================================================================
+# INSTITUTIONAL DEFAULTS CONFIGURATION
+# =============================================================================
+#
+# This configuration file contains institutional-grade defaults for the
+# AlphaTrade backtesting system. These settings are designed to prevent
+# common pitfalls that lead to over-optimistic backtest results.
+#
+# Reference:
+#   - "Advances in Financial Machine Learning" by Lopez de Prado (2018)
+#   - "Quantitative Portfolio Management" by Isichenko (2021)
+# =============================================================================
+
+version: "1.0"
+generated_date: "2024-01-01"
+
+# =============================================================================
+# DATA HANDLING
+# =============================================================================
+data:
+  # Point-in-Time (PIT) data requirements
+  point_in_time:
+    enabled: true
+    survivorship_bias_correction: true
+    corporate_action_adjustment: true
+    data_revision_tracking: true
+
+  # Minimum data quality thresholds
+  quality:
+    min_history_days: 252  # 1 year minimum
+    max_missing_pct: 5.0   # Max 5% missing data
+    min_adv_usd: 1000000   # $1M minimum ADV
+    min_price: 5.0         # No penny stocks
+
+  # Time bar settings (15-min bars)
+  bars:
+    frequency: "15min"
+    trading_hours_only: true
+    exclude_holidays: true
+
+# =============================================================================
+# FEATURE ENGINEERING
+# =============================================================================
+features:
+  # Maximum lookback periods (CRITICAL for purge gap calculation)
+  lookbacks:
+    max_ma_period: 200     # Maximum moving average period
+    max_volatility_window: 60
+    max_correlation_window: 60
+    max_feature_lookback: 200  # This determines minimum purge gap
+
+  # Feature processing
+  processing:
+    scaling_method: "robust"  # Robust to outliers
+    winsorize_pct: 0.01       # 1% winsorization
+    handle_infinity: "clip"
+    clip_std: 5.0             # Clip at 5 standard deviations
+
+  # Leakage prevention
+  leakage:
+    check_mode: "strict"      # Fail on any detected leakage
+    max_feature_target_corr: 0.95  # Flag suspiciously high correlations
+
+# =============================================================================
+# CROSS-VALIDATION
+# =============================================================================
+cross_validation:
+  # CRITICAL: Use Combinatorial Purged CV as default
+  default_method: "combinatorial_purged"  # NOT standard k-fold
+
+  # Purged K-Fold settings
+  purged_kfold:
+    n_splits: 5
+    # CRITICAL: purge_gap must be >= prediction_horizon + max_lookback
+    # For 5-bar horizon and 200-bar lookback: purge_gap >= 215
+    purge_gap: "auto"  # Calculated dynamically
+    purge_gap_buffer: 10  # Safety buffer
+    embargo_pct: 0.02  # 2% embargo after test
+
+  # Combinatorial Purged CV settings (RECOMMENDED)
+  cpcv:
+    n_splits: 6
+    n_test_splits: 2
+    purge_gap: "auto"
+    embargo_pct: 0.02
+
+  # Walk-Forward settings
+  walk_forward:
+    train_period_bars: 5040   # ~1 year of 15-min bars
+    test_period_bars: 1260    # ~3 months
+    step_size_bars: 1260      # ~3 months
+    expanding: false           # Use sliding window
+    purge_gap: "auto"
+
+# =============================================================================
+# MODEL TRAINING
+# =============================================================================
+training:
+  # Prediction settings
+  prediction:
+    horizon_bars: 5           # 5-bar ahead prediction
+    classification: true      # Binary classification
+
+  # Target construction
+  target:
+    method: "forward_return"
+    horizon: 5
+    embargo_after_target: true  # Remove samples after target calculation
+
+  # Sample requirements
+  samples:
+    min_train_samples: 1000   # Minimum after purging
+    min_test_samples: 200
+
+  # Regularization
+  regularization:
+    early_stopping: true
+    early_stopping_rounds: 50
+    min_child_samples: 20  # Prevent overfitting
+
+# =============================================================================
+# OPTIMIZATION METRICS
+# =============================================================================
+optimization:
+  # CRITICAL: Use Deflated Sharpe Ratio as primary metric
+  primary_metric: "deflated_sharpe_ratio"
+
+  # Secondary metrics for multi-objective optimization
+  secondary_metrics:
+    - "probabilistic_sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "calmar_ratio"
+
+  # Multiple testing correction
+  multiple_testing:
+    enabled: true
+    method: "bonferroni"  # Conservative correction
+    n_trials_adjustment: true
+
+  # Minimum track record
+  track_record:
+    min_months: 12          # 1 year minimum
+    min_trades: 100
+
+  # Sharpe ratio thresholds
+  sharpe_thresholds:
+    minimum_acceptable: 0.5
+    good: 1.0
+    excellent: 2.0
+    suspicious: 3.0  # Likely overfit if > 3.0
+
+# =============================================================================
+# BACKTESTING EXECUTION
+# =============================================================================
+backtesting:
+  # CRITICAL: Realistic execution simulation
+  execution:
+    use_order_book: true      # NOT simple execution
+    partial_fills: true       # Allow partial fills
+    rejection_rate: 0.02      # 2% order rejection
+
+  # Market impact
+  market_impact:
+    model: "almgren_chriss"   # Use Almgren-Chriss model
+    max_participation: 0.02   # 2% of ADV maximum
+    temporary_impact_bps: 5   # 5 bps temporary impact
+    permanent_impact_bps: 1   # 1 bps permanent impact
+
+  # Costs
+  costs:
+    commission_bps: 10        # 10 bps commission
+    slippage_bps: 5           # 5 bps slippage
+    borrowing_cost_annual: 0.02  # 2% for shorts
+
+  # Latency
+  latency:
+    order_latency_ms: 50      # 50ms order latency
+    fill_price: "next_open"   # Fill at next bar open
+
+# =============================================================================
+# RISK MANAGEMENT
+# =============================================================================
+risk:
+  # Position limits
+  position:
+    max_position_pct: 0.05    # 5% max single position
+    max_sector_pct: 0.25      # 25% max sector exposure
+    max_position_adv_pct: 5.0 # 5% of ADV max
+
+  # Drawdown controls
+  drawdown:
+    max_drawdown_pct: 0.15    # 15% max drawdown
+    flatten_threshold: 0.15   # Flatten at 15% drawdown
+    warning_threshold: 0.10   # Warning at 10%
+
+  # Value at Risk
+  var:
+    confidence: 0.99          # 99% VaR (institutional standard)
+    method: "historical"      # Historical simulation
+    lookback_days: 252        # 1 year lookback
+
+  # Leverage
+  leverage:
+    max_gross: 1.0            # No leverage by default
+    max_net: 1.0
+
+# =============================================================================
+# HYPERPARAMETER STORAGE
+# =============================================================================
+hyperparameters:
+  # Storage location
+  storage:
+    path: "config/hyperparameters"
+    format: "yaml"
+    version_control: true
+
+  # Model-specific hyperparameters
+  lightgbm:
+    n_estimators: [50, 100, 200, 500]
+    max_depth: [3, 5, 7, 10]
+    learning_rate: [0.01, 0.05, 0.1]
+    num_leaves: [15, 31, 63]
+    min_child_samples: [20, 50, 100]
+    reg_alpha: [0, 0.1, 1.0]
+    reg_lambda: [0, 0.1, 1.0]
+
+  xgboost:
+    n_estimators: [50, 100, 200, 500]
+    max_depth: [3, 5, 7, 10]
+    learning_rate: [0.01, 0.05, 0.1]
+    subsample: [0.7, 0.8, 0.9]
+    colsample_bytree: [0.7, 0.8, 0.9]
+    reg_alpha: [0, 0.1, 1.0]
+    reg_lambda: [0, 0.1, 1.0]
+
+# =============================================================================
+# LOGGING & MONITORING
+# =============================================================================
+logging:
+  level: "INFO"
+  file_rotation: true
+  max_file_size_mb: 100
+  retention_days: 90
+
+monitoring:
+  track_all_experiments: true
+  mlflow_enabled: true
+  save_artifacts: true

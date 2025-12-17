@@ -455,6 +455,9 @@ class EventEngineConfig:
     """
     Configuration for event-driven backtest engine.
 
+    INSTITUTIONAL DEFAULTS: This configuration uses realistic execution
+    simulation by default to prevent over-optimistic backtest results.
+
     Attributes:
         initial_capital: Starting capital
         slippage_bps: Slippage in basis points
@@ -463,16 +466,25 @@ class EventEngineConfig:
         market_impact_bps: Market impact in basis points
         latency_ms: Simulated latency in milliseconds
         fill_probability: Probability of limit order fill (0-1)
-        use_order_book: Use order book for execution simulation
+        use_order_book: Use order book for execution simulation (DEFAULT: True)
+        partial_fills: Allow partial fills based on available liquidity
+        max_participation_rate: Maximum % of ADV per order (0.01-0.05 typical)
+        adv_lookback_days: Days for ADV calculation
+        rejection_rate: Simulated order rejection rate
     """
     initial_capital: float = 1_000_000.0
     slippage_bps: float = 1.0
     commission_per_share: float = 0.005
     min_commission: float = 1.0
-    market_impact_bps: float = 0.0
-    latency_ms: float = 0.0
-    fill_probability: float = 1.0
-    use_order_book: bool = False
+    market_impact_bps: float = 0.5  # Increased from 0 for realism
+    latency_ms: float = 50.0  # Increased from 0 for realism
+    fill_probability: float = 0.98  # Reduced from 1.0 for realism
+    # CRITICAL: Changed defaults to prevent infinite liquidity assumption
+    use_order_book: bool = True  # CHANGED from False - prevents infinite liquidity
+    partial_fills: bool = True  # ADDED - realistic fill simulation
+    max_participation_rate: float = 0.02  # ADDED - max 2% of ADV per order
+    adv_lookback_days: int = 20  # ADDED - days for ADV calculation
+    rejection_rate: float = 0.02  # ADDED - 2% rejection rate
 
 
 @dataclass

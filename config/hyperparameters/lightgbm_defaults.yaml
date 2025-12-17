@@ -1,0 +1,198 @@
+# =============================================================================
+# LIGHTGBM HYPERPARAMETERS - INSTITUTIONAL DEFAULTS
+# =============================================================================
+#
+# This configuration file contains institutional-grade hyperparameter settings
+# for LightGBM models in the AlphaTrade backtesting system.
+#
+# These defaults are conservative to prevent overfitting and ensure
+# robust out-of-sample performance.
+#
+# Reference:
+#   - "Advances in Financial Machine Learning" by Lopez de Prado (2018)
+#   - LightGBM Documentation
+# =============================================================================
+
+version: "1.0"
+model_type: "lightgbm"
+last_updated: "2024-01-01"
+
+# =============================================================================
+# PRODUCTION DEFAULTS (Conservative)
+# =============================================================================
+# Use these for production models. They prioritize robustness over fit.
+
+production:
+  # Core parameters
+  n_estimators: 100           # Number of boosting rounds
+  max_depth: 5                # Maximum tree depth (shallow for finance)
+  learning_rate: 0.05         # Low learning rate for stability
+  num_leaves: 31              # 2^max_depth - 1 for balanced trees
+
+  # Regularization (CRITICAL for finance)
+  min_child_samples: 50       # High minimum to prevent noise fitting
+  reg_alpha: 0.1              # L1 regularization
+  reg_lambda: 0.1             # L2 regularization
+  min_split_gain: 0.01        # Minimum gain to split
+
+  # Sampling
+  subsample: 0.8              # Subsample ratio of training data
+  subsample_freq: 1           # Frequency of subsampling
+  colsample_bytree: 0.8       # Feature sampling ratio
+
+  # Early stopping
+  early_stopping_rounds: 50   # Stop if no improvement
+
+  # Other
+  n_jobs: -1                  # Use all CPU cores
+  random_state: 42            # For reproducibility
+  verbose: -1                 # Suppress output
+
+  # LightGBM specific
+  boosting_type: "gbdt"       # Gradient boosting decision tree
+  objective: "binary"         # Binary classification
+  metric: "auc"               # Evaluation metric
+
+# =============================================================================
+# RESEARCH DEFAULTS (Balanced)
+# =============================================================================
+# Use these for research/exploration. More flexible than production.
+
+research:
+  n_estimators: 200
+  max_depth: 7
+  learning_rate: 0.05
+  num_leaves: 63
+
+  min_child_samples: 30
+  reg_alpha: 0.05
+  reg_lambda: 0.05
+  min_split_gain: 0.001
+
+  subsample: 0.85
+  subsample_freq: 1
+  colsample_bytree: 0.85
+
+  early_stopping_rounds: 30
+
+  n_jobs: -1
+  random_state: 42
+  verbose: -1
+  boosting_type: "gbdt"
+  objective: "binary"
+  metric: "auc"
+
+# =============================================================================
+# HYPERPARAMETER SEARCH SPACE
+# =============================================================================
+# Use these ranges for hyperparameter optimization (Optuna, etc.)
+
+search_space:
+  n_estimators:
+    type: "int"
+    low: 50
+    high: 500
+    step: 50
+
+  max_depth:
+    type: "int"
+    low: 3
+    high: 10
+
+  learning_rate:
+    type: "loguniform"
+    low: 0.01
+    high: 0.2
+
+  num_leaves:
+    type: "int"
+    low: 15
+    high: 127
+
+  min_child_samples:
+    type: "int"
+    low: 20
+    high: 100
+    step: 10
+
+  reg_alpha:
+    type: "loguniform"
+    low: 0.001
+    high: 10.0
+
+  reg_lambda:
+    type: "loguniform"
+    low: 0.001
+    high: 10.0
+
+  subsample:
+    type: "float"
+    low: 0.6
+    high: 1.0
+
+  colsample_bytree:
+    type: "float"
+    low: 0.6
+    high: 1.0
+
+# =============================================================================
+# REGIME-SPECIFIC PARAMETERS
+# =============================================================================
+# Different parameters for different market regimes
+
+regimes:
+  low_volatility:
+    n_estimators: 150
+    max_depth: 6
+    learning_rate: 0.03
+    min_child_samples: 40
+
+  high_volatility:
+    n_estimators: 75          # Fewer iterations in noisy data
+    max_depth: 4              # Shallower trees
+    learning_rate: 0.08       # Higher LR for faster adaptation
+    min_child_samples: 60     # Higher to filter noise
+
+  trending:
+    n_estimators: 100
+    max_depth: 5
+    learning_rate: 0.05
+    min_child_samples: 50
+
+  mean_reverting:
+    n_estimators: 100
+    max_depth: 5
+    learning_rate: 0.05
+    min_child_samples: 50
+
+# =============================================================================
+# WARNINGS AND CONSTRAINTS
+# =============================================================================
+
+constraints:
+  # Minimum samples warnings
+  min_samples_warning: 1000   # Warn if training with fewer samples
+  min_samples_error: 500      # Error if training with fewer samples
+
+  # Maximum complexity warnings
+  max_leaves_warning: 63      # Warn if num_leaves exceeds this
+  max_depth_warning: 7        # Warn if max_depth exceeds this
+
+  # Regularization warnings
+  min_regularization_warning: 0.01  # Warn if both reg params below this
+
+# =============================================================================
+# VALIDATION REQUIREMENTS
+# =============================================================================
+
+validation:
+  cv_method: "combinatorial_purged"
+  n_splits: 6
+  n_test_splits: 2
+  purge_gap: "auto"
+  embargo_pct: 0.02
+
+  # Minimum performance thresholds
+  min_cv_auc: 0.52            # Minimum average CV AUC
+  max_cv_std: 0.05            # Maximum CV standard deviation
+  min_cv_sharpe: 0.0          # Minimum CV Sharpe ratio

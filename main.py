@@ -158,14 +158,24 @@ DEFAULT_CONFIG = {
     "data": {
         "path": "data/raw",
         "cache_path": "data/cache",
-        "min_bars": 100,
+        "min_bars": 500,  # Increased to accommodate max_feature_lookback (200) + prediction_horizon
         "use_polars": True,  # Use Polars for performance
+        # Point-in-Time settings (institutional requirement)
+        "point_in_time": True,
+        "survivorship_bias_correction": True,
+        "corporate_action_adjustment": True,
+        "min_adv_filter": 1_000_000,  # $1M minimum ADV
     },
     "features": {
         "technical": True,
         "fractional_diff": True,  # Enable fractional differentiation
         "macro": False,  # Requires FRED API key
         "cointegration": False,
+        # CRITICAL: Feature lookback settings for purge gap calculation
+        "max_lookback_periods": 200,  # Max MA period used
+        "microstructure_enabled": True,
+        "garch_volatility": True,
+        "leakage_check": "strict",  # fail on any detected leakage
     },
     "backtest": {
         "initial_capital": 1_000_000,
@@ -173,6 +183,12 @@ DEFAULT_CONFIG = {
         "slippage_pct": 0.0005,
         "slippage_bps": 1.0,
         "market_impact": True,  # Use Almgren-Chriss model
+        # CRITICAL: Execution realism settings (institutional requirement)
+        "execution_simulator": "order_book",  # Changed from "simple" to prevent infinite liquidity
+        "partial_fills": True,
+        "max_participation_rate": 0.02,  # 2% of ADV max
+        "latency_ms": 50,  # Realistic retail latency
+        "rejection_rate": 0.02,  # 2% order rejection simulation
     },
     "strategies": {
         "momentum": {
@@ -196,10 +212,31 @@ DEFAULT_CONFIG = {
     "training": {
         "model_type": "lightgbm",
         "cv_splits": 5,
-        "purge_gap": 5,
-        "embargo_pct": 0.01,
+        # CRITICAL: Purge gap must be calculated, not hardcoded
+        # Formula: prediction_horizon + max_feature_lookback + buffer
+        # For horizon=5, lookback=200, buffer=10 -> purge_gap=215
+        "purge_gap": "auto",  # Will be calculated dynamically
+        "purge_gap_buffer": 10,  # Safety buffer added to calculated purge gap
+        "prediction_horizon": 5,  # Bars ahead for prediction
+        "max_feature_lookback": 200,  # Max lookback in any feature
+        "embargo_pct": "auto",  # Will be calculated as horizon/data_length
         "optuna_trials": 50,
         "mlflow_tracking": True,
+        # CRITICAL: Use CPCV as default for institutional-grade validation
+        "cv_type": "combinatorial_purged",  # Changed from standard purged
+        "n_test_splits": 2,  # For CPCV
+        "min_train_samples": 1000,  # Minimum samples after purging
+    },
+    "optimization": {
+        # CRITICAL: Use Deflated Sharpe Ratio as primary metric
+        "primary_metric": "deflated_sharpe_ratio",
+        "secondary_metrics": [
+            "probabilistic_sharpe_ratio",
+            "sortino_ratio",
+            "max_drawdown",
+        ],
+        "multiple_testing_correction": True,
+        "min_track_record_months": 12,
     },
     "deep_learning": {
         "model": "lstm",  # lstm or transformer
@@ -213,13 +250,76 @@ DEFAULT_CONFIG = {
     "risk": {
         "max_position_pct": 0.05,
         "max_drawdown_pct": 0.15,
-        "var_confidence": 0.95,
+        "var_confidence": 0.99,  # Increased from 0.95 for institutional standard
+        "var_method": "historical",
+        "max_position_adv_pct": 5.0,  # Max 5% of ADV
+        "max_sector_exposure": 0.25,
+        "drawdown_flatten_threshold": 0.15,
     },
     "monte_carlo": {
         "n_simulations": 1000,
         "block_size": 20,
     },
 }
+
+
+def calculate_purge_gap(config: Dict[str, Any]) -> int:
+    """
+    Calculate appropriate purge gap for cross-validation.
+
+    CRITICAL: The purge gap must be at least:
+        prediction_horizon + max_feature_lookback + buffer
+
+    This prevents information leakage from:
+    1. Features using data that overlaps with the target calculation window
+    2. Target labels leaking into adjacent training folds
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Calculated purge gap in bars
+    """
+    train_config = config.get("training", {})
+
+    prediction_horizon = train_config.get("prediction_horizon", 5)
+    max_feature_lookback = train_config.get("max_feature_lookback", 200)
+    buffer = train_config.get("purge_gap_buffer", 10)
+
+    purge_gap = prediction_horizon + max_feature_lookback + buffer
+
+    logger.info(
+        f"Calculated purge_gap={purge_gap} "
+        f"(horizon={prediction_horizon} + lookback={max_feature_lookback} + buffer={buffer})"
+    )
+
+    return purge_gap
+
+
+def calculate_embargo_pct(data_length: int, config: Dict[str, Any]) -> float:
+    """
+    Calculate appropriate embargo percentage for cross-validation.
+
+    The embargo should be proportional to the prediction horizon relative
+    to the data length.
+
+    Args:
+        data_length: Total number of samples
+        config: Configuration dictionary
+
+    Returns:
+        Embargo percentage (0 to 1)
+    """
+    train_config = config.get("training", {})
+    prediction_horizon = train_config.get("prediction_horizon", 5)
+
+    # Embargo should be at least prediction_horizon / data_length
+    # but with a minimum floor for safety
+    embargo_pct = max(0.02, prediction_horizon / data_length)
+
+    logger.info(f"Calculated embargo_pct={embargo_pct:.4f} for data_length={data_length}")
+
+    return embargo_pct
 
 
 # =============================================================================
@@ -605,12 +705,50 @@ def train_ml_model(
     model_type = train_config.get("model_type", "lightgbm")
     model = ModelFactory.create(model_type)
 
-    # Cross-validation
-    cv = PurgedKFoldCV(
-        n_splits=train_config.get("cv_splits", 5),
-        purge_gap=train_config.get("purge_gap", 5),
-        embargo_pct=train_config.get("embargo_pct", 0.01),
-    )
+    # CRITICAL: Calculate purge gap dynamically based on feature lookback
+    purge_gap_setting = train_config.get("purge_gap", "auto")
+    if purge_gap_setting == "auto":
+        purge_gap = calculate_purge_gap(config)
+    else:
+        purge_gap = int(purge_gap_setting)
+        # Warn if hardcoded value is too small
+        min_required = (
+            train_config.get("prediction_horizon", 5)
+            + train_config.get("max_feature_lookback", 200)
+        )
+        if purge_gap < min_required:
+            logger.warning(
+                f"CRITICAL: purge_gap={purge_gap} is less than minimum required "
+                f"({min_required}). This will cause data leakage!"
+            )
+
+    # Calculate embargo percentage dynamically
+    embargo_setting = train_config.get("embargo_pct", "auto")
+    if embargo_setting == "auto":
+        embargo_pct = calculate_embargo_pct(len(X_train), config)
+    else:
+        embargo_pct = float(embargo_setting)
+
+    # Cross-validation - use CPCV for institutional-grade validation
+    cv_type = train_config.get("cv_type", "combinatorial_purged")
+
+    if cv_type == "combinatorial_purged":
+        cv = CombinatorialPurgedKFoldCV(
+            n_splits=train_config.get("cv_splits", 6),
+            n_test_splits=train_config.get("n_test_splits", 2),
+            purge_gap=purge_gap,
+            embargo_pct=embargo_pct,
+        )
+        logger.info(f"Using CombinatorialPurgedKFoldCV with purge_gap={purge_gap}")
+    else:
+        cv = PurgedKFoldCV(
+            n_splits=train_config.get("cv_splits", 5),
+            purge_gap=purge_gap,
+            embargo_pct=embargo_pct,
+            prediction_horizon=train_config.get("prediction_horizon", 5),
+            max_feature_lookback=train_config.get("max_feature_lookback", 200),
+        )
+        logger.info(f"Using PurgedKFoldCV with purge_gap={purge_gap}")
 
     # Optuna optimization if requested
     if train_config.get("optimize", False):
