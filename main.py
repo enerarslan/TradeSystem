@@ -66,6 +66,14 @@ from loguru import logger
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# Optional PyTorch import for deep learning
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -1242,7 +1250,7 @@ def train_ml_model(
         )
 
         # Create fresh model for each fold
-        model = ModelFactory.create(model_type, **best_params)
+        model = ModelFactory.create_model(model_type, params=best_params)
 
         # Train on this fold's training data ONLY
         try:
@@ -1308,7 +1316,7 @@ def train_ml_model(
     )
 
     # Train final model on all data
-    final_model = ModelFactory.create(model_type, **best_params)
+    final_model = ModelFactory.create_model(model_type, params=best_params)
     final_model.fit(X_np, y_np)
 
     # Log to MLflow
@@ -1324,16 +1332,23 @@ def train_ml_model(
     # Create result object
     result = TrainingResult(
         model=final_model,
-        cv_scores=cv_scores,
-        feature_names=list(X_train.columns),
-        best_params=best_params,
+        model_type=model_type,
+        task_type="regression",  # Default for financial prediction
+        train_metrics={"ic_mean": train_mean if train_scores else 0.0},
+        validation_metrics={"ic_mean": mean_score, "ic_std": std_score},
+        cv_scores={"ic": fold_scores} if fold_scores else None,
+        feature_importance=None,  # Can be added from model.feature_importances_ if available
+        training_time_seconds=0.0,  # TODO: Add timing
+        n_train_samples=len(X_train),
+        n_features=len(X_train.columns),
+        best_iteration=None,
+        params=best_params,
         metadata={
             "cv_type": cv_type,
             "purge_gap": purge_gap,
             "embargo_pct": embargo_pct,
             "leakage_detected": leakage_detected,
-            "n_samples": len(X_train),
-            "n_features": len(X_train.columns),
+            "feature_names": list(X_train.columns),
         }
     )
 
@@ -1347,21 +1362,52 @@ def train_deep_learning(
     features: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
 ) -> Any:
-    """Train deep learning model (LSTM or Transformer)."""
+    """
+    Train deep learning model (LSTM or Transformer) with complete training loop.
+
+    Implements:
+    - Proper train/validation split with purging
+    - Custom financial loss functions (Sharpe, Sortino)
+    - Early stopping
+    - Learning rate scheduling
+    - Gradient clipping
+    - Model checkpointing
+    """
+    if not TORCH_AVAILABLE:
+        logger.error("PyTorch is required for deep learning training")
+        return None
+
     logger.info("Training deep learning model...")
 
     dl_config = config.get("deep_learning", {})
+    training_config = dl_config.get("training", {})
     model_type = dl_config.get("model", "lstm")
+
+    # Training hyperparameters
+    seq_length = training_config.get("seq_length", 20)
+    batch_size = training_config.get("batch_size", 64)
+    max_epochs = training_config.get("max_epochs", 100)
+    patience = training_config.get("patience", 10)
+    learning_rate = training_config.get("learning_rate", 1e-3)
+    gradient_clip = dl_config.get("gradient_clip", 1.0)
+    validation_split = training_config.get("validation_split", 0.2)
+    purge_gap = config.get("training", {}).get("purge_gap", 50)
 
     # Prepare sequence data
     all_X = []
     all_y = []
-    seq_length = 20
 
     for symbol, df in features.items():
         feature_cols = [c for c in df.columns if c not in ["open", "high", "low", "close", "volume"]]
+        if not feature_cols:
+            logger.warning(f"No feature columns found for {symbol}")
+            continue
+
         X = df[feature_cols].values
         y = df["close"].pct_change().shift(-1).values
+
+        # Handle NaN values
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
         # Create sequences
         for i in range(seq_length, len(X) - 1):
@@ -1369,10 +1415,47 @@ def train_deep_learning(
                 all_X.append(X[i-seq_length:i])
                 all_y.append(y[i])
 
-    X_train = np.array(all_X)
-    y_train = np.array(all_y)
+    if len(all_X) == 0:
+        logger.error("No training sequences created!")
+        return None
 
-    logger.info(f"Training sequences: {len(X_train)}")
+    X_all = np.array(all_X, dtype=np.float32)
+    y_all = np.array(all_y, dtype=np.float32)
+
+    logger.info(f"Total sequences: {len(X_all)}, Features: {X_all.shape[2]}")
+
+    # Train/validation split with purge gap
+    n_samples = len(X_all)
+    split_idx = int(n_samples * (1 - validation_split))
+
+    # Apply purge gap between train and validation
+    train_end_idx = split_idx - purge_gap
+    val_start_idx = split_idx
+
+    X_train = X_all[:train_end_idx]
+    y_train = y_all[:train_end_idx]
+    X_val = X_all[val_start_idx:]
+    y_val = y_all[val_start_idx:]
+
+    logger.info(f"Training samples: {len(X_train)}, Validation samples: {len(X_val)}")
+    logger.info(f"Purge gap: {purge_gap} samples between train and validation")
+
+    # Convert to PyTorch tensors
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train, dtype=torch.float32).unsqueeze(1)
+    X_val_t = torch.tensor(X_val, dtype=torch.float32)
+    y_val_t = torch.tensor(y_val, dtype=torch.float32).unsqueeze(1)
+
+    # Create DataLoaders
+    train_dataset = torch.utils.data.TensorDataset(X_train_t, y_train_t)
+    val_dataset = torch.utils.data.TensorDataset(X_val_t, y_val_t)
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True, drop_last=True
+    )
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset, batch_size=batch_size, shuffle=False
+    )
 
     # Create model
     input_size = X_train.shape[2]
@@ -1381,7 +1464,7 @@ def train_deep_learning(
         model = TemporalFusionTransformer(
             input_size=input_size,
             hidden_size=dl_config.get("hidden_size", 128),
-            num_attention_heads=4,
+            num_attention_heads=dl_config.get("num_attention_heads", 4),
             dropout=dl_config.get("dropout", 0.2),
         )
     else:  # LSTM
@@ -1392,10 +1475,139 @@ def train_deep_learning(
             dropout=dl_config.get("dropout", 0.2),
         )
 
-    logger.info(f"Created {model_type.upper()} model")
+    logger.info(f"Created {model_type.upper()} model with {sum(p.numel() for p in model.parameters())} parameters")
 
-    # Note: Full training requires PyTorch Lightning Trainer
-    # This is a placeholder for the training loop
+    # Setup device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    logger.info(f"Training on device: {device}")
+
+    # Loss function - use financial loss if available
+    loss_config = dl_config.get("loss", "mse")
+    if loss_config == "sharpe":
+        criterion = SharpeLoss()
+    elif loss_config == "sortino":
+        criterion = SortinoLoss()
+    else:
+        criterion = torch.nn.MSELoss()
+
+    # Optimizer
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=training_config.get("weight_decay", 1e-5)
+    )
+
+    # Learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=learning_rate,
+        epochs=max_epochs,
+        steps_per_epoch=len(train_loader),
+        pct_start=0.3,
+        div_factor=25.0,
+        final_div_factor=10000.0,
+    )
+
+    # Training loop with early stopping
+    best_val_loss = float("inf")
+    best_model_state = None
+    epochs_without_improvement = 0
+    training_history = {"train_loss": [], "val_loss": [], "learning_rate": []}
+
+    logger.info(f"Starting training for max {max_epochs} epochs...")
+
+    for epoch in range(max_epochs):
+        # Training phase
+        model.train()
+        train_losses = []
+
+        for batch_X, batch_y in train_loader:
+            batch_X = batch_X.to(device)
+            batch_y = batch_y.to(device)
+
+            optimizer.zero_grad()
+
+            # Forward pass
+            predictions = model(batch_X)
+
+            # Handle different output shapes
+            if predictions.dim() == 1:
+                predictions = predictions.unsqueeze(1)
+
+            loss = criterion(predictions, batch_y)
+
+            # Backward pass
+            loss.backward()
+
+            # Gradient clipping
+            if gradient_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+
+            optimizer.step()
+            scheduler.step()
+
+            train_losses.append(loss.item())
+
+        avg_train_loss = np.mean(train_losses)
+
+        # Validation phase
+        model.eval()
+        val_losses = []
+
+        with torch.no_grad():
+            for batch_X, batch_y in val_loader:
+                batch_X = batch_X.to(device)
+                batch_y = batch_y.to(device)
+
+                predictions = model(batch_X)
+                if predictions.dim() == 1:
+                    predictions = predictions.unsqueeze(1)
+
+                loss = criterion(predictions, batch_y)
+                val_losses.append(loss.item())
+
+        avg_val_loss = np.mean(val_losses) if val_losses else float("inf")
+
+        # Record history
+        current_lr = scheduler.get_last_lr()[0]
+        training_history["train_loss"].append(avg_train_loss)
+        training_history["val_loss"].append(avg_val_loss)
+        training_history["learning_rate"].append(current_lr)
+
+        # Early stopping check
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            best_model_state = model.state_dict().copy()
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        # Log progress every 10 epochs
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            logger.info(
+                f"Epoch {epoch + 1}/{max_epochs} | "
+                f"Train Loss: {avg_train_loss:.6f} | "
+                f"Val Loss: {avg_val_loss:.6f} | "
+                f"LR: {current_lr:.2e} | "
+                f"Best: {best_val_loss:.6f}"
+            )
+
+        # Early stopping
+        if epochs_without_improvement >= patience:
+            logger.info(f"Early stopping triggered at epoch {epoch + 1}")
+            break
+
+    # Load best model
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        logger.info(f"Loaded best model with validation loss: {best_val_loss:.6f}")
+
+    # Store training history in model
+    model.training_history = training_history
+    model.best_val_loss = best_val_loss
+
+    logger.info(f"Training complete! Best validation loss: {best_val_loss:.6f}")
 
     return model
 
@@ -1572,25 +1784,87 @@ def main():
     # Training mode
     if args.mode in ["train", "full"]:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+
+        # Ensure models directory exists
+        Path("models").mkdir(parents=True, exist_ok=True)
+
         if args.deep_learning:
+            if not TORCH_AVAILABLE:
+                logger.error("PyTorch is required for deep learning but not installed!")
+                logger.info("Install with: pip install torch")
+                sys.exit(1)
+
             model = train_deep_learning(data, features, config)
-            # Deep Learning modelini kaydet
-            save_path = f"models/deep_learning_{timestamp}.pth"
-            # PyTorch veya özel save metodunu buraya ekle (Model tipine göre değişebilir)
-            import torch
-            torch.save(model, save_path)
-            logger.info(f"Deep Learning Model saved to {save_path}")
-            
+
+            if model is not None:
+                # Get model type for filename
+                dl_config = config.get("deep_learning", {})
+                model_type_name = dl_config.get("model", "lstm")
+
+                # Create save path with metadata
+                save_path = Path(f"models/{model_type_name}_{timestamp}.pth")
+                metadata_path = Path(f"models/{model_type_name}_{timestamp}_metadata.json")
+
+                # Save model checkpoint (state_dict is more portable)
+                try:
+                    checkpoint = {
+                        "model_state_dict": model.state_dict() if hasattr(model, 'state_dict') else model,
+                        "model_type": model_type_name,
+                        "timestamp": timestamp,
+                        "config": dl_config,
+                        "feature_names": list(features[list(features.keys())[0]].columns) if features else [],
+                    }
+                    torch.save(checkpoint, save_path)
+                    logger.info(f"Deep Learning Model saved to {save_path}")
+
+                    # Save metadata as JSON for easy inspection
+                    import json
+                    metadata = {
+                        "model_type": model_type_name,
+                        "timestamp": timestamp,
+                        "config": {k: str(v) if not isinstance(v, (int, float, bool, str, list, dict, type(None))) else v
+                                   for k, v in dl_config.items()},
+                        "n_features": len(features[list(features.keys())[0]].columns) if features else 0,
+                    }
+                    with open(metadata_path, "w") as f:
+                        json.dump(metadata, f, indent=2)
+                    logger.info(f"Model metadata saved to {metadata_path}")
+
+                except Exception as e:
+                    logger.error(f"Failed to save deep learning model: {e}")
+            else:
+                logger.warning("Deep learning training returned None - model not saved")
+
         else:
-            # ML Modelini eğit
+            # Train ML model
             result = train_ml_model(data, features, config)
-            
-            # Sonucu ve Modeli Kaydet
-            model_filename = f"models/{args.model}_{timestamp}.pkl"
-            with open(model_filename, "wb") as f:
-                pickle.dump(result, f)
-            logger.info(f"Trained Model ({args.model}) saved to {model_filename}")
+
+            # Save result and model with metadata
+            model_filename = Path(f"models/{args.model}_{timestamp}.pkl")
+            metadata_filename = Path(f"models/{args.model}_{timestamp}_metadata.json")
+
+            try:
+                with open(model_filename, "wb") as f:
+                    pickle.dump(result, f)
+                logger.info(f"Trained Model ({args.model}) saved to {model_filename}")
+
+                # Save metadata as JSON
+                import json
+                metadata = {
+                    "model_type": args.model,
+                    "timestamp": timestamp,
+                    "n_samples": result.n_train_samples,
+                    "n_features": result.n_features,
+                    "cv_scores": result.cv_scores,
+                    "validation_metrics": result.validation_metrics,
+                    "params": result.params,
+                }
+                with open(metadata_filename, "w") as f:
+                    json.dump(metadata, f, indent=2, default=str)
+                logger.info(f"Model metadata saved to {metadata_filename}")
+
+            except Exception as e:
+                logger.error(f"Failed to save ML model: {e}")
 
     # Backtest mode
     if args.mode in ["backtest", "full"]:

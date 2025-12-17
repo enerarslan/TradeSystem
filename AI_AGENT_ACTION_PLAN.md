@@ -1,807 +1,950 @@
-# AlphaTrade System - AI Agent Action Plan
-# JPMorgan Seviyesi Backtest Sistemi İçin Komut Dökümanı
+📋 GENERAL INSTRUCTIONS
+This task plan contains all necessary fixes and improvements to transform the AlphaTrade system into a JPMorgan-level institutional trading platform. Execute each step sequentially, preserve existing architecture when writing code, and verify imports/dependencies after each change.
+Project Directory: C:\Users\enera\Desktop\AlphaTrade_System
+Training Data Context: 4.5 years of 15-minute OHLCV data. Market hours timing for training execution is not a priority at this stage.
+Language: Write all code, comments, and documentation in English.
 
-**Tarih:** 17 Aralık 2025  
-**Amaç:** Dağınık kodu tek komutla çalışan JPMorgan seviyesi backtest sistemine dönüştürmek  
-**Format:** AI Agent'a verilecek sıralı komutlar
+🔴 SECTION 1: CRITICAL BUG FIXES (DO THESE FIRST)
+1.1 Feature Pipeline Indentation Error
+File: src/features/pipeline.py
+Problem: The generate_features method is defined OUTSIDE the FeaturePipeline class due to incorrect indentation. Around line 230, def generate_features( is not properly indented inside the class.
+Tasks:
 
----
+Locate the generate_features method (approximately line 230)
+Move it INSIDE the FeaturePipeline class with proper indentation (same level as fit, transform, fit_transform methods)
+Ensure self parameter is first parameter
+Verify the method is callable via pipeline.generate_features(df)
+Test that fit(), transform(), and fit_transform() methods can call generate_features() internally
+Check all internal method calls within the class use self.generate_features()
 
-# BÖLÜM 1: TESPİT EDİLEN KRİTİK HATALAR
 
-## 🔴 KRİTİK HATA #1: Dosya İsimlendirme Uyumsuzluğu
+1.2 Microstructure Module Export Error
+File: src/features/microstructure/__init__.py
+Problem: OrderBookDynamics is imported but NOT included in the __all__ list, making it unavailable for external imports.
+Tasks:
 
-**Konum:** `scripts/generate_sample_data.py` satır 85 ve `src/data/loaders/data_loader.py` satır 70
+Add "OrderBookDynamics" to the __all__ list
+Verify the import statement from .order_book_dynamics import OrderBookDynamics exists
+Test import works: from src.features.microstructure import OrderBookDynamics
 
-**Problem Açıklaması:**
-- DataLoader `AAPL_15min.csv` formatında dosya arıyor
-- Ama generate_sample_data.py `AAPL.csv` formatında oluşturuyor
-- Sonuç: Sistem 0 sembol buluyor
 
-**Mevcut Durum:**
+1.3 ModelFactory Wrong Method Call
+File: main.py
+Problem: Code calls ModelFactory.create() but the correct method name is ModelFactory.create_model().
+Tasks:
+
+Search entire file for ModelFactory.create( (without "model")
+Replace all occurrences with ModelFactory.create_model(
+Fix parameter passing: change ModelFactory.create(model_type, **best_params) to ModelFactory.create_model(model_type, params=best_params)
+This error appears around lines 760, 820, and potentially elsewhere
+Verify all calls match the method signature in src/training/model_factory.py
+
+
+1.4 Configuration File Mismatch
+Files:
+
+config/ml_config.yaml
+main.py (DEFAULT_CONFIG dictionary)
+
+Problem: Config file has purge_gap: 10 and max_feature_lookback: 20, but main.py uses max_lookback_periods: 200. This mismatch can cause data leakage.
+Tasks:
+
+Update config/ml_config.yaml in the cross_validation section:
+
+yaml  cross_validation:
+    n_splits: 5
+    purge_gap: "auto"              # Changed from 10
+    embargo_pct: 0.01
+    prediction_horizon: 5          # Changed from 1
+    max_feature_lookback: 200      # Changed from 20
 ```
-data/raw/ klasöründe:
-- AAPL_15min.csv ✓ (doğru format - zaten var)
-- generate_sample_data.py yanlış format üretiyor
-```
-
-**AI Agent Komutu:**
-```
-DOSYA: scripts/generate_sample_data.py
-SATIR 85 CIVARINDA BUL: filepath = output_path / f"{symbol}.csv"
-DEĞİŞTİR: filepath = output_path / f"{symbol}_15min.csv"
-
-AYRICA SATIR 56 CIVARINDA BUL: "date" column name
-DEĞİŞTİR: "timestamp" olmalı (DataLoader bunu bekliyor)
-```
-
----
-
-## 🔴 KRİTİK HATA #2: Feature Pipeline'da Data Leakage
-
-**Konum:** `main.py` fonksiyon `generate_features()` satır 340-400
-
-**Problem Açıklaması:**
-- `FeaturePipeline` sınıfı `fit()` ve `transform()` metodlarına sahip
-- AMA main.py bunları KULLANMIYOR
-- Direkt `TechnicalIndicators.generate_all_features()` çağırıyor
-- Scaling parametreleri (mean, std) TÜM data üzerinden hesaplanıyor
-- Bu GELECEK BİLGİSİNİ geçmişe sızdırıyor
-
-**Neden Kritik:**
-JPMorgan'da bu hata milyonlarca dolarlık yanlış kararlara yol açar. Backtest sonuçları gerçekçi değil.
-
-**AI Agent Komutu:**
-```
-DOSYA: main.py
-FONKSİYON: generate_features()
-
-MEVCUT YAKLAŞIMI SİL (TechnicalIndicators direkt kullanımı)
-
-YENİ YAKLAŞIM:
-1. FeaturePipeline instance oluştur
-2. Train data üzerinde pipeline.fit() çağır
-3. Tüm data için pipeline.transform() çağır
-4. ASLA fit_transform() tek seferde tüm data üzerinde çağırma
-
-MANTIK:
-- Scaling parametreleri SADECE train data'dan öğrenilmeli
-- Test data'ya aynı parametreler UYGULANMALI
-- Bu şekilde gelecek bilgisi sızmaz
-```
+- Ensure `main.py` DEFAULT_CONFIG matches these values
+- Verify the `calculate_purge_gap()` function in `main.py` uses these config values
+- Add validation to warn if loaded config has insufficient purge_gap
 
 ---
 
-## 🔴 KRİTİK HATA #3: Cross-Validation Purge Gap Uygulanmıyor
+### 1.5 Features Module Export Completeness
 
-**Konum:** `main.py` fonksiyon `train_ml_model()` satır 540-620
+**File:** `src/features/__init__.py`
 
-**Problem Açıklaması:**
-- `purge_gap` hesaplanıyor (doğru formül var)
-- `PurgedKFoldCV` oluşturuluyor (doğru sınıf var)
-- AMA sonra sklearn'ün `cross_validate()` fonksiyonu çağrılıyor
-- sklearn'ün cross_validate'i PURGE GAP'I UYGULAMIYOR!
-- Custom CV splitter'ın split() metodu hiç çalışmıyor
+**Problem:** `TimeCyclicalEncoder` is imported but not in `__all__`. Microstructure features are not exported.
 
-**Sonuç:** Train ve test setleri arasında veri sızıntısı var. Model olduğundan iyi görünüyor.
-
-**AI Agent Komutu:**
-```
-DOSYA: main.py
-FONKSİYON: train_ml_model()
-
-sklearn cross_validate() ÇAĞRISINI KALDIR
-
-MANUEL CV DÖNGÜSÜ YAZ:
-1. cv.split(X, y) ile fold indekslerini al
-2. Her fold için:
-   a. train_idx ve test_idx ayır
-   b. Leakage kontrolü yap (set kesişimi boş olmalı)
-   c. Model oluştur ve train_idx üzerinde eğit
-   d. test_idx üzerinde skorla
-   e. Skoru listeye ekle
-3. Tüm fold skorlarının ortalamasını al
-
-PURGE GAP HESAPLAMASI:
-purge_gap = prediction_horizon + max_feature_lookback + buffer
-Örnek: 5 + 200 + 10 = 215 bar
-```
+**Tasks:**
+- Add to `__all__` list:
+  - `"TimeCyclicalEncoder"`
+  - `"OrderFlowImbalance"`
+  - `"calculate_ofi"`
+  - `"VPIN"`
+  - `"calculate_vpin"`
+  - `"KyleLambda"`
+  - `"calculate_kyle_lambda"`
+  - `"RollSpread"`
+  - `"AmihudIlliquidity"`
+  - `"OrderBookDynamics"`
+- Add corresponding import statements from microstructure module
+- Test all imports work correctly
 
 ---
 
-## 🔴 KRİTİK HATA #4: TimescaleDB Entegre Değil
+### 1.6 Training Result Object Usage
 
-**Konum:** `src/data/storage/timescale_client.py` (tam implementasyon var) vs `main.py` (hiç kullanmıyor)
+**File:** `main.py` → `train_ml_model()` function
 
-**Problem Açıklaması:**
-- 800+ satırlık profesyonel TimescaleDB client yazılmış
-- Connection pooling, retry logic, batch insert var
-- Continuous aggregates, compression, retention policies var
-- AMA main.py SADECE CSV dosyalarından okuma yapıyor
-- TimescaleDB'nin tüm avantajları kullanılmıyor
+**Problem:** The `TrainingResult` object is created with parameters that may not match the dataclass definition.
 
-**AI Agent Komutu:**
-```
-DOSYA: main.py
-FONKSİYON: load_data()
-
-KONTROL EKLE:
-1. Config'de "use_timescale: true" var mı?
-2. TIMESCALE_AVAILABLE flag'i True mu?
-3. Evetse TimescaleClient kullan
-4. Hayırsa mevcut CSV loading'e devam et
-
-TİMESCALE KULLANIMI İÇİN:
-1. ConnectionConfig oluştur (host, port, database, user, password)
-2. TimescaleClient context manager ile aç
-3. client.get_ohlcv(symbol, start, end, "15min") ile data çek
-4. DataFrame formatına çevir ve döndür
-
-CONFIG DOSYASINA EKLE (config/trading_config.yaml):
-timescale:
-  enabled: false  # true yapınca aktif olur
-  host: localhost
-  port: 5432
-  database: alphatrade_db
-  user: alphatrade
-  password: ""
-```
+**Tasks:**
+- Check `src/training/trainer.py` for `TrainingResult` dataclass definition
+- Verify all parameters passed to `TrainingResult()` in `main.py` match the dataclass fields
+- Ensure `cv_scores` is passed as numpy array, not dict (check expected type)
+- Add any missing required fields
+- Remove any fields that don't exist in the dataclass
 
 ---
 
-## 🔴 KRİTİK HATA #5: Market Impact Modeli Yanlış ADV Kullanıyor
+### 1.7 Deep Learning Model Save Error
 
-**Konum:** `main.py` fonksiyon `run_backtest()` satır 430-490
+**File:** `main.py` → training mode section (around line 900)
 
-**Problem Açıklaması:**
-- `calculate_symbol_adv()` her sembol için ADV hesaplıyor (doğru)
-- Sonra `np.mean()` ile ORTALAMA alınıyor (yanlış!)
-- AlmgrenChrissModel bu ortalama ADV ile oluşturuluyor
-- Her trade için AYNI ortalama ADV kullanılıyor
+**Problem:** Deep learning model saving uses `torch.save(model, save_path)` but torch may not be imported, and the model object type should be verified.
 
-**Sonuç:**
-- AAPL gibi likit hisseler için market impact FAZLA hesaplanıyor
-- Küçük hisseler için market impact AZ hesaplanıyor
-- Backtest sonuçları gerçekçi değil
-
-**AI Agent Komutu:**
-```
-DOSYA: main.py ve src/backtesting/engine.py
-
-DEĞİŞİKLİK 1 - main.py:
-symbol_adv dictionary'sini BacktestEngine'e PARAMETRE olarak geçir
-
-DEĞİŞİKLİK 2 - engine.py BacktestEngine.run():
-Her trade için o sembolün KENDİ ADV'sini kullan:
-- trade sembolünü al
-- symbol_adv[symbol] ile o sembolün ADV'sini bul
-- market_impact.calculate_impact(trade_value, symbol_adv) çağır
-
-DOĞRU MANTIK:
-- AAPL (ADV: $10B) için 1M$'lık trade = minimal impact
-- Küçük hisse (ADV: $10M) için 1M$'lık trade = büyük impact
-```
+**Tasks:**
+- Add proper torch import at the top of the file (with try/except for optional dependency)
+- Verify model type before saving (LSTM, Transformer, etc.)
+- Use proper save method based on model type:
+  - PyTorch models: `torch.save(model.state_dict(), path)` for weights only
+  - Or `torch.save({'model': model, 'config': config}, path)` for full checkpoint
+- Add error handling for save operation
+- Create models directory if it doesn't exist
 
 ---
 
-## 🟡 ORTA SEVİYE HATA #6: Walk-Forward Validation Bağlı Değil
+## 🟠 SECTION 2: TRAINING SYSTEM IMPROVEMENTS
 
-**Konum:** `config/trading_config.yaml` satır 85-92 ve `main.py`
+### 2.1 Complete Deep Learning Training Implementation
 
-**Problem Açıklaması:**
-- Config dosyasında walk_forward ayarları var:
-  ```yaml
-  walk_forward:
-    enabled: true
-    train_period_days: 126
-    test_period_days: 21
-  ```
-- AMA main.py bu ayarları HİÇ OKUMUYOR
-- WalkForwardValidator sınıfı MEVCUT ama kullanılmıyor
-- Sistem sadece PurgedKFoldCV kullanıyor
+**File:** `main.py` → `train_deep_learning()` function
 
-**AI Agent Komutu:**
-```
-DOSYA: main.py
-FONKSİYON: train_ml_model()
+**Problem:** Function creates model but does NOT train it. Returns untrained model.
 
-WALK-FORWARD KONTROLÜ EKLE:
-1. config["backtest"]["walk_forward"]["enabled"] oku
-2. True ise WalkForwardValidator kullan
-3. False ise mevcut CV'ye devam et
+**Tasks:**
 
-WalkForwardValidator PARAMETRELERI:
-- train_period = train_period_days * 26 (günde 26 bar)
-- test_period = test_period_days * 26
-- step_size = test_period (non-overlapping)
-- expanding = config'deki "anchored" değeri
-- purge_gap = hesaplanan purge_gap
+1. **Add Complete Training Loop:**
+   - Import necessary PyTorch modules (torch, torch.nn, torch.optim)
+   - Import DataLoader utilities from `src/training/deep_learning/dataset.py`
+   - Create proper train/validation split with purging
+   - Implement epoch loop with:
+     - Training phase (model.train())
+     - Validation phase (model.eval())
+     - Loss calculation using financial losses from `src/training/deep_learning/losses.py`
+     - Backpropagation and optimizer step
+     - Gradient clipping (use config value)
+     - Learning rate scheduling
 
-WALK-FORWARD AVANTAJI:
-- Gerçek trading'i simüle eder
-- Her dönem için model yeniden eğitilir
-- Out-of-sample performance daha gerçekçi
-```
+2. **Add Training Features:**
+   - Early stopping based on validation loss (patience from config)
+   - Best model checkpoint saving
+   - Training history logging (loss, metrics per epoch)
+   - Memory management (clear cache periodically)
+   - Progress logging every N epochs
 
----
+3. **Use Custom Financial Losses:**
+   - Import `SharpeLoss`, `SortinoLoss`, `CombinedFinancialLoss` from deep_learning.losses
+   - Allow loss function selection via config
+   - Combine MSE with financial loss if needed
 
-## 🟡 ORTA SEVİYE HATA #7: Survivorship Bias Düzeltmesi Pasif
-
-**Konum:** `main.py` fonksiyon `load_data()` satır 230-250
-
-**Problem Açıklaması:**
-- Kod `symbol_metadata.json` dosyasını arıyor
-- Bu dosya YOK (sadece .gitkeep var)
-- UniverseManager hiçbir zaman aktif olmuyor
-- Sonuç: Sadece hayatta kalan hisseler test ediliyor
-- Backtest sonuçları aşırı iyimser
-
-**Survivorship Bias Nedir:**
-- 2010'da 100 hisse vardı
-- 20 tanesi battı/delisted oldu
-- Bugün sadece 80 hisse var
-- Sadece bu 80 üzerinde test yapmak = sadece başarılıları test etmek
-
-**AI Agent Komutu:**
-```
-YENİ DOSYA OLUŞTUR: scripts/generate_universe_metadata.py
-
-İÇERİK:
-1. data/raw/ klasöründeki tüm sembolleri listele
-2. Her sembol için metadata oluştur:
-   - listing_date: İlk veri tarihi
-   - delisting_date: null (veya son veri tarihi)
-   - sector: Sektör bilgisi
-   - is_active: true/false
-3. JSON dosyasına kaydet: data/raw/symbol_metadata.json
-
-SONRA main.py'de:
-UniverseManager aktif olacak
-Backtest başlangıç tarihindeki universe kullanılacak
-O tarihte mevcut olmayan hisseler dahil edilmeyecek
-```
+4. **Return Proper Result:**
+   - Return trained model (not untrained)
+   - Include training history
+   - Include best validation metrics
+   - Include training time
 
 ---
 
-## 🟡 ORTA SEVİYE HATA #8: Deflated Sharpe Ratio Raporlarda Yok
+### 2.2 Model Drift Detection Module
 
-**Konum:** `src/backtesting/metrics.py` (hesaplama VAR) vs `src/backtesting/reports/` (kullanılmıyor)
+**New File:** `src/training/drift_detection.py`
 
-**Problem Açıklaması:**
-- `calculate_deflated_sharpe_ratio()` fonksiyonu mevcut ve doğru
-- `calculate_sharpe_statistics()` tam SharpeStatistics döndürüyor
-- AMA raporlar sadece NORMAL Sharpe gösteriyor
-- DSR, PSR, MinTRL hiçbir raporda yok
+**Purpose:** Detect when model performance degrades and retraining is needed.
 
-**Neden Kritik:**
-JPMorgan'da normal Sharpe'a bakılmaz. Multiple testing için düzeltilmiş DSR bakılır.
-10 strateji test edip en iyi Sharpe'ı seçmek = şans eseri iyi sonuç bulmak.
+**Implementation Requirements:**
 
-**AI Agent Komutu:**
+1. **DriftDetector Class:**
 ```
-DOSYA: src/backtesting/reports/report_generator.py
-
-calculate_sharpe_statistics() IMPORT ET
-
-RAPOR OLUŞTURURKEN:
-1. n_trials parametresi al (kaç strateji test edildi)
-2. Her strateji için SharpeStatistics hesapla
-3. Rapora EKLE:
-   - Deflated Sharpe Ratio (DSR)
-   - Probabilistic Sharpe Ratio (PSR) 
-   - Minimum Track Record Length (ay)
-   - Is Statistically Significant (Evet/Hayır)
-
-TABLO FORMATINDA GÖSTER:
-| Strateji | Return | Sharpe | DSR | PSR | Significant |
-|----------|--------|--------|-----|-----|-------------|
-| Momentum | 15%    | 1.2    | 0.8 | 89% | Evet        |
-| MeanRev  | 8%     | 0.7    | 0.3 | 62% | Hayır       |
+   class DriftDetector:
+       - __init__(self, reference_data, thresholds)
+       - detect_feature_drift(current_data) -> DriftResult
+       - detect_prediction_drift(predictions) -> DriftResult
+       - detect_performance_drift(metrics) -> DriftResult
+       - get_drift_report() -> Dict
 ```
+
+2. **Drift Metrics to Implement:**
+   - Population Stability Index (PSI) for each feature
+   - Kolmogorov-Smirnov test for distribution comparison
+   - Jensen-Shannon divergence
+   - Performance metric tracking (Sharpe ratio degradation, accuracy drop)
+
+3. **DriftResult Dataclass:**
+```
+   @dataclass
+   class DriftResult:
+       is_drift_detected: bool
+       drift_score: float
+       drift_type: str  # "feature", "prediction", "performance"
+       affected_features: List[str]
+       severity: str  # "low", "medium", "high", "critical"
+       recommendation: str  # "monitor", "retrain", "investigate"
+```
+
+4. **Threshold Configuration:**
+   - PSI > 0.1: Warning
+   - PSI > 0.25: Critical
+   - Make thresholds configurable
+
+5. **Integration Points:**
+   - Can be called before training to check if retraining needed
+   - Can be run on schedule to monitor production models
+   - Logs results to MLflow/experiment tracker
 
 ---
 
-# BÖLÜM 2: EKSİK FONKSİYONELLİKLER
+### 2.3 Training Pipeline Orchestrator
 
-## 📌 EKSİK #1: Tek Komutla Çalıştırma
+**New File:** `src/training/training_pipeline.py`
 
-**Mevcut Durum:**
-- `python main.py` çalışıyor AMA çok fazla parametre var
-- Kullanıcı hangi mode, engine, model kullanacağını bilmeli
-- Hata durumunda ne yapacağı belirsiz
+**Purpose:** Orchestrate complete training workflow with proper error handling.
 
-**AI Agent Komutu:**
+**Implementation Requirements:**
+
+1. **TrainingPipeline Class:**
 ```
-YENİ DOSYA OLUŞTUR: orchestrate.py
-
-BU DOSYA TEK ENTRY POINT OLMALI
-
-KULLANIM:
-python orchestrate.py                    # Her şeyi çalıştır
-python orchestrate.py --quick            # ML training atla
-python orchestrate.py --validate-only    # Sadece data kontrol
-python orchestrate.py --holdout 0.2      # %20 holdout ayır
-
-İÇ YAPI:
-1. Banner göster (versiyon, tarih, mode)
-2. Config yükle
-3. Data yükle ve validate et
-4. Eğer data yoksa veya hatalıysa -> hata mesajı ve çık
-5. Feature generate et (leakage-safe)
-6. ML model eğit (purged CV ile)
-7. Tüm stratejileri backtest et
-8. Ensemble oluştur ve test et
-9. Institutional-grade rapor üret
-10. Holdout validation (varsa)
-11. Sonuç özeti göster
-
-HER ADIMDA:
-- Progress göster
-- Hata olursa anlaşılır mesaj ver
-- Log'a yaz
+   class TrainingPipeline:
+       - __init__(self, config)
+       - run(data, mode="full") -> PipelineResult
+       - validate_data(data) -> ValidationResult
+       - generate_features(data) -> Tuple[features, pipelines]
+       - prepare_training_data(features) -> Tuple[X, y, cv]
+       - train_model(X, y, cv) -> TrainingResult
+       - evaluate_model(model, X_test, y_test) -> EvaluationResult
+       - register_model(model, metrics) -> str  # returns model_id
+       - cleanup()
 ```
+
+2. **Pipeline Steps:**
+   - Step 1: Data validation (quality checks, missing data, outliers)
+   - Step 2: Feature generation with leakage prevention
+   - Step 3: Train/test split with proper purging
+   - Step 4: Model training with cross-validation
+   - Step 5: Out-of-sample evaluation
+   - Step 6: Statistical significance tests
+   - Step 7: Model registration if metrics pass threshold
+   - Step 8: Cleanup temporary files
+
+3. **Error Handling:**
+   - Try/except around each step
+   - Detailed error logging
+   - Partial result saving on failure
+   - Rollback capability
+
+4. **Logging:**
+   - Log start/end of each step with timing
+   - Log intermediate metrics
+   - Log data shapes at each step
+   - Log any warnings or anomalies
 
 ---
 
-## 📌 EKSİK #2: Pre-Flight Data Validation
+### 2.4 Hyperparameter Optimization Enhancement
 
-**Mevcut Durum:**
-- DataValidator sınıfı var ve iyi çalışıyor
-- AMA backtest başlamadan önce TÜM data kontrol edilmiyor
-- Tek bir bozuk sembol tüm backtest'i bozabiliyor
+**File:** `src/training/optimization.py`
 
-**AI Agent Komutu:**
-```
-YENİ DOSYA OLUŞTUR: scripts/validate_all_data.py
+**Tasks:**
 
-FONKSİYON:
-1. data/raw/ klasöründeki TÜM dosyaları tara
-2. Her dosya için:
-   - Format kontrolü (timestamp, OHLCV kolonları)
-   - Missing value kontrolü (max %5)
-   - Fiyat anomalisi kontrolü (tek bar'da max %50 değişim)
-   - Volume kontrolü (negatif olmamalı)
-   - Tarih sıralaması kontrolü (monotonic increasing)
-3. Sonuçları tablo olarak göster
-4. Hatalı dosya varsa listele
-5. Exit code: 0 (başarılı) veya 1 (hatalı)
+1. **Add Walk-Forward Optimization:**
+   - Optimize hyperparameters using walk-forward validation (not just k-fold)
+   - This prevents overfitting to specific time periods
+   - Use same purge gap as training
 
-BACKTEST'TEN ÖNCE ÇALIŞTIR:
-python scripts/validate_all_data.py
-Eğer exit code 1 ise backtest başlamasın
-```
+2. **Add Multi-Metric Optimization:**
+   - Optimize for multiple objectives: Sharpe, Sortino, Max Drawdown
+   - Use Pareto frontier for multi-objective
+   - Allow configurable metric weights
+
+3. **Add Optuna Pruning:**
+   - Implement early pruning for bad trials
+   - Use MedianPruner or HyperbandPruner
+   - Save computation time
+
+4. **Add Hyperparameter Importance:**
+   - After optimization, calculate which hyperparameters matter most
+   - Log importance to MLflow
+   - Help understand model behavior
 
 ---
 
-## 📌 EKSİK #3: Transaction Cost Sensitivity Analysis
+### 2.5 Cross-Validation Improvements
 
-**Mevcut Durum:**
-- Tek bir commission ve slippage değeri kullanılıyor
-- Backtest sonucu bu değerlere çok hassas olabilir
-- JPMorgan'da farklı cost senaryoları test edilmeli
+**File:** `src/training/validation.py`
 
-**AI Agent Komutu:**
-```
-YENİ FONKSİYON EKLE: main.py veya orchestrate.py
+**Tasks:**
 
-FONKSİYON ADI: run_cost_sensitivity()
+1. **Add Purge Gap Validation:**
+   - Add method `validate_purge_gap(purge_gap, max_lookback, prediction_horizon)`
+   - Raise warning if purge_gap < max_lookback + prediction_horizon
+   - Log the calculation details
 
-MANTIK:
-1. Commission değerleri: [0.0005, 0.001, 0.002, 0.005]
-2. Slippage değerleri: [0.0002, 0.0005, 0.001, 0.002]
-3. Her kombinasyon için backtest çalıştır
-4. Sonuçları matris olarak göster:
+2. **Add Split Visualization:**
+   - Add method to visualize train/test splits
+   - Show purge and embargo regions clearly
+   - Save visualization as image file
 
-         | Slip 0.02% | Slip 0.05% | Slip 0.1% | Slip 0.2% |
----------|------------|------------|-----------|-----------|
-Comm 0.05%|   12.5%   |   11.2%    |   9.8%    |   7.1%    |
-Comm 0.1% |   11.8%   |   10.5%    |   9.1%    |   6.4%    |
-Comm 0.2% |   10.4%   |    9.1%    |   7.7%    |   5.0%    |
+3. **Add Leakage Detection in Splits:**
+   - After generating splits, verify no index overlap
+   - Verify temporal ordering (train indices < test indices after purge)
+   - Raise error if leakage detected
 
-YORUM:
-- Strateji cost'a ne kadar hassas?
-- Hangi cost seviyesinde karlılık kayboluyor?
-- Break-even cost nedir?
-```
+4. **Add Time-Based Stratification:**
+   - Option to stratify by time periods (ensure each fold has different market regimes)
+   - Option to stratify by volatility regime
+   - Improve generalization
 
 ---
 
-## 📌 EKSİK #4: Out-of-Sample Holdout Validation
+## 🟡 SECTION 3: FEATURE ENGINEERING IMPROVEMENTS
 
-**Mevcut Durum:**
-- TÜM data train ve backtest için kullanılıyor
-- Gerçek out-of-sample test yok
-- Model overfit olmuş olabilir ve bilemeyiz
+### 3.1 Feature Leakage Prevention System
 
-**AI Agent Komutu:**
+**New File:** `src/features/leakage_prevention.py`
+
+**Purpose:** Systematically prevent and detect look-ahead bias in features.
+
+**Implementation Requirements:**
+
+1. **LeakageChecker Class:**
 ```
-DEĞİŞİKLİK: load_data() fonksiyonu
-
-YENİ PARAMETRE: holdout_pct (default: 0.0)
-
-MANTIK:
-1. Data yükle
-2. holdout_pct > 0 ise:
-   - Son %X'i ayır (holdout_data)
-   - Geri kalanı train_data
-3. Train/backtest SADECE train_data üzerinde
-4. En iyi strateji belirlendikten SONRA
-5. Holdout_data üzerinde FINAL test
-6. Bu sonuç "gerçek" out-of-sample performance
-
-NEDEN ÖNEMLİ:
-- Backtest'te 10 strateji test ettin
-- En iyi Sharpe 1.5 olan seçildi
-- AMA bu "data snooping" olabilir
-- Holdout'ta 0.8 gelirse gerçek performance o
+   class LeakageChecker:
+       - check_feature_for_leakage(feature_series, price_series, target_series) -> LeakageResult
+       - check_all_features(feature_df, price_df, target_series) -> Dict[str, LeakageResult]
+       - get_safe_features(feature_df, ...) -> List[str]
+       - generate_report() -> str
 ```
+
+2. **Leakage Detection Methods:**
+   - **Future Correlation Test:** Check if feature correlates with future returns (should not)
+   - **Timestamp Validation:** Verify feature timestamps <= current bar timestamp
+   - **Rolling Window Validation:** Verify rolling calculations don't include current bar in some cases
+   - **Target Leakage Test:** Check if feature contains information about target variable
+
+3. **LeakageResult Dataclass:**
+```
+   @dataclass
+   class LeakageResult:
+       feature_name: str
+       has_leakage: bool
+       leakage_type: Optional[str]  # "future_data", "target_leakage", "timestamp"
+       leakage_score: float  # 0-1, higher = more leakage risk
+       details: str
+```
+
+4. **Integration:**
+   - Call after feature generation, before training
+   - Option to auto-remove features with leakage
+   - Log results to experiment tracker
 
 ---
 
-## 📌 EKSİK #5: Regime-Aware Backtest
+### 3.2 Feature Pipeline Robustness
 
-**Mevcut Durum:**
-- Tek bir backtest tüm dönem için yapılıyor
-- Bull market, bear market, sideways ayrı ayrı analiz yok
-- Strateji belirli rejimlerde kötü olabilir
+**File:** `src/features/pipeline.py`
 
-**AI Agent Komutu:**
-```
-MEVCUT SINIF KULLAN: src/features/regime/volatility_regime.py
+**Tasks:**
 
-BACKTEST SONRASI ANALİZ:
-1. Tüm dönem için volatilite rejimi belirle
-2. Günleri kategorize et: low_vol, normal_vol, high_vol, crisis
-3. Her rejim için ayrı metrikler hesapla:
+1. **Add Input Validation:**
+   - Validate DataFrame has required columns (open, high, low, close, volume)
+   - Validate no negative prices
+   - Validate timestamps are sorted
+   - Validate no duplicate timestamps
 
-   | Rejim    | Gün | Return | Sharpe | MaxDD |
-   |----------|-----|--------|--------|-------|
-   | Low Vol  | 150 | +8%    | 1.8    | -3%   |
-   | Normal   | 200 | +12%   | 1.2    | -8%   |
-   | High Vol | 80  | -5%    | -0.3   | -15%  |
-   | Crisis   | 20  | -10%   | -1.5   | -25%  |
+2. **Add NaN/Inf Handling:**
+   - Replace inf with NaN before processing
+   - Track NaN percentage per feature
+   - Warn if NaN percentage > threshold (e.g., 5%)
+   - Option to drop high-NaN features
 
-YORUM:
-- Strateji hangi rejimlerde iyi/kötü?
-- Crisis'te hedge var mı?
-- Volatilite spike'ta ne oluyor?
-```
+3. **Add Feature Statistics Logging:**
+   - Log mean, std, min, max for each feature
+   - Log correlation matrix summary
+   - Log feature count at each stage
 
----
-
-# BÖLÜM 3: KALDIRILMASI GEREKEN FAZLALIKLAR
-
-## 🗑️ FAZLALIK #1: Duplicate Validation Logic
-
-**Konum:** 
-- `src/data/validators/data_validator.py` - DataValidator sınıfı
-- `main.py` satır 160-195 - validate_data_for_backtest() fonksiyonu
-
-**Problem:** Aynı validation logic iki yerde yazılmış
-
-**AI Agent Komutu:**
-```
-DOSYA: main.py
-SİL: validate_data_for_backtest() fonksiyonunu tamamen kaldır
-KULLAN: Sadece DataValidator sınıfını her yerde
-```
+4. **Add Memory Optimization:**
+   - Downcast float64 to float32 where precision allows
+   - Delete intermediate DataFrames
+   - Use gc.collect() after large operations
 
 ---
 
-## 🗑️ FAZLALIK #2: VectorizedBacktest Sınıfı
+### 3.3 Technical Indicators Enhancement
 
-**Konum:** `src/backtesting/engine.py` satır 250-320
+**File:** `src/features/technical/indicators.py`
 
-**Problem:**
-- BacktestEngine var (tam özellikli)
-- VectorizedBacktest var (basitleştirilmiş)
-- İkisi de aynı işi yapıyor
-- VectorizedBacktest trade kaydı tutmuyor
+**Tasks:**
 
-**AI Agent Komutu:**
-```
-DOSYA: src/backtesting/engine.py
-SİL: VectorizedBacktest sınıfını tamamen kaldır
-KALSIN: BacktestEngine (primary) ve EventDrivenEngine (advanced)
-GÜNCELLE: __init__.py'den VectorizedBacktest export'unu kaldır
-```
+1. **Add Missing Indicators:**
+   - Ichimoku Cloud (if not present)
+   - Keltner Channels
+   - Donchian Channels
+   - Elder Ray Index
+   - Chaikin Money Flow
+   - Williams %R
+   - Ultimate Oscillator
 
----
+2. **Add Multi-Timeframe Features:**
+   - Calculate indicators on multiple timeframes (15min, 1h, 4h, daily)
+   - Resample data appropriately
+   - Align timestamps correctly (no future data!)
 
-## 🗑️ FAZLALIK #3: Kullanılmayan Config Dosyaları
+3. **Add Indicator Normalization:**
+   - Z-score normalization option
+   - Min-max scaling option
+   - Percentile ranking option
 
-**Konum:** `config/` klasörü
-
-**Mevcut Dosyalar:**
-- base.yaml
-- development.yaml
-- staging.yaml
-- production.yaml
-- trading_config.yaml
-- feature_params.yaml
-- ml_config.yaml
-- risk_limits.yaml
-- institutional_defaults.yaml
-
-**Problem:** Çok fazla config dosyası, hangisinin kullanıldığı belirsiz
-
-**AI Agent Komutu:**
-```
-SADELEŞTIR:
-1. trading_config.yaml - ANA CONFIG (her şey burada)
-2. production.yaml - Sadece prod'a özel override'lar
-3. Diğerlerini BİRLEŞTİR trading_config.yaml içine
-
-VEYA:
-Tek config.yaml dosyası oluştur, environment bazlı section'larla
-```
+4. **Add Indicator Combinations:**
+   - RSI + MACD divergence detection
+   - Moving average crossover signals
+   - Bollinger Band squeeze detection
 
 ---
 
-# BÖLÜM 4: JPMORGAN SEVİYESİ GELİŞTİRMELER
+### 3.4 Microstructure Features Completion
 
-## 🚀 GELİŞTİRME #1: Execution Quality Metrics
+**File:** `src/features/microstructure/`
 
-**Mevcut:** Sadece slippage yüzdesi var
+**Tasks:**
 
-**Gerekli:**
-```
-EKLE: Execution quality metrikleri
-- Implementation Shortfall
-- Arrival Price vs Execution Price
-- VWAP vs Execution Price
-- Market Impact (realized vs estimated)
+1. **Verify All Modules Work:**
+   - Test `order_flow_imbalance.py`
+   - Test `vpin.py`
+   - Test `kyle_lambda.py`
+   - Test `roll_spread.py`
+   - Test `order_book_dynamics.py`
+   - Fix any import errors or calculation bugs
 
-RAPORDA GÖSTER:
-"Execution Quality Report"
-- Ortalama slippage: 0.05%
-- VWAP'a göre performance: -0.02%
-- Toplam execution cost: $45,230
-```
+2. **Add Missing Features:**
+   - Effective spread calculation
+   - Realized spread calculation
+   - Price impact per trade
+   - Trade flow toxicity
 
----
-
-## 🚀 GELİŞTİRME #2: Risk Attribution
-
-**Mevcut:** Toplam risk metrikleri var
-
-**Gerekli:**
-```
-EKLE: Risk decomposition
-- Systematic risk (market beta)
-- Idiosyncratic risk (stock-specific)
-- Sector risk
-- Style risk (momentum, value, size)
-
-RAPORDA GÖSTER:
-"Risk Attribution"
-- Toplam Volatilite: 15%
-  - Market: 8%
-  - Sector: 4%
-  - Stock-specific: 3%
-- Active Risk: 7%
-```
+3. **Add Feature Aggregations:**
+   - Rolling mean/std of microstructure features
+   - Percentile rankings
+   - Change from previous period
 
 ---
 
-## 🚀 GELİŞTİRME #3: Stress Testing
+### 3.5 Time-Based Features Enhancement
 
-**Mevcut:** Monte Carlo var ama stress test yok
+**File:** `src/features/transformers.py` → `TimeCyclicalEncoder`
 
-**Gerekli:**
-```
-EKLE: Historical stress scenarios
-- 2008 Financial Crisis
-- 2020 COVID Crash
-- 2022 Rate Hike
+**Tasks:**
 
-HER SENARYO İÇİN:
-- O dönemdeki market koşullarını simüle et
-- Stratejinin performansını hesapla
-- Maximum loss'u göster
+1. **Add More Time Features:**
+   - Minute of hour (sin/cos)
+   - Day of month (sin/cos)
+   - Week of year (sin/cos)
+   - Quarter of year (sin/cos)
 
-RAPORDA GÖSTER:
-"Stress Test Results"
-| Scenario      | Duration | Market | Strategy | Max Loss |
-|---------------|----------|--------|----------|----------|
-| 2008 Crisis   | 6 months | -50%   | -25%     | -35%     |
-| COVID Crash   | 1 month  | -35%   | -15%     | -20%     |
-| 2022 Rates    | 9 months | -25%   | -10%     | -18%     |
-```
+2. **Add Market Session Features:**
+   - Is market open (binary)
+   - Minutes since market open
+   - Minutes until market close
+   - Session identifier (morning, midday, afternoon, close)
 
----
-
-## 🚀 GELİŞTİRME #4: Liquidity Risk Monitoring
-
-**Mevcut:** ADV kontrolü var ama gerçek zamanlı değil
-
-**Gerekli:**
-```
-EKLE: Liquidity metrics
-- Days to liquidate (DTL) - pozisyonu tasfiye etme süresi
-- Liquidity score per position
-- Portfolio liquidity score
-- Liquidation cost estimate
-
-SINIRLAR:
-- Max position ADV %: 5%
-- Max portfolio DTL: 3 days
-- Alert at DTL > 2 days
-
-RAPORDA GÖSTER:
-"Liquidity Risk Report"
-- Portfolio DTL: 1.5 days
-- Least liquid position: XYZ (DTL: 4 days) ⚠️
-- Estimated liquidation cost: $125,000
-```
+3. **Add Event-Based Time Features:**
+   - Days until next FOMC meeting
+   - Days until earnings (if available)
+   - Days until options expiration (monthly)
+   - Is first/last trading day of month
 
 ---
 
-## 🚀 GELİŞTİRME #5: Model Decay Monitoring
+### 3.6 Feature Selection Module
 
-**Mevcut:** Model bir kere eğitiliyor, sonra kullanılıyor
+**New File:** `src/features/feature_selection.py`
 
-**Gerekli:**
+**Purpose:** Automated feature selection to reduce dimensionality and improve model performance.
+
+**Implementation Requirements:**
+
+1. **FeatureSelector Class:**
 ```
-EKLE: Model performance tracking
-- Rolling out-of-sample performance
-- Feature importance stability
-- Prediction accuracy over time
-- Model refresh triggers
-
-MANTIK:
-1. Her hafta model performansını ölç
-2. Son 4 hafta Sharpe < 0 ise ALERT
-3. Feature importance değişimi > %30 ise ALERT
-4. Otomatik retrain trigger'ı
-
-RAPORDA GÖSTER:
-"Model Health Dashboard"
-- Current model age: 45 days
-- Rolling Sharpe (4w): 0.8 (↓ from 1.2)
-- Feature stability: 85%
-- Recommendation: RETRAIN SOON
+   class FeatureSelector:
+       - __init__(self, method, n_features, threshold)
+       - fit(X, y) -> self
+       - transform(X) -> X_selected
+       - get_selected_features() -> List[str]
+       - get_feature_scores() -> Dict[str, float]
 ```
+
+2. **Selection Methods:**
+   - **Variance Threshold:** Remove low-variance features
+   - **Correlation Filter:** Remove highly correlated features (keep one)
+   - **Mutual Information:** Select features with highest MI with target
+   - **Feature Importance:** Use model-based importance (LightGBM)
+   - **Recursive Feature Elimination:** Iteratively remove worst features
+
+3. **Stability Selection:**
+   - Run feature selection multiple times with bootstrap
+   - Keep features selected consistently (>50% of runs)
+   - More robust than single selection
+
+4. **Integration:**
+   - Can be used in pipeline after feature generation
+   - Save selected feature list for inference
+   - Log selection results
 
 ---
 
-# BÖLÜM 5: UYGULAMA ÖNCELİK SIRASI
+## 🟢 SECTION 4: MAIN.PY INTEGRATION UPDATES
 
-## Faz 1: Kritik Düzeltmeler (İLK YAPILACAK)
+### 4.1 Add New CLI Arguments
 
-**Öncelik 1 - Data Loading:**
+**File:** `main.py`
+
+**Tasks:**
+
+Add these new command-line arguments:
 ```
-1. generate_sample_data.py dosya adı düzeltmesi
-2. timestamp kolon adı düzeltmesi
-3. validate_all_data.py script'i oluştur
+--validate-features    Run feature leakage check before training
+--check-drift         Run drift detection on existing model
+--feature-selection   Apply feature selection before training
+--save-features       Save generated features to disk
+--load-features       Load pre-generated features from disk
+--dry-run            Validate everything without actual training
+--resume             Resume training from checkpoint
+--model-path         Path to existing model (for evaluation/drift check)
 ```
 
-**Öncelik 2 - Data Leakage:**
-```
-1. main.py generate_features() fonksiyonunu düzelt
-2. FeaturePipeline.fit() -> transform() akışı uygula
-3. Scaler parametreleri sadece train data'dan
-```
-
-**Öncelik 3 - CV Düzeltmesi:**
-```
-1. sklearn cross_validate() kaldır
-2. Manuel purged CV loop yaz
-3. Leakage kontrolü ekle
-```
+Update argument parser and add handling logic for each.
 
 ---
 
-## Faz 2: Entegrasyon (İKİNCİ YAPILACAK)
+### 4.2 Improve Error Handling
 
-**Öncelik 4 - Market Impact:**
-```
-1. Per-symbol ADV kullanımına geç
-2. BacktestEngine'e symbol_adv parametresi ekle
-3. Her trade için doğru ADV kullan
-```
+**File:** `main.py`
 
-**Öncelik 5 - Walk-Forward:**
-```
-1. Config'den walk_forward ayarlarını oku
-2. WalkForwardValidator'ı entegre et
-3. Expanding vs sliding window seçeneği
-```
+**Tasks:**
 
-**Öncelik 6 - TimescaleDB:**
-```
-1. Config'de timescale ayarları ekle
-2. load_data() içinde TimescaleClient kullanımı
-3. Fallback: CSV loading
-```
+1. **Wrap Main Sections in Try/Except:**
+   - Data loading section
+   - Feature generation section
+   - Training section
+   - Backtesting section
+   - Report generation section
 
----
+2. **Add Specific Exception Handling:**
+   - `FileNotFoundError`: Data files missing
+   - `ValueError`: Invalid configuration
+   - `MemoryError`: Not enough RAM
+   - `KeyboardInterrupt`: Graceful shutdown
 
-## Faz 3: Raporlama (ÜÇÜNCÜ YAPILACAK)
+3. **Add Cleanup on Error:**
+   - Save partial results if possible
+   - Release memory
+   - Close file handles
+   - Log error details
 
-**Öncelik 7 - Institutional Metrics:**
-```
-1. DSR, PSR, MinTRL raporlara ekle
-2. n_trials parametresi (test edilen strateji sayısı)
-3. Statistical significance göstergesi
-```
-
-**Öncelik 8 - Sensitivity Analysis:**
-```
-1. Cost sensitivity matrix
-2. Regime-aware breakdown
-3. Stress test scenarios
-```
+4. **Add Retry Logic:**
+   - For transient errors (e.g., MLflow connection)
+   - Configurable retry count and delay
 
 ---
 
-## Faz 4: Tek Komut Sistemi (SON YAPILACAK)
+### 4.3 Add Data Validation Before Training
 
-**Öncelik 9 - Orchestrator:**
-```
-1. orchestrate.py oluştur
-2. Tüm adımları sırala
-3. Hata yönetimi ekle
-4. Progress gösterimi
-5. Holdout validation
-```
+**File:** `main.py`
 
-**Öncelik 10 - Final Test:**
-```
-1. Tüm sistemi baştan sona test et
-2. Sample data ile full pipeline çalıştır
-3. Raporları kontrol et
-4. README güncelle
-```
+**Tasks:**
 
----
+Add comprehensive data validation step after loading:
 
-# BÖLÜM 6: KALİTE KONTROL CHECKLIST
+1. **Data Quality Checks:**
+   - No future timestamps
+   - No duplicate timestamps
+   - Chronological order
+   - Price sanity (no negative, no extreme outliers)
+   - Volume sanity
+   - No large gaps in data
 
-## Backtest Başlamadan Önce
+2. **Data Statistics Logging:**
+   - Date range
+   - Number of bars per symbol
+   - Missing data percentage
+   - Price range per symbol
 
-- [ ] Tüm data dosyaları validate edildi mi?
-- [ ] Feature pipeline FIT train data üzerinde yapıldı mı?
-- [ ] Purge gap doğru hesaplandı mı? (horizon + lookback + buffer)
-- [ ] Survivorship bias kontrolü yapıldı mı?
-- [ ] Holdout data ayrıldı mı?
-
-## Backtest Sırasında
-
-- [ ] Cash balance hiç negatif olmuyor mu?
-- [ ] Market impact per-symbol ADV ile mi hesaplanıyor?
-- [ ] Slippage realistic mi?
-- [ ] Trade execution t+1'de mi yapılıyor (look-ahead yok)?
-
-## Backtest Sonrasında
-
-- [ ] DSR pozitif mi?
-- [ ] PSR > 95% mi (statistical significance)?
-- [ ] Holdout performance in-sample'a yakın mı?
-- [ ] Cost sensitivity makul mü?
-- [ ] Regime analysis yapıldı mı?
+3. **Fail Fast:**
+   - If critical data issues, abort with clear error message
+   - If minor issues, log warning and continue
 
 ---
 
-# SONUÇ
+### 4.4 Improve Model Saving and Loading
 
-Bu döküman AI Agent'ın AlphaTrade sistemini JPMorgan seviyesine getirmesi için gereken TÜM adımları içermektedir.
+**File:** `main.py`
 
-**Tahmini Süre:** 
-- Faz 1: 2 saat
-- Faz 2: 2 saat  
-- Faz 3: 1.5 saat
-- Faz 4: 1 saat
-- **TOPLAM: 6.5 saat**
+**Tasks:**
 
-**Kritik Başarı Metrikleri:**
-1. Data leakage: SIFIR
-2. Purge gap: Doğru hesaplanmış
-3. DSR: Tüm raporlarda mevcut
-4. Tek komut: `python orchestrate.py` her şeyi çalıştırıyor
-5. Holdout validation: Out-of-sample sonuç mevcut
+1. **Standardize Model Naming:**
+```
+   models/{model_type}_{timestamp}_{metric_value}.pkl
+   Example: models/lightgbm_20241217_153045_sharpe_1.45.pkl
 
----
+Save Model Metadata:
 
-*Bu döküman AI Agent'a verilecek komutlar formatında hazırlanmıştır.*
-*Kod içermez, sadece NE yapılması gerektiğini açıklar.*
+Create JSON file alongside model:
+
+
+
+json   {
+     "model_type": "lightgbm",
+     "trained_at": "2024-12-17T15:30:45",
+     "training_data_range": ["2020-01-01", "2024-06-30"],
+     "n_samples": 150000,
+     "n_features": 85,
+     "feature_names": [...],
+     "cv_score_mean": 0.032,
+     "cv_score_std": 0.008,
+     "best_params": {...},
+     "config_snapshot": {...}
+   }
+
+Save Feature Pipeline:
+
+Save fitted FeaturePipeline alongside model
+Required for inference to use same scaling parameters
+Use joblib or pickle
+
+
+Add Model Loading Function:
+
+Load model + metadata + feature pipeline together
+Validate compatibility
+Return ready-to-use predictor
+
+
+
+
+4.5 Add Training Checkpointing
+File: main.py
+Tasks:
+
+Checkpoint During Training:
+
+Save model state every N epochs (for deep learning)
+Save intermediate results during CV
+Allow resume from checkpoint
+
+
+Checkpoint Contents:
+
+Model weights/state
+Optimizer state
+Current epoch/fold
+Best metrics so far
+Training history
+
+
+Resume Logic:
+
+Detect existing checkpoint
+Load state
+Continue from where left off
+Log that training was resumed
+
+
+
+
+🔵 SECTION 5: TESTING AND VALIDATION
+5.1 Create Unit Tests for Fixes
+Directory: tests/unit/
+Tasks:
+Create unit tests for each fix:
+
+test_feature_pipeline.py:
+
+Test generate_features is callable on FeaturePipeline instance
+Test fit/transform separation
+Test leakage prevention
+
+
+test_model_factory.py:
+
+Test create_model method exists and works
+Test all model types can be created
+Test parameter passing
+
+
+test_microstructure.py:
+
+Test OrderBookDynamics import
+Test OBI calculation
+Test WMP calculation
+
+
+test_validation.py:
+
+Test purge gap calculation
+Test no index overlap in CV splits
+Test temporal ordering
+
+
+
+
+5.2 Create Integration Tests
+Directory: tests/integration/
+Tasks:
+
+test_training_pipeline.py:
+
+Test full pipeline: data → features → training → evaluation
+Use small sample data
+Verify no errors
+
+
+test_feature_to_model.py:
+
+Test features integrate correctly with models
+Test feature shapes match model expectations
+Test no NaN in model input
+
+
+test_config_loading.py:
+
+Test config files load correctly
+Test config merge logic
+Test config validation
+
+
+
+
+5.3 Add Validation Scripts
+Directory: scripts/
+Tasks:
+
+validate_no_leakage.py:
+
+Script to verify no data leakage in features
+Run on full dataset
+Report any issues
+
+
+validate_cv_splits.py:
+
+Script to visualize and validate CV splits
+Check purge gaps
+Check temporal ordering
+
+
+validate_model_consistency.py:
+
+Script to verify model produces consistent results
+Run inference multiple times
+Check for randomness issues
+
+
+
+
+🟣 SECTION 6: CONFIGURATION AND DOCUMENTATION
+6.1 Synchronize All Config Files
+Files:
+
+config/ml_config.yaml
+config/trading_config.yaml
+config/feature_params.yaml
+main.py (DEFAULT_CONFIG)
+
+Tasks:
+
+Create Config Schema:
+
+Define expected types for each config field
+Define valid ranges/values
+Add validation function
+
+
+Synchronize Values:
+
+Ensure same defaults across all files
+Remove duplicates
+Clear hierarchy (base → environment-specific)
+
+
+Add Config Documentation:
+
+Comment each field with description
+Include valid values/ranges
+Include examples
+
+
+
+
+6.2 Create README for Training
+File: src/training/README.md
+Contents:
+
+Overview of training module
+List of all classes and their purposes
+Training workflow diagram
+Configuration options
+Usage examples
+Troubleshooting guide
+
+
+6.3 Create README for Features
+File: src/features/README.md
+Contents:
+
+Overview of feature engineering module
+List of all features with descriptions
+Leakage prevention guidelines
+Feature pipeline usage
+Adding custom features guide
+Performance considerations
+
+
+📊 SECTION 7: PERFORMANCE OPTIMIZATION
+7.1 Memory Optimization
+Files: Various
+Tasks:
+
+Use Efficient Data Types:
+
+Convert float64 to float32 where possible
+Use categorical dtype for string columns
+Use int32 instead of int64 where range allows
+
+
+Process Data in Chunks:
+
+For large datasets, process symbol by symbol
+Clear memory between symbols
+Use generators where possible
+
+
+Profile Memory Usage:
+
+Add memory profiling to training script
+Identify memory bottlenecks
+Log peak memory usage
+
+
+
+
+7.2 Speed Optimization
+Files: Various
+Tasks:
+
+Use Vectorized Operations:
+
+Replace loops with numpy/pandas vectorized operations
+Use numba for custom calculations if needed
+
+
+Enable Parallel Processing:
+
+Use joblib for parallel feature generation
+Use multiple cores for model training
+Configure n_jobs appropriately
+
+
+Add Caching:
+
+Cache expensive feature calculations
+Use feature store for pre-computed features
+Implement cache invalidation
+
+
+
+
+⚠️ SECTION 8: PRIORITY ORDER
+CRITICAL (Do Immediately):
+
+Fix Feature Pipeline indentation error
+Fix ModelFactory.create → create_model
+Fix Microstructure all export
+Fix Features init.py exports
+Synchronize config files (purge_gap, max_lookback)
+
+HIGH PRIORITY (This Week):
+6. Complete Deep Learning training implementation
+7. Fix TrainingResult object usage
+8. Add data validation before training
+9. Improve model saving with metadata
+10. Add unit tests for all fixes
+MEDIUM PRIORITY (Next Week):
+11. Create Drift Detection module
+12. Create Feature Leakage Checker
+13. Create Training Pipeline orchestrator
+14. Add feature selection module
+15. Add integration tests
+LOWER PRIORITY (Backlog):
+16. Add all new CLI arguments
+17. Create documentation files
+18. Performance optimizations
+19. Additional technical indicators
+20. Multi-timeframe features
+
+✅ SECTION 9: SUCCESS CRITERIA
+After all tasks are complete, verify:
+
+✅ python main.py --mode train runs without errors
+✅ python main.py --mode backtest runs without errors
+✅ All unit tests pass: pytest tests/unit/
+✅ All integration tests pass: pytest tests/integration/
+✅ Feature pipeline leakage check passes
+✅ CV splits have no index overlap
+✅ Purge gap is correctly calculated (≥ prediction_horizon + max_lookback)
+✅ Models are saved with metadata JSON
+✅ Deep learning models actually train (loss decreases)
+✅ All imports work without errors
+✅ Config files are synchronized
+✅ No warnings about deprecated methods
+
+
+🔧 SECTION 10: EXECUTION NOTES
+
+Before Each Change:
+
+Read the existing code carefully
+Understand the current implementation
+Identify dependencies
+
+
+After Each Change:
+
+Run relevant tests
+Check imports work
+Verify no regressions
+
+
+Code Style:
+
+Follow existing code style
+Add docstrings to new functions/classes
+Add type hints
+Keep functions focused and small
+
+
+Git Commits:
+
+Make small, focused commits
+Write clear commit messages
+Reference task number in commit
+
+
+If Stuck:
+
+Log the issue clearly
+Document what was tried
+Move to next task if blocked

@@ -10,11 +10,13 @@ This module provides comprehensive feature engineering:
 - Fractional differentiation for stationarity
 - Cointegration and statistical arbitrage features
 - Macroeconomic features from FRED
+- Market microstructure features
 
 Designed for institutional requirements:
 - Point-in-time accuracy
 - Memory-preserving transformations
 - Regime detection
+- Leakage prevention
 """
 from .transformers import TimeCyclicalEncoder
 from src.features.technical.indicators import TechnicalIndicators
@@ -51,10 +53,23 @@ from src.features.feature_store import (
     create_standard_features,
     initialize_feature_store,
 )
+from src.features.microstructure import (
+    OrderFlowImbalance,
+    calculate_ofi,
+    VPIN,
+    calculate_vpin,
+    KyleLambda,
+    calculate_kyle_lambda,
+    RollSpread,
+    AmihudIlliquidity,
+    OrderBookDynamics,
+)
 
 __all__ = [
     # Technical indicators
     "TechnicalIndicators",
+    # Time features
+    "TimeCyclicalEncoder",
     # Pipeline
     "FeaturePipeline",
     "FeatureProcessor",
@@ -83,4 +98,14 @@ __all__ = [
     "DataSource",
     "create_standard_features",
     "initialize_feature_store",
+    # Microstructure features
+    "OrderFlowImbalance",
+    "calculate_ofi",
+    "VPIN",
+    "calculate_vpin",
+    "KyleLambda",
+    "calculate_kyle_lambda",
+    "RollSpread",
+    "AmihudIlliquidity",
+    "OrderBookDynamics",
 ]

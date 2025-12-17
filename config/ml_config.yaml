@@ -51,12 +51,14 @@ feature_selection:
 # -----------------------------------------------------------------------------
 # Cross-Validation Configuration
 # -----------------------------------------------------------------------------
+# CRITICAL: Proper purge gap prevents data leakage from lookback-based features
+# Formula: purge_gap >= prediction_horizon + max_feature_lookback + buffer
 cross_validation:
   n_splits: 5                       # Number of CV folds
-  purge_gap: 10                     # Bars between train and test
+  purge_gap: "auto"                 # "auto" calculates: horizon + lookback + buffer
   embargo_pct: 0.01                 # % of test set as embargo
-  prediction_horizon: 1             # Bars ahead for prediction
-  max_feature_lookback: 20          # Longest lookback in features
+  prediction_horizon: 5             # Bars ahead for prediction (15min * 5 = 75min)
+  max_feature_lookback: 200         # Longest lookback in features (MA200, etc.)
 
   # Walk-forward validation
   walk_forward:

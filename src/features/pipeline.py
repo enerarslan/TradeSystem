@@ -646,87 +646,120 @@ class FeaturePipeline:
         """Check if pipeline has been fitted."""
         return self._is_fitted
 
-def generate_features(
+    def generate_features(
         self,
         df: pd.DataFrame,
         include_technical: bool = True,
         include_statistical: bool = True,
         include_lagged: bool = True,
-        include_microstructure: bool = True,  # <-- YENİ PARAMETRE
-        include_time: bool = True,            # <-- YENİ PARAMETRE
+        include_microstructure: bool = True,
+        include_time: bool = True,
     ) -> pd.DataFrame:
         """
         Generate all features for a single stock.
+
+        This method generates technical, statistical, time-based, and microstructure
+        features from OHLCV data.
+
+        IMPORTANT: For proper leakage prevention, use fit() and transform()
+        methods instead of calling generate_features() directly.
+
+        Args:
+            df: OHLCV DataFrame with columns: open, high, low, close, volume
+            include_technical: Include technical indicators
+            include_statistical: Include statistical features
+            include_lagged: Include lagged features
+            include_microstructure: Include microstructure features (requires order book data)
+            include_time: Include time-based cyclical features
+
+        Returns:
+            DataFrame with all generated features
         """
-        # ... (Baştaki leakage kontrol kodları aynen kalsın) ...
+        # Leakage prevention warning for direct calls
+        if self.strict_leakage_check and not self._internal_call:
+            self._direct_call_count += 1
+            if self._direct_call_count <= 3:
+                logger.warning(
+                    "Direct call to generate_features() detected. "
+                    "For proper leakage prevention, use fit() on training data "
+                    "and transform() on test data instead."
+                )
 
         features = pd.DataFrame(index=df.index)
 
-        # 1. Zaman Özellikleri (YENİ EKLENEN KISIM)
+        # 1. Time-based cyclical features
         if include_time:
-            # TimeCyclicalEncoder kullanarak saati sin/cos formatına çevir
-            time_encoder = TimeCyclicalEncoder()
-            # Eğer df'de index datetime ise veya timestamp kolonu varsa otomatik halleder
-            time_features = time_encoder.transform(df)
-            
-            # Sadece yeni üretilen sin/cos sütunlarını al
-            new_time_cols = [c for c in time_features.columns if c not in df.columns]
-            if new_time_cols:
-                features = pd.concat([features, time_features[new_time_cols]], axis=1)
+            try:
+                time_encoder = TimeCyclicalEncoder()
+                time_features = time_encoder.transform(df)
 
-        # 2. Mevcut Teknik İndikatörler (AYNEN KALSIN)
+                # Only add newly generated sin/cos columns
+                new_time_cols = [c for c in time_features.columns if c not in df.columns]
+                if new_time_cols:
+                    features = pd.concat([features, time_features[new_time_cols]], axis=1)
+            except Exception as e:
+                logger.warning(f"Failed to generate time features: {e}")
+
+        # 2. Technical indicators
         if include_technical:
-            tech = TechnicalIndicators(df)
-            tech_features = tech.generate_all_features(
-                ma_periods=self.ma_periods,
-                rsi_periods=self.rsi_periods,
-            )
-            features = pd.concat([features, tech_features], axis=1)
+            try:
+                tech = TechnicalIndicators(df)
+                tech_features = tech.generate_all_features(
+                    ma_periods=self.ma_periods,
+                    rsi_periods=self.rsi_periods,
+                )
+                features = pd.concat([features, tech_features], axis=1)
+            except Exception as e:
+                logger.warning(f"Failed to generate technical features: {e}")
 
-        # 3. Microstructure / Order Book Özellikleri (YENİ EKLENEN KISIM)
+        # 3. Microstructure / Order Book features
         if include_microstructure:
-            # Gerekli kolonlar var mı kontrol et
             required_cols = ['bid_size', 'ask_size', 'bid_price', 'ask_price']
             if all(col in df.columns for col in required_cols):
-                # OBI Hesapla
-                features['obi'] = OrderBookDynamics.calculate_obi(
-                    df['bid_size'], df['ask_size']
-                )
-                
-                # Weighted Mid Price Hesapla
-                wmp = OrderBookDynamics.calculate_wmp(
-                    df['bid_price'], df['bid_size'],
-                    df['ask_price'], df['ask_size']
-                )
-                
-                # Divergence Hesapla
-                mid_price = (df['bid_price'] + df['ask_price']) / 2
-                features['wmp_divergence'] = OrderBookDynamics.calculate_mid_price_divergence(
-                    mid_price, wmp
-                )
-            else:
-                # Veri seti sadece OHLCV ise ve derinlik yoksa uyarı basılabilir veya geçilebilir
-                # logger.warning("Order book columns missing, skipping microstructure features.")
-                pass
+                try:
+                    # Order Book Imbalance (OBI)
+                    features['obi'] = OrderBookDynamics.calculate_obi(
+                        df['bid_size'], df['ask_size']
+                    )
 
-        # 4. Mevcut İstatistiksel Özellikler (AYNEN KALSIN)
+                    # Weighted Mid Price
+                    wmp = OrderBookDynamics.calculate_wmp(
+                        df['bid_price'], df['bid_size'],
+                        df['ask_price'], df['ask_size']
+                    )
+
+                    # Mid Price Divergence
+                    mid_price = (df['bid_price'] + df['ask_price']) / 2
+                    features['wmp_divergence'] = OrderBookDynamics.calculate_mid_price_divergence(
+                        mid_price, wmp
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to generate microstructure features: {e}")
+
+        # 4. Statistical features
         if include_statistical:
-            stat = StatisticalFeatures(df)
-            stat_features = stat.generate_all()
-            features = pd.concat([features, stat_features], axis=1)
+            try:
+                stat = StatisticalFeatures(df)
+                stat_features = stat.generate_all()
+                features = pd.concat([features, stat_features], axis=1)
+            except Exception as e:
+                logger.warning(f"Failed to generate statistical features: {e}")
 
-        # 5. Lagged Features (AYNEN KALSIN)
+        # 5. Lagged features
         if include_lagged:
-            # Lag key features logic... (Mevcut kodunu koru)
-            key_cols = [
-                c for c in features.columns
-                if any(kw in c for kw in ["return", "rsi", "macd", "volume", "obi", "wmp"]) # obi ve wmp'yi de ekledim
-            ][:15] # Limiti biraz artırabilirsin
+            try:
+                # Select key features for lagging
+                key_cols = [
+                    c for c in features.columns
+                    if any(kw in c for kw in ["return", "rsi", "macd", "volume", "obi", "wmp"])
+                ][:15]
 
-            if key_cols:
-                lag_gen = LaggedFeatures(features[key_cols], self.lag_periods)
-                lag_features = lag_gen.create_lags()
-                features = pd.concat([features, lag_features], axis=1)
+                if key_cols:
+                    lag_gen = LaggedFeatures(features[key_cols], self.lag_periods)
+                    lag_features = lag_gen.create_lags()
+                    features = pd.concat([features, lag_features], axis=1)
+            except Exception as e:
+                logger.warning(f"Failed to generate lagged features: {e}")
 
         self._feature_names = features.columns.tolist()
         logger.info(f"Generated {len(features.columns)} total features")
