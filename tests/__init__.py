@@ -1,0 +1,1 @@
+"""AlphaTrade test suite."""

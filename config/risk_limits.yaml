@@ -1,0 +1,255 @@
+# Risk Limits Configuration
+# AlphaTrade System - Risk Management Configuration
+
+# Position Sizing
+position_sizing:
+  # Method: fixed_fraction, kelly, volatility_target, risk_parity
+  method: "volatility_target"
+
+  fixed_fraction:
+    # Fraction of capital per position
+    fraction: 0.02
+
+  kelly:
+    # Maximum Kelly fraction (full Kelly is 1.0)
+    max_kelly_fraction: 0.25
+    # Minimum win rate for Kelly sizing
+    min_win_rate: 0.45
+    # Lookback for win rate calculation
+    lookback_trades: 100
+
+  volatility_target:
+    # Target annualized volatility
+    target_volatility: 0.15
+    # Volatility lookback period (bars)
+    lookback_period: 60
+    # Maximum leverage
+    max_leverage: 2.0
+    # Minimum leverage
+    min_leverage: 0.1
+    # Volatility estimation method: std, ewm, garch
+    vol_method: "ewm"
+    # EWM span for volatility
+    ewm_span: 20
+
+  risk_parity:
+    # Target portfolio volatility
+    target_volatility: 0.15
+    # Use covariance or just variance
+    use_covariance: true
+    # Covariance lookback
+    cov_lookback: 60
+
+# Value at Risk (VaR)
+var_limits:
+  # VaR confidence level
+  confidence_level: 0.99
+
+  # VaR calculation method: historical, parametric, monte_carlo
+  method: "historical"
+
+  # Lookback period (days)
+  lookback_days: 252
+
+  # Maximum daily VaR as % of capital
+  max_var_pct: 0.03
+
+  # Maximum weekly VaR as % of capital
+  max_weekly_var_pct: 0.06
+
+  # CVaR (Expected Shortfall) limit as % of capital
+  max_cvar_pct: 0.05
+
+  monte_carlo:
+    # Number of simulations
+    n_simulations: 10000
+    # Simulation horizon (days)
+    horizon_days: 1
+
+# Drawdown Controls
+drawdown:
+  # Maximum allowed drawdown before full stop
+  max_drawdown_pct: 0.20
+
+  # Warning threshold
+  warning_threshold: 0.10
+
+  # Position reduction levels
+  reduction_levels:
+    - threshold: 0.08
+      action: "reduce_50"  # Reduce positions by 50%
+    - threshold: 0.12
+      action: "reduce_75"  # Reduce positions by 75%
+    - threshold: 0.15
+      action: "flatten"    # Close all positions
+
+  # Recovery conditions
+  recovery:
+    # Minimum recovery before increasing size
+    min_recovery_pct: 0.50
+    # Days to wait after max DD before resuming
+    cooldown_days: 5
+
+# Exposure Limits
+exposure:
+  # Gross exposure (sum of abs positions)
+  max_gross_exposure: 1.5
+  min_gross_exposure: 0.3
+
+  # Net exposure (long - short)
+  max_net_exposure: 1.0
+  min_net_exposure: -0.5
+
+  # Single position limits
+  max_single_position: 0.20
+  min_single_position: 0.01
+
+  # Sector concentration
+  max_sector_exposure: 0.40
+
+  # Correlation limits
+  max_avg_correlation: 0.70
+  max_pairwise_correlation: 0.90
+
+# Liquidity Limits
+liquidity:
+  # Maximum position as % of ADV
+  max_adv_pct: 0.05
+
+  # Minimum average daily volume
+  min_adv: 100000
+
+  # Maximum days to liquidate
+  max_liquidation_days: 3
+
+  # Bid-ask spread limit (%)
+  max_spread_pct: 0.50
+
+# Loss Limits
+loss_limits:
+  # Daily loss limit as % of capital
+  daily_loss_limit: 0.03
+
+  # Weekly loss limit as % of capital
+  weekly_loss_limit: 0.06
+
+  # Monthly loss limit as % of capital
+  monthly_loss_limit: 0.10
+
+  # Action on breach: reduce, halt, alert
+  breach_action: "halt"
+
+  # Cool-off period after breach (hours)
+  cooloff_hours: 24
+
+# Trade Limits
+trade_limits:
+  # Maximum trades per day
+  max_daily_trades: 100
+
+  # Maximum turnover per day (% of portfolio)
+  max_daily_turnover: 0.50
+
+  # Minimum trade size ($)
+  min_trade_size: 1000
+
+  # Maximum trade size ($)
+  max_trade_size: 100000
+
+  # Maximum slippage tolerance (%)
+  max_slippage_pct: 0.30
+
+# Correlation Risk
+correlation:
+  # Correlation calculation method: pearson, spearman, kendall
+  method: "pearson"
+
+  # Lookback for correlation
+  lookback_period: 60
+
+  # Maximum average portfolio correlation
+  max_avg_correlation: 0.60
+
+  # Diversification ratio target
+  min_diversification_ratio: 1.5
+
+  # Effective N target (effective number of bets)
+  min_effective_n: 5
+
+# Stress Testing
+stress_testing:
+  # Run stress tests before trading
+  enabled: true
+
+  # Stress scenarios
+  scenarios:
+    - name: "market_crash"
+      market_shock: -0.20
+      vol_multiplier: 3.0
+      correlation_shock: 0.30
+
+    - name: "volatility_spike"
+      market_shock: -0.05
+      vol_multiplier: 4.0
+      correlation_shock: 0.20
+
+    - name: "liquidity_crisis"
+      market_shock: -0.10
+      vol_multiplier: 2.0
+      correlation_shock: 0.40
+
+    - name: "flash_crash"
+      market_shock: -0.10
+      vol_multiplier: 5.0
+      correlation_shock: 0.50
+
+  # Maximum loss under stress
+  max_stress_loss: 0.30
+
+# Circuit Breakers
+circuit_breakers:
+  # Market-wide circuit breaker thresholds
+  market_drop:
+    - threshold: -0.07
+      action: "pause_15min"
+    - threshold: -0.13
+      action: "pause_15min"
+    - threshold: -0.20
+      action: "halt_day"
+
+  # Portfolio-specific
+  portfolio:
+    # Halt on rapid loss
+    rapid_loss_pct: 0.05
+    rapid_loss_period_minutes: 30
+    action: "halt_review"
+
+# Margin and Leverage
+margin:
+  # Maximum leverage
+  max_leverage: 2.0
+
+  # Minimum margin buffer
+  min_margin_buffer: 0.20
+
+  # Margin call threshold
+  margin_call_threshold: 0.15
+
+  # Actions on margin warning
+  margin_warning_action: "reduce_positions"
+
+# Monitoring and Alerts
+monitoring:
+  # Risk check frequency (seconds)
+  check_frequency: 60
+
+  # Alert thresholds
+  alerts:
+    var_warning: 0.80  # Alert at 80% of VaR limit
+    drawdown_warning: 0.70  # Alert at 70% of max DD
+    exposure_warning: 0.90  # Alert at 90% of exposure limit
+
+  # Logging
+  log_all_checks: false
+  log_breaches: true
+  log_warnings: true

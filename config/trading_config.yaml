@@ -1,0 +1,322 @@
+# AlphaTrade Trading Configuration
+# This file contains all trading parameters and strategy settings
+
+# =============================================================================
+# UNIVERSE SETTINGS
+# =============================================================================
+universe:
+  symbols:
+    - AAPL
+    - ABBV
+    - ADBE
+    - AMGN
+    - AMZN
+    - AVGO
+    - AXP
+    - BA
+    - BAC
+    - BRK.B
+    - CAT
+    - COST
+    - CRM
+    - CSCO
+    - CVX
+    - DIS
+    - DOW
+    - GOOGL
+    - GS
+    - HD
+    - HON
+    - IBM
+    - INTC
+    - JNJ
+    - JPM
+    - KO
+    - LLY
+    - MA
+    - MCD
+    - META
+    - MMM
+    - MRK
+    - MSFT
+    - NKE
+    - NVDA
+    - PEP
+    - PG
+    - TMO
+    - TRV
+    - TSLA
+    - UNH
+    - V
+    - VZ
+    - WBA
+    - WMT
+    - XOM
+
+  # Sector mappings for exposure limits
+  sectors:
+    technology:
+      - AAPL
+      - ADBE
+      - AMZN
+      - AVGO
+      - CRM
+      - CSCO
+      - GOOGL
+      - IBM
+      - INTC
+      - META
+      - MSFT
+      - NVDA
+    healthcare:
+      - ABBV
+      - AMGN
+      - JNJ
+      - LLY
+      - MRK
+      - TMO
+      - UNH
+    financials:
+      - AXP
+      - BAC
+      - BRK.B
+      - GS
+      - JPM
+      - MA
+      - TRV
+      - V
+    consumer_discretionary:
+      - DIS
+      - HD
+      - MCD
+      - NKE
+      - TSLA
+    consumer_staples:
+      - COST
+      - KO
+      - PEP
+      - PG
+      - WBA
+      - WMT
+    industrials:
+      - BA
+      - CAT
+      - DOW
+      - HON
+      - MMM
+    energy:
+      - CVX
+      - XOM
+    communication:
+      - VZ
+
+# =============================================================================
+# STRATEGY SETTINGS
+# =============================================================================
+strategies:
+  # Multi-Factor Momentum Strategy
+  momentum:
+    enabled: true
+    weight: 0.25
+    params:
+      lookback_periods: [5, 10, 20, 60]
+      momentum_weight: 0.4
+      volume_momentum_weight: 0.3
+      volatility_adj_weight: 0.3
+      top_n_long: 5
+      bottom_n_short: 0  # 0 for long-only
+      rebalance_frequency: daily  # daily, weekly, monthly
+      min_momentum_threshold: 0.0
+
+  # Mean Reversion Strategy
+  mean_reversion:
+    enabled: true
+    weight: 0.25
+    params:
+      lookback_period: 20
+      entry_zscore: 2.0
+      exit_zscore: 0.5
+      stop_zscore: 3.0
+      half_life_max: 50
+      min_mean_reversion_speed: 0.1
+
+  # ML-Based Alpha Strategy
+  ml_alpha:
+    enabled: true
+    weight: 0.30
+    params:
+      model_type: lightgbm  # xgboost, lightgbm, ensemble
+      prediction_horizon: 5  # bars ahead
+      classification: true  # true for direction, false for returns
+      retrain_frequency: weekly
+      min_samples_train: 5000
+      feature_selection: true
+      n_features: 50
+
+  # Volatility Breakout Strategy
+  volatility_breakout:
+    enabled: true
+    weight: 0.20
+    params:
+      atr_period: 14
+      atr_multiplier: 2.0
+      volume_confirm_multiplier: 1.5
+      stop_loss_atr: 1.5
+      take_profit_atr: 3.0
+      trailing_stop_atr: 1.0
+
+  # Ensemble settings
+  ensemble:
+    combination_method: weighted_average  # weighted_average, voting, meta_model
+    min_agreement: 0.6  # Minimum strategy agreement for signal
+    signal_smoothing: 3  # Bars for signal smoothing
+
+# =============================================================================
+# RISK MANAGEMENT
+# =============================================================================
+risk:
+  # Position sizing
+  position_sizing:
+    method: volatility_target  # fixed_fraction, kelly, volatility_target, risk_parity
+    fixed_fraction: 0.02
+    kelly_fraction: 0.25  # Fraction of full Kelly
+    target_volatility: 0.15  # 15% annualized
+    max_position_pct: 0.05
+    min_position_pct: 0.005
+
+  # Portfolio limits
+  portfolio:
+    max_positions: 20
+    max_sector_exposure: 0.25
+    max_correlation: 0.7
+    max_leverage: 1.0
+    min_cash_buffer: 0.05
+
+  # Stop-loss settings
+  stop_loss:
+    enabled: true
+    type: trailing  # fixed, trailing, atr_based
+    fixed_pct: 0.05
+    trailing_pct: 0.03
+    atr_multiplier: 2.0
+
+  # Drawdown controls
+  drawdown:
+    max_drawdown: 0.15
+    reduce_at_drawdown: 0.10
+    reduce_by_pct: 0.50
+    close_all_at_drawdown: 0.20
+    recovery_threshold: 0.05
+
+# =============================================================================
+# EXECUTION SETTINGS
+# =============================================================================
+execution:
+  # Order types
+  default_order_type: market  # market, limit, vwap
+  limit_offset_pct: 0.001
+
+  # Fill assumptions
+  fill_price: next_open  # next_open, close, vwap
+
+  # Transaction costs
+  costs:
+    commission_pct: 0.001
+    slippage_pct: 0.0005
+    min_commission: 1.0
+    market_impact_power: 0.5  # Square root model exponent
+
+  # Order constraints
+  constraints:
+    min_order_value: 1000
+    max_order_value: 100000
+    max_daily_turnover: 0.5
+
+# =============================================================================
+# BACKTEST SETTINGS
+# =============================================================================
+backtest:
+  # Time period
+  start_date: null  # null for all available data
+  end_date: null
+
+  # Walk-forward analysis
+  walk_forward:
+    enabled: true
+    train_period_days: 126  # ~6 months
+    test_period_days: 21  # ~1 month
+    anchored: false  # true for expanding window
+    purge_days: 2
+    embargo_days: 1
+
+  # Performance calculation
+  performance:
+    risk_free_rate: 0.05
+    benchmark: null  # null or symbol like 'SPY'
+    trading_days_per_year: 252
+
+  # Report settings
+  reports:
+    generate_html: true
+    generate_pdf: false
+    save_trades: true
+    save_positions: true
+    chart_theme: plotly_dark
+
+# =============================================================================
+# FEATURE ENGINEERING
+# =============================================================================
+features:
+  # Technical indicators to compute
+  technical:
+    trend:
+      sma_periods: [5, 10, 20, 50, 100, 200]
+      ema_periods: [5, 10, 20, 50, 100, 200]
+      macd: [12, 26, 9]
+      adx_period: 14
+    momentum:
+      rsi_periods: [7, 14, 21]
+      stochastic_periods: [14, 3, 3]
+      williams_r_period: 14
+      cci_period: 20
+      roc_periods: [5, 10, 20]
+    volatility:
+      bollinger_period: 20
+      bollinger_std: 2.0
+      atr_period: 14
+      keltner_period: 20
+      keltner_atr_mult: 2.0
+    volume:
+      obv: true
+      vwap: true
+      mfi_period: 14
+      cmf_period: 20
+
+  # Statistical features
+  statistical:
+    return_periods: [1, 5, 10, 20, 60]
+    volatility_windows: [10, 20, 50]
+    skew_kurtosis_window: 20
+    autocorr_lags: [1, 5, 10]
+
+  # Cross-sectional features
+  cross_sectional:
+    enabled: true
+    rank_features: true
+    zscore_features: true
+    sector_relative: true
+
+  # Lagged features
+  lags:
+    periods: [1, 2, 5, 10]
+    features_to_lag:
+      - returns_1
+      - rsi_14
+      - macd_hist
+      - volume_ratio
+
+  # Feature processing
+  processing:
+    scaling: robust  # standard, robust, minmax
+    handle_inf: clip  # clip, replace_nan
+    clip_outliers: 5.0  # Standard deviations

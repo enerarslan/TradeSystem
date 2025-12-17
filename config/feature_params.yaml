@@ -1,0 +1,375 @@
+# Feature Engineering Parameters Configuration
+# AlphaTrade System - Feature Engineering Configuration
+
+# Technical Indicators
+technical_indicators:
+  # Trend Indicators
+  trend:
+    sma:
+      enabled: true
+      periods: [5, 10, 20, 50, 100, 200]
+      column: "close"
+
+    ema:
+      enabled: true
+      periods: [5, 10, 20, 50, 100]
+      column: "close"
+
+    wma:
+      enabled: true
+      periods: [10, 20, 50]
+      column: "close"
+
+    dema:
+      enabled: true
+      periods: [10, 20]
+      column: "close"
+
+    tema:
+      enabled: true
+      periods: [10, 20]
+      column: "close"
+
+    macd:
+      enabled: true
+      configs:
+        - fast: 12
+          slow: 26
+          signal: 9
+        - fast: 8
+          slow: 17
+          signal: 9
+
+    adx:
+      enabled: true
+      periods: [14, 20]
+
+    parabolic_sar:
+      enabled: true
+      af_start: 0.02
+      af_max: 0.2
+
+    ichimoku:
+      enabled: true
+      tenkan: 9
+      kijun: 26
+      senkou_b: 52
+
+  # Momentum Indicators
+  momentum:
+    rsi:
+      enabled: true
+      periods: [7, 14, 21]
+
+    stochastic:
+      enabled: true
+      configs:
+        - k_period: 14
+          d_period: 3
+          smooth: 3
+
+    williams_r:
+      enabled: true
+      periods: [14, 20]
+
+    cci:
+      enabled: true
+      periods: [14, 20]
+
+    roc:
+      enabled: true
+      periods: [5, 10, 20]
+
+    tsi:
+      enabled: true
+      fast: 13
+      slow: 25
+
+    ultimate_oscillator:
+      enabled: true
+      short: 7
+      medium: 14
+      long: 28
+
+    momentum:
+      enabled: true
+      periods: [5, 10, 20, 60]
+
+  # Volatility Indicators
+  volatility:
+    bollinger_bands:
+      enabled: true
+      configs:
+        - period: 20
+          std_dev: 2.0
+        - period: 20
+          std_dev: 1.0
+
+    atr:
+      enabled: true
+      periods: [7, 14, 20]
+
+    keltner_channel:
+      enabled: true
+      period: 20
+      atr_mult: 2.0
+
+    donchian_channel:
+      enabled: true
+      periods: [10, 20, 50]
+
+    historical_volatility:
+      enabled: true
+      periods: [10, 20, 60]
+
+    parkinson_volatility:
+      enabled: true
+      period: 20
+
+    garman_klass_volatility:
+      enabled: true
+      period: 20
+
+    yang_zhang_volatility:
+      enabled: true
+      period: 20
+
+  # Volume Indicators
+  volume:
+    obv:
+      enabled: true
+
+    vwap:
+      enabled: true
+      period: 20
+
+    mfi:
+      enabled: true
+      periods: [14, 20]
+
+    ad_line:
+      enabled: true
+
+    cmf:
+      enabled: true
+      period: 20
+
+    force_index:
+      enabled: true
+      period: 13
+
+    volume_sma:
+      enabled: true
+      periods: [10, 20, 50]
+
+    volume_ratio:
+      enabled: true
+      period: 20
+
+# Statistical Features
+statistical:
+  returns:
+    enabled: true
+    periods: [1, 5, 10, 20, 60]
+    log_returns: true
+
+  rolling_stats:
+    enabled: true
+    windows: [10, 20, 60]
+    metrics:
+      - mean
+      - std
+      - skew
+      - kurtosis
+      - min
+      - max
+
+  zscore:
+    enabled: true
+    windows: [10, 20, 60]
+    column: "close"
+
+  percentile_rank:
+    enabled: true
+    window: 60
+    column: "close"
+
+  autocorrelation:
+    enabled: true
+    lags: [1, 5, 10, 20]
+
+# Cross-Sectional Features
+cross_sectional:
+  enabled: true
+
+  rank:
+    enabled: true
+    columns:
+      - returns_1
+      - returns_5
+      - returns_20
+      - volume_ratio
+
+  zscore:
+    enabled: true
+    columns:
+      - close
+      - volume
+      - volatility_20
+
+  percentile:
+    enabled: true
+    columns:
+      - momentum_20
+      - rsi_14
+
+# Time Features
+time_features:
+  enabled: true
+
+  components:
+    - hour
+    - day_of_week
+    - day_of_month
+    - week_of_year
+    - month
+    - quarter
+
+  cyclical:
+    enabled: true
+    features:
+      - hour
+      - day_of_week
+      - month
+
+# Lagged Features
+lagged_features:
+  enabled: true
+
+  lags: [1, 2, 3, 4, 5]
+
+  columns:
+    - returns_1
+    - rsi_14
+    - macd_histogram
+    - volume_ratio
+
+# Rolling Window Features
+rolling_features:
+  enabled: true
+
+  windows: [5, 10, 20, 60]
+
+  aggregations:
+    - mean
+    - std
+    - min
+    - max
+    - sum
+
+  columns:
+    - returns_1
+    - volume
+
+# Feature Selection
+feature_selection:
+  # Remove low variance features
+  variance_threshold:
+    enabled: true
+    threshold: 0.01
+
+  # Remove highly correlated features
+  correlation_filter:
+    enabled: true
+    threshold: 0.95
+
+  # Select K best features
+  select_k_best:
+    enabled: false
+    k: 50
+    method: "mutual_info"
+
+  # Recursive feature elimination
+  rfe:
+    enabled: false
+    n_features: 30
+
+# Feature Transformation
+transformation:
+  # Standardization
+  standardize:
+    enabled: true
+    method: "zscore"  # zscore, minmax, robust
+
+  # Handle outliers
+  outlier_handling:
+    enabled: true
+    method: "winsorize"  # winsorize, clip, remove
+    lower_percentile: 1
+    upper_percentile: 99
+
+  # Missing value handling
+  missing_values:
+    enabled: true
+    method: "forward_fill"  # forward_fill, interpolate, mean, drop
+
+  # Feature scaling for ML
+  scaling:
+    enabled: true
+    method: "standard"  # standard, minmax, robust
+
+# Feature Pipeline
+pipeline:
+  # Cache computed features
+  cache_features: true
+  cache_path: "data/features"
+
+  # Feature computation batch size
+  batch_size: 10000
+
+  # Parallel computation
+  n_jobs: -1  # -1 = all cores
+
+  # Memory optimization
+  memory_optimize: true
+  dtype: "float32"
+
+# Target Variable
+target:
+  # Target type: returns, direction, quantile
+  type: "direction"
+
+  # Prediction horizon (bars)
+  horizon: 4
+
+  # For direction target
+  direction:
+    threshold: 0.0  # Above = 1, below = 0
+
+  # For quantile target
+  quantile:
+    n_quantiles: 5
+
+  # For returns target
+  returns:
+    log_returns: true
+
+# Walk-Forward Configuration
+walk_forward:
+  # Number of training samples
+  train_size: 2520  # ~6 months
+
+  # Number of test samples
+  test_size: 520  # ~1 month
+
+  # Step size between windows
+  step_size: 260  # ~2 weeks
+
+  # Purge gap between train and test
+  purge_gap: 4
+
+  # Embargo period after test
+  embargo_period: 4
+
+  # Expanding window (vs sliding)
+  expanding: false

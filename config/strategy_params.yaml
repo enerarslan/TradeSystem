@@ -1,0 +1,279 @@
+# Strategy Parameters Configuration
+# AlphaTrade System - Strategy Configuration
+
+# Multi-Factor Momentum Strategy
+momentum:
+  enabled: true
+  name: "MultiFactorMomentum"
+  description: "Combines multiple momentum factors for signal generation"
+
+  parameters:
+    # Lookback periods for momentum calculation
+    lookback_periods: [5, 10, 20, 60]
+
+    # Number of top stocks to go long
+    top_n_long: 5
+
+    # Number of bottom stocks to short (0 = long-only)
+    top_n_short: 0
+
+    # Momentum weighting method: equal, decay, custom
+    weighting_method: "decay"
+
+    # Decay factor for exponential weighting
+    decay_factor: 0.9
+
+    # Volume filter (minimum percentile)
+    volume_filter_percentile: 20
+
+    # Volatility adjustment enabled
+    volatility_adjusted: true
+
+    # Minimum holding period (bars)
+    min_holding_period: 4
+
+    # Maximum position per stock
+    max_position_pct: 0.20
+
+  signals:
+    # Signal threshold for entry
+    entry_threshold: 0.3
+
+    # Signal threshold for exit
+    exit_threshold: 0.1
+
+    # Smoothing window
+    smoothing_window: 3
+
+# Mean Reversion Strategy
+mean_reversion:
+  enabled: true
+  name: "MeanReversion"
+  description: "Z-score based mean reversion strategy"
+
+  parameters:
+    # Lookback for mean calculation
+    lookback_period: 20
+
+    # Z-score entry threshold
+    entry_zscore: 2.0
+
+    # Z-score exit threshold
+    exit_zscore: 0.5
+
+    # Maximum holding period (bars)
+    max_holding_period: 20
+
+    # Minimum liquidity threshold
+    min_volume: 100000
+
+    # Use Bollinger Bands confirmation
+    use_bollinger: true
+
+    # Bollinger Band period
+    bollinger_period: 20
+
+    # Bollinger Band std dev
+    bollinger_std: 2.0
+
+  signals:
+    # Signal calculation method: zscore, percentile, mad
+    method: "zscore"
+
+    # Trend filter period (0 = disabled)
+    trend_filter_period: 50
+
+# Volatility Breakout Strategy
+volatility_breakout:
+  enabled: true
+  name: "VolatilityBreakout"
+  description: "ATR-based volatility breakout strategy"
+
+  parameters:
+    # ATR period
+    atr_period: 14
+
+    # ATR multiplier for channel
+    atr_multiplier: 2.0
+
+    # Lookback for range calculation
+    lookback_period: 20
+
+    # Breakout confirmation bars
+    confirmation_bars: 2
+
+    # Volume surge threshold (multiplier of average)
+    volume_surge_threshold: 1.5
+
+    # Trailing stop ATR multiplier
+    trailing_stop_atr: 3.0
+
+  signals:
+    # Entry on close or next open
+    entry_on: "close"
+
+    # Use momentum confirmation
+    momentum_confirmation: true
+
+    # Momentum period
+    momentum_period: 10
+
+# ML Alpha Strategy
+ml_alpha:
+  enabled: true
+  name: "MLAlpha"
+  description: "Machine learning based alpha strategy"
+
+  parameters:
+    # Model type: lightgbm, xgboost, random_forest
+    model_type: "lightgbm"
+
+    # Prediction horizon (bars)
+    prediction_horizon: 4
+
+    # Training window size
+    train_window: 2520  # ~6 months of 15-min bars
+
+    # Retraining frequency (bars)
+    retrain_frequency: 520  # ~1 month
+
+    # Walk-forward validation
+    walk_forward: true
+
+    # Number of walk-forward folds
+    n_folds: 5
+
+    # Purge gap (bars) between train and test
+    purge_gap: 4
+
+    # Embargo period (bars)
+    embargo_period: 4
+
+  model_params:
+    lightgbm:
+      n_estimators: 100
+      max_depth: 5
+      learning_rate: 0.05
+      num_leaves: 31
+      min_child_samples: 20
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.1
+      reg_lambda: 0.1
+      random_state: 42
+
+    xgboost:
+      n_estimators: 100
+      max_depth: 5
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.1
+      reg_lambda: 0.1
+      random_state: 42
+
+  signals:
+    # Prediction threshold for long
+    long_threshold: 0.55
+
+    # Prediction threshold for short
+    short_threshold: 0.45
+
+    # Use probability calibration
+    calibrate_probabilities: true
+
+# Ensemble Strategy
+ensemble:
+  enabled: true
+  name: "Ensemble"
+  description: "Combines signals from multiple strategies"
+
+  parameters:
+    # Strategies to combine
+    strategies:
+      - momentum
+      - mean_reversion
+      - volatility_breakout
+
+    # Combination method: weighted_average, voting, rank_average
+    combination_method: "weighted_average"
+
+    # Strategy weights (must match strategies list)
+    weights: [0.4, 0.35, 0.25]
+
+    # Minimum agreement for voting method
+    min_agreement: 0.6
+
+    # Use dynamic weights based on recent performance
+    dynamic_weights: true
+
+    # Lookback for dynamic weight calculation
+    lookback_for_weights: 520  # ~1 month
+
+    # Signal smoothing window
+    signal_smoothing: 3
+
+  signals:
+    # Discretization threshold
+    discretize_threshold: 0.3
+
+    # Require confirmation from N strategies
+    min_confirming_strategies: 2
+
+# Pairs Trading Strategy
+pairs:
+  enabled: false  # Disabled by default
+  name: "PairsTrading"
+  description: "Statistical arbitrage pairs strategy"
+
+  parameters:
+    # Cointegration test p-value threshold
+    cointegration_pvalue: 0.05
+
+    # Lookback for spread calculation
+    lookback_period: 60
+
+    # Entry threshold (z-score)
+    entry_zscore: 2.0
+
+    # Exit threshold (z-score)
+    exit_zscore: 0.5
+
+    # Stop loss z-score
+    stop_loss_zscore: 4.0
+
+    # Maximum pairs to trade
+    max_pairs: 10
+
+    # Minimum correlation
+    min_correlation: 0.7
+
+    # Hedge ratio calculation: ols, tls, kalman
+    hedge_ratio_method: "ols"
+
+# Global Strategy Settings
+global:
+  # Universe filtering
+  universe:
+    min_price: 5.0
+    max_price: 1000.0
+    min_volume: 50000
+    min_history_days: 60
+
+  # Position limits
+  position_limits:
+    max_position_pct: 0.20
+    max_sector_pct: 0.40
+    max_correlation: 0.90
+
+  # Trading hours (for intraday)
+  trading_hours:
+    start: "09:30"
+    end: "16:00"
+    timezone: "US/Eastern"
+
+  # Rebalancing
+  rebalancing:
+    frequency: "4H"  # 4 hours
+    method: "threshold"
+    threshold_pct: 0.05
