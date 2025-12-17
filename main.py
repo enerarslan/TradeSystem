@@ -83,6 +83,13 @@ from src.data import (
     POLARS_AVAILABLE,
     TIMESCALE_AVAILABLE,
 )
+from src.data.pit import UniverseManager, CorporateActionAdjuster
+
+# Risk and Compliance
+from src.risk.circuit_breakers import CircuitBreakerManager
+from src.risk.realtime_monitor import RealTimeRiskMonitor
+from src.risk.pretrade_compliance import PreTradeComplianceChecker
+from src.compliance.audit_trail import AuditTrail, AuditEventType
 
 # Feature Engineering
 from src.features import (
@@ -374,13 +381,95 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
 # DATA LOADING
 # =============================================================================
 
+def validate_data_for_backtest(
+    data: Dict[str, pd.DataFrame],
+    config: Dict[str, Any],
+) -> tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
+    """
+    Perform comprehensive data validation before backtest.
+
+    JPMorgan-level requirement: Validate all data quality before any backtest.
+
+    Args:
+        data: Dictionary of symbol -> DataFrame
+        config: Configuration dictionary
+
+    Returns:
+        Tuple of (cleaned_data, validation_report)
+    """
+    logger.info("Running pre-backtest data validation...")
+
+    validator = DataValidator(
+        max_missing_pct=5.0,
+        max_price_change_pct=50.0,  # Flag potential splits/errors
+        min_price=0.01,
+    )
+
+    cleaned_data = {}
+    validation_report = {
+        "total_symbols": len(data),
+        "valid_symbols": 0,
+        "rejected_symbols": [],
+        "warnings": [],
+        "critical_issues": [],
+    }
+
+    for symbol, df in data.items():
+        result = validator.validate(df, symbol=symbol)
+
+        if result.is_valid:
+            cleaned_data[symbol] = df
+            validation_report["valid_symbols"] += 1
+
+            if result.warnings:
+                validation_report["warnings"].extend(
+                    [f"{symbol}: {w}" for w in result.warnings]
+                )
+        else:
+            validation_report["rejected_symbols"].append(symbol)
+            validation_report["critical_issues"].extend(
+                [f"{symbol}: {e}" for e in result.errors]
+            )
+
+    # Log summary
+    logger.info(
+        f"Data validation complete: {validation_report['valid_symbols']}/{len(data)} symbols passed"
+    )
+
+    if validation_report["rejected_symbols"]:
+        logger.warning(
+            f"Rejected {len(validation_report['rejected_symbols'])} symbols due to data quality issues"
+        )
+
+    if validation_report["critical_issues"]:
+        for issue in validation_report["critical_issues"][:5]:  # Log first 5
+            logger.error(f"DATA ISSUE: {issue}")
+
+    return cleaned_data, validation_report
+
+
 def load_data(
     data_path: str,
     symbols: Optional[List[str]] = None,
     min_bars: int = 100,
     use_cache: bool = True,
+    apply_survivorship_filter: bool = True,
+    backtest_start_date: Optional[str] = None,
 ) -> Dict[str, pd.DataFrame]:
-    """Load and validate market data."""
+    """
+    Load and validate market data with survivorship bias handling.
+
+    Args:
+        data_path: Path to data directory
+        symbols: List of symbols to load (None for all)
+        min_bars: Minimum bars required
+        use_cache: Whether to use data cache
+        apply_survivorship_filter: Apply survivorship bias correction
+        backtest_start_date: Start date for universe filtering
+
+    Returns:
+        Dictionary of symbol -> DataFrame
+    """
     logger.info(f"Loading data from {data_path}")
 
     data_dir = Path(data_path)
@@ -396,8 +485,40 @@ def load_data(
     # Optional: Use cache
     cache = DataCache(cache_dir="data/cache") if use_cache else None
 
+    # Survivorship bias handling
+    universe_manager = None
+    if apply_survivorship_filter:
+        metadata_path = data_dir / "symbol_metadata.json"
+        if metadata_path.exists():
+            universe_manager = UniverseManager(metadata_path=metadata_path)
+            logger.info(f"Loaded universe metadata for {len(universe_manager)} symbols")
+        else:
+            logger.warning(
+                "No symbol_metadata.json found - survivorship bias correction not available. "
+                "Run 'python scripts/generate_universe_metadata.py' to create metadata."
+            )
+
     available_symbols = loader.symbols
     logger.info(f"Found {len(available_symbols)} symbols")
+
+    # Apply survivorship filter if available
+    if universe_manager and backtest_start_date:
+        from datetime import date as date_type
+        if isinstance(backtest_start_date, str):
+            start_date = date_type.fromisoformat(backtest_start_date)
+        else:
+            start_date = backtest_start_date
+
+        # Get universe as it existed at backtest start
+        historical_universe = universe_manager.get_universe(as_of=start_date)
+
+        if historical_universe:
+            # Include only symbols that were tradeable at start
+            available_symbols = [s for s in available_symbols if s in historical_universe]
+            logger.info(
+                f"Survivorship filter applied: {len(available_symbols)} symbols "
+                f"valid as of {start_date}"
+            )
 
     if symbols:
         symbols = [s for s in symbols if s in available_symbols]
@@ -405,6 +526,8 @@ def load_data(
         symbols = available_symbols
 
     data = {}
+    validation_results = []
+
     for symbol in symbols:
         try:
             # Try cache first
@@ -418,8 +541,14 @@ def load_data(
 
             # Validate
             result = validator.validate(df, symbol=symbol)
+            validation_results.append(result)
+
             if not result.is_valid:
-                logger.warning(f"{symbol}: Validation issues")
+                logger.warning(f"{symbol}: Validation failed - {result.errors}")
+                continue
+
+            if result.warnings:
+                logger.debug(f"{symbol}: Warnings - {result.warnings}")
 
             # Process
             df = processor.process(df)
@@ -429,11 +558,20 @@ def load_data(
                 if cache:
                     cache.set(f"{symbol}_processed", df)
                 logger.debug(f"Loaded {symbol}: {len(df)} bars")
+            else:
+                logger.debug(f"{symbol}: Insufficient bars ({len(df)} < {min_bars})")
 
         except Exception as e:
             logger.error(f"Error loading {symbol}: {e}")
 
-    logger.info(f"Loaded {len(data)} symbols")
+    # Generate validation report
+    if validation_results:
+        valid_count = sum(1 for r in validation_results if r.is_valid)
+        logger.info(
+            f"Loaded {len(data)} symbols "
+            f"({valid_count}/{len(validation_results)} passed validation)"
+        )
+
     return data
 
 
@@ -560,6 +698,39 @@ def create_strategies(config: Dict[str, Any]) -> List:
 # BACKTESTING
 # =============================================================================
 
+def calculate_symbol_adv(data: Dict[str, pd.DataFrame], lookback: int = 20) -> Dict[str, float]:
+    """
+    Calculate Average Daily Value (ADV) for each symbol.
+
+    ADV = rolling average of (volume * close price) over lookback period.
+    This is critical for realistic market impact modeling.
+
+    Args:
+        data: Dictionary mapping symbols to OHLCV DataFrames
+        lookback: Rolling window for ADV calculation (default 20 days)
+
+    Returns:
+        Dictionary mapping symbols to their ADV values
+    """
+    adv_dict = {}
+
+    for symbol, df in data.items():
+        if "volume" in df.columns and "close" in df.columns:
+            # Calculate daily dollar volume
+            daily_value = df["volume"] * df["close"]
+            # Rolling average
+            adv = daily_value.rolling(window=lookback).mean()
+            # Use the most recent ADV value
+            latest_adv = adv.dropna().iloc[-1] if len(adv.dropna()) > 0 else 1_000_000
+            adv_dict[symbol] = float(latest_adv)
+        else:
+            # Default fallback
+            adv_dict[symbol] = 1_000_000
+
+    logger.info(f"Calculated ADV for {len(adv_dict)} symbols")
+    return adv_dict
+
+
 def run_backtest(
     strategy,
     data: Dict[str, pd.DataFrame],
@@ -585,15 +756,35 @@ def run_backtest(
     else:  # vectorized
         logger.info(f"Running vectorized backtest for {strategy.name}")
 
-        # Add market impact model if enabled
+        # CRITICAL: Calculate actual ADV per symbol for realistic market impact
+        symbol_adv = calculate_symbol_adv(data, lookback=20)
+
+        # Calculate average ADV across all symbols for the impact model
+        # This provides a baseline; per-symbol ADV can be used for order-level impact
+        avg_adv = np.mean(list(symbol_adv.values())) if symbol_adv else 1_000_000
+
+        # Add market impact model if enabled - NOW WITH ACTUAL ADV
         market_impact = None
         if backtest_config.get("market_impact", True):
+            # Calculate volatility from data for more realistic impact
+            all_returns = []
+            for df in data.values():
+                if "close" in df.columns:
+                    returns = df["close"].pct_change().dropna()
+                    all_returns.extend(returns.values)
+
+            sigma = np.std(all_returns) if all_returns else 0.02
+
             market_impact = AlmgrenChrissModel(
-                sigma=0.02,
+                sigma=sigma,  # Use actual realized volatility
                 eta=0.1,
                 gamma=0.1,
                 lambda_=1e-6,
-                adv=1_000_000,
+                adv=avg_adv,  # Use actual calculated ADV
+            )
+
+            logger.info(
+                f"Market impact model initialized: sigma={sigma:.4f}, avg_adv=${avg_adv:,.0f}"
             )
 
         engine = BacktestEngine(

@@ -1,0 +1,42 @@
+# AlphaTrade System - Staging Environment Configuration
+# Pre-production environment with production-like settings
+
+system:
+  log_level: "INFO"
+
+# Data - full dataset
+data:
+  min_bars: 500
+  use_polars: true
+  point_in_time: true
+  survivorship_bias_correction: true
+
+# Backtesting - production-like
+backtest:
+  initial_capital: 1000000
+  market_impact: true
+  execution_simulator: "order_book"
+  partial_fills: true
+  max_participation_rate: 0.02
+  rejection_rate: 0.01  # Slightly lower than prod
+
+# Training - full pipeline
+training:
+  cv_splits: 5
+  optuna_trials: 30
+  mlflow_tracking: true
+  cv_type: "combinatorial_purged"
+
+# Risk - production settings
+risk:
+  max_position_pct: 0.05
+  max_drawdown_pct: 0.15
+  var_confidence: 0.99
+
+# Staging-specific
+staging:
+  enable_paper_trading: true
+  paper_trading_broker: "alpaca_paper"
+  real_time_validation: true
+  performance_benchmarking: true
+  compare_to_production: true

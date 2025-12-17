@@ -5,13 +5,16 @@ This module provides:
 - Drawdown calculation
 - Drawdown-based position reduction
 - Recovery analysis
+- State persistence for system restarts
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -159,6 +162,8 @@ class DrawdownController:
         self._current_drawdown = 0.0
         self._is_reduced = False
         self._is_closed = False
+        self._drawdown_start_time: datetime | None = None
+        self._last_update_time: datetime | None = None
 
     @property
     def current_drawdown(self) -> float:
@@ -169,6 +174,141 @@ class DrawdownController:
     def peak_value(self) -> float:
         """Get peak portfolio value."""
         return self._peak_value
+
+    def save_state(self, filepath: str | Path) -> None:
+        """
+        Persist drawdown state to disk for recovery after system restart.
+
+        JPMorgan-level requirement: Critical state must be persisted to ensure
+        risk controls remain in effect across system restarts.
+
+        Args:
+            filepath: Path to save state file (JSON format)
+        """
+        filepath = Path(filepath)
+
+        state = {
+            "peak_value": self._peak_value,
+            "current_drawdown": self._current_drawdown,
+            "is_reduced": self._is_reduced,
+            "is_closed": self._is_closed,
+            "max_drawdown": self.max_drawdown,
+            "reduce_at_drawdown": self.reduce_at_drawdown,
+            "reduce_by_pct": self.reduce_by_pct,
+            "close_all_at_drawdown": self.close_all_at_drawdown,
+            "recovery_threshold": self.recovery_threshold,
+            "last_update": datetime.now().isoformat(),
+            "version": "1.0",  # For future compatibility
+        }
+
+        # Ensure directory exists
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write atomically using temp file
+        temp_path = filepath.with_suffix(".tmp")
+        try:
+            with open(temp_path, "w") as f:
+                json.dump(state, f, indent=2)
+            # Atomic rename
+            temp_path.replace(filepath)
+            logger.info(f"Drawdown state saved to {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save drawdown state: {e}")
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
+
+    def load_state(self, filepath: str | Path) -> bool:
+        """
+        Load drawdown state from disk.
+
+        Args:
+            filepath: Path to state file
+
+        Returns:
+            True if state was loaded successfully, False otherwise
+        """
+        filepath = Path(filepath)
+
+        if not filepath.exists():
+            logger.warning(f"Drawdown state file not found: {filepath}")
+            return False
+
+        try:
+            with open(filepath, "r") as f:
+                state = json.load(f)
+
+            # Validate state version
+            version = state.get("version", "0.0")
+            if version != "1.0":
+                logger.warning(f"Unknown state version {version}, attempting to load anyway")
+
+            # Restore state
+            self._peak_value = float(state.get("peak_value", 0.0))
+            self._current_drawdown = float(state.get("current_drawdown", 0.0))
+            self._is_reduced = bool(state.get("is_reduced", False))
+            self._is_closed = bool(state.get("is_closed", False))
+
+            # Optionally restore parameters (useful for config consistency check)
+            saved_max_dd = state.get("max_drawdown")
+            if saved_max_dd and abs(saved_max_dd - self.max_drawdown) > 0.001:
+                logger.warning(
+                    f"Loaded state has different max_drawdown ({saved_max_dd}) than current ({self.max_drawdown})"
+                )
+
+            last_update = state.get("last_update", "unknown")
+            logger.info(
+                f"Drawdown state loaded from {filepath} "
+                f"(last_update: {last_update}, peak: ${self._peak_value:,.2f}, "
+                f"current_dd: {self._current_drawdown:.2%}, is_reduced: {self._is_reduced})"
+            )
+
+            return True
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in drawdown state file: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to load drawdown state: {e}")
+            return False
+
+    def get_state_dict(self) -> dict[str, Any]:
+        """
+        Get current state as a dictionary (for logging/monitoring).
+
+        Returns:
+            Dictionary with current state
+        """
+        return {
+            "peak_value": self._peak_value,
+            "current_drawdown": self._current_drawdown,
+            "drawdown_pct": f"{self._current_drawdown:.2%}",
+            "is_reduced": self._is_reduced,
+            "is_closed": self._is_closed,
+            "max_drawdown_limit": self.max_drawdown,
+            "reduce_threshold": self.reduce_at_drawdown,
+            "close_threshold": self.close_all_at_drawdown,
+        }
+
+    @classmethod
+    def from_state_file(
+        cls,
+        filepath: str | Path,
+        **kwargs,
+    ) -> "DrawdownController":
+        """
+        Create a DrawdownController instance from a saved state file.
+
+        Args:
+            filepath: Path to state file
+            **kwargs: Override parameters for the controller
+
+        Returns:
+            DrawdownController instance with restored state
+        """
+        controller = cls(**kwargs)
+        controller.load_state(filepath)
+        return controller
 
 
 def calculate_drawdown(equity: pd.Series) -> pd.DataFrame:

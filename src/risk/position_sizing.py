@@ -241,6 +241,9 @@ def volatility_target(
 def risk_parity_weights(
     returns: pd.DataFrame,
     lookback: int = 60,
+    max_iterations: int = 100,
+    tolerance: float = 1e-6,
+    verbose: bool = False,
 ) -> pd.Series:
     """
     Calculate risk parity weights.
@@ -250,6 +253,9 @@ def risk_parity_weights(
     Args:
         returns: Asset returns DataFrame
         lookback: Lookback period for covariance
+        max_iterations: Maximum optimization iterations
+        tolerance: Convergence tolerance
+        verbose: Log iteration details
 
     Returns:
         Risk parity weights
@@ -260,14 +266,28 @@ def risk_parity_weights(
     # Covariance matrix
     cov = recent_returns.cov()
 
+    # Check for degenerate covariance matrix
+    if cov.isnull().any().any():
+        logger.warning("Risk parity: Covariance matrix contains NaN values, using equal weights")
+        return pd.Series(1.0 / len(returns.columns), index=returns.columns)
+
     # Initial equal weights
     n = len(returns.columns)
     weights = np.ones(n) / n
 
+    # Track convergence metrics
+    converged = False
+    final_iteration = 0
+    max_weight_change = 0.0
+
     # Iterative optimization for risk parity
-    for _ in range(100):
+    for iteration in range(max_iterations):
         # Portfolio variance
         port_var = weights @ cov.values @ weights
+
+        if port_var <= 0:
+            logger.warning(f"Risk parity: Non-positive portfolio variance at iteration {iteration}")
+            break
 
         # Marginal risk contribution
         mrc = cov.values @ weights
@@ -286,11 +306,40 @@ def risk_parity_weights(
         new_weights = weights * adjustment
         new_weights = new_weights / new_weights.sum()
 
+        # Calculate weight change for convergence check
+        max_weight_change = np.max(np.abs(new_weights - weights))
+
+        if verbose and iteration % 10 == 0:
+            logger.debug(
+                f"Risk parity iteration {iteration}: max_weight_change={max_weight_change:.8f}"
+            )
+
         # Check convergence
-        if np.max(np.abs(new_weights - weights)) < 1e-6:
+        if max_weight_change < tolerance:
+            converged = True
+            final_iteration = iteration
+            logger.debug(f"Risk parity converged in {iteration + 1} iterations (tolerance: {tolerance})")
             break
 
         weights = new_weights
+        final_iteration = iteration
+
+    # Log warning if not converged (JPMorgan-level monitoring)
+    if not converged:
+        logger.warning(
+            f"Risk parity optimization did NOT converge after {max_iterations} iterations. "
+            f"Final max weight change: {max_weight_change:.8f} (tolerance: {tolerance}). "
+            "Consider increasing max_iterations or relaxing tolerance. "
+            "Returning best weights found."
+        )
+
+        # Calculate final risk contributions for diagnostics
+        port_var = weights @ cov.values @ weights
+        if port_var > 0:
+            mrc = cov.values @ weights
+            rc = weights * mrc / np.sqrt(port_var)
+            rc_pct = rc / rc.sum() * 100
+            logger.debug(f"Final risk contributions (%): {dict(zip(returns.columns, rc_pct.round(2)))}")
 
     return pd.Series(weights, index=returns.columns)
 

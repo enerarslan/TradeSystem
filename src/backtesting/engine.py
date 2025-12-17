@@ -263,14 +263,59 @@ class BacktestEngine:
 
                             # Execute trade
                             if trade_value > 0:
+                                # CRITICAL: Cash validation before buy (JPMorgan-level)
+                                required_cash = trade_value + total_cost
+                                if required_cash > cash:
+                                    # Insufficient cash - adjust trade size or skip
+                                    if cash > total_cost + 100:  # Can afford reduced position
+                                        available_for_trade = cash * 0.95  # Use 95% max
+                                        trade_value = available_for_trade - total_cost
+                                        # Recalculate costs for adjusted trade
+                                        comm, slip, total_cost = self.cost_model.calculate_costs(
+                                            abs(trade_value), price
+                                        )
+                                        logger.debug(
+                                            f"Reduced trade for {symbol}: ${trade_value:.2f} "
+                                            f"(available cash: ${cash:.2f})"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"Insufficient cash for {symbol}: need ${required_cash:.2f}, "
+                                            f"have ${cash:.2f} - skipping trade"
+                                        )
+                                        continue  # Skip this trade
+
                                 # Buy
                                 shares = (trade_value - total_cost) / price
                                 holdings[symbol] = holdings.get(symbol, 0) + shares
                                 cash -= trade_value
                                 side = "BUY"
+
+                                # Validate no negative cash (safety check)
+                                if cash < 0:
+                                    logger.error(
+                                        f"CRITICAL: Negative cash detected after {symbol} buy: ${cash:.2f}"
+                                    )
                             else:
-                                # Sell
-                                shares = abs(trade_value) / price
+                                # Sell - validate sufficient holdings
+                                shares_to_sell = abs(trade_value) / price
+                                current_holdings = holdings.get(symbol, 0)
+
+                                if shares_to_sell > current_holdings * 1.001:  # 0.1% tolerance for float
+                                    # Cannot sell more than we own (no shorting without explicit flag)
+                                    if current_holdings > 0:
+                                        shares_to_sell = current_holdings
+                                        trade_value = -shares_to_sell * price
+                                        comm, slip, total_cost = self.cost_model.calculate_costs(
+                                            abs(trade_value), price
+                                        )
+                                        logger.debug(
+                                            f"Adjusted sell for {symbol}: selling all {shares_to_sell:.4f} shares"
+                                        )
+                                    else:
+                                        continue  # Skip - nothing to sell
+
+                                shares = shares_to_sell
                                 holdings[symbol] = holdings.get(symbol, 0) - shares
                                 cash += abs(trade_value) - total_cost
                                 side = "SELL"

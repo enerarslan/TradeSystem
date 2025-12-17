@@ -1,0 +1,118 @@
+# AlphaTrade System - Base Configuration
+# This file contains default settings shared across all environments
+# Environment-specific files override these values
+
+system:
+  name: "AlphaTrade"
+  version: "2.0.0"
+  log_level: "INFO"
+
+# Data settings
+data:
+  path: "data/raw"
+  cache_path: "data/cache"
+  min_bars: 500
+  use_polars: true
+  point_in_time: true
+  survivorship_bias_correction: true
+  corporate_action_adjustment: true
+  min_adv_filter: 1000000
+
+# Feature engineering
+features:
+  technical: true
+  fractional_diff: true
+  macro: false
+  cointegration: false
+  max_lookback_periods: 200
+  microstructure_enabled: true
+  garch_volatility: true
+  leakage_check: "strict"
+
+# Backtesting
+backtest:
+  initial_capital: 1000000
+  commission_pct: 0.001
+  slippage_pct: 0.0005
+  slippage_bps: 1.0
+  market_impact: true
+  execution_simulator: "order_book"
+  partial_fills: true
+  max_participation_rate: 0.02
+  latency_ms: 50
+  rejection_rate: 0.02
+
+# Strategy defaults
+strategies:
+  momentum:
+    enabled: true
+    lookback_periods: [5, 10, 20]
+    top_n_long: 5
+    volatility_adjusted: true
+  mean_reversion:
+    enabled: true
+    lookback_period: 20
+    entry_zscore: 2.0
+    exit_zscore: 0.5
+  volatility_breakout:
+    enabled: true
+    atr_period: 14
+    atr_multiplier: 2.0
+
+# Training
+training:
+  model_type: "lightgbm"
+  cv_splits: 5
+  purge_gap: "auto"
+  purge_gap_buffer: 10
+  prediction_horizon: 5
+  max_feature_lookback: 200
+  embargo_pct: "auto"
+  optuna_trials: 50
+  mlflow_tracking: true
+  cv_type: "combinatorial_purged"
+  n_test_splits: 2
+  min_train_samples: 1000
+
+# Optimization metrics
+optimization:
+  primary_metric: "deflated_sharpe_ratio"
+  secondary_metrics:
+    - "probabilistic_sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+  multiple_testing_correction: true
+  min_track_record_months: 12
+
+# Deep learning
+deep_learning:
+  model: "lstm"
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.2
+  learning_rate: 0.001
+  epochs: 100
+  batch_size: 64
+
+# Risk management
+risk:
+  max_position_pct: 0.05
+  max_drawdown_pct: 0.15
+  var_confidence: 0.99
+  var_method: "historical"
+  max_position_adv_pct: 5.0
+  max_sector_exposure: 0.25
+  drawdown_flatten_threshold: 0.15
+
+# Monte Carlo
+monte_carlo:
+  n_simulations: 1000
+  block_size: 20
+
+# Paths
+paths:
+  logs: "logs"
+  models: "models"
+  reports: "reports"
+  results: "results"
+  state: "state"

@@ -1,0 +1,46 @@
+# AlphaTrade System - Development Environment Configuration
+# Overrides base.yaml for development/testing
+
+system:
+  log_level: "DEBUG"
+
+# Data - use smaller dataset for faster iteration
+data:
+  min_bars: 200
+  use_polars: true
+
+# Backtesting - relaxed for faster testing
+backtest:
+  initial_capital: 100000
+  market_impact: false  # Disable for speed
+  rejection_rate: 0.0   # No rejections in dev
+
+# Training - reduced for faster iteration
+training:
+  cv_splits: 3
+  optuna_trials: 10
+  mlflow_tracking: false
+  min_train_samples: 100
+
+# Deep learning - smaller model for testing
+deep_learning:
+  hidden_size: 32
+  num_layers: 1
+  epochs: 10
+  batch_size: 32
+
+# Risk - relaxed for development
+risk:
+  max_drawdown_pct: 0.30
+  var_confidence: 0.95
+
+# Monte Carlo - fewer simulations
+monte_carlo:
+  n_simulations: 100
+
+# Development-specific
+dev:
+  enable_profiling: true
+  save_intermediate_results: true
+  verbose_logging: true
+  skip_data_validation: false  # Still validate in dev

@@ -601,6 +601,7 @@ class FeaturePipeline:
         return_periods: list[int] | None = None,
         lag_periods: list[int] | None = None,
         scaling: str = "robust",
+        strict_leakage_check: bool = True,
     ) -> None:
         """
         Initialize the pipeline.
@@ -611,16 +612,20 @@ class FeaturePipeline:
             return_periods: Return periods
             lag_periods: Lag periods
             scaling: Feature scaling method
+            strict_leakage_check: If True, warns on direct generate_features() calls
         """
         self.ma_periods = ma_periods or [5, 10, 20, 50, 100, 200]
         self.rsi_periods = rsi_periods or [7, 14, 21]
         self.return_periods = return_periods or [1, 5, 10, 20, 60]
         self.lag_periods = lag_periods or [1, 2, 5, 10]
         self.scaling = scaling
+        self.strict_leakage_check = strict_leakage_check
 
         self.processor = FeatureProcessor(scaling=scaling)
         self._feature_names: list[str] = []
         self._is_fitted: bool = False
+        self._internal_call: bool = False  # Flag for internal method calls
+        self._direct_call_count: int = 0  # Track direct calls for monitoring
 
         # Track max lookback for purge gap calculation
         self._max_lookback: int = max(self.ma_periods) if self.ma_periods else 200
@@ -650,6 +655,14 @@ class FeaturePipeline:
         """
         Generate all features for a single stock.
 
+        WARNING: This method should be called through fit(), fit_transform(), or transform()
+        to ensure proper data leakage prevention. Direct calls bypass scaling parameter
+        fitting which can lead to look-ahead bias in backtesting.
+
+        For production use:
+            - Training data: pipeline.fit_transform(train_df)
+            - Test data: pipeline.transform(test_df)
+
         Args:
             df: OHLCV DataFrame
             include_technical: Include technical indicators
@@ -659,6 +672,22 @@ class FeaturePipeline:
         Returns:
             DataFrame with all features
         """
+        # CRITICAL: Leakage warning for direct calls (JPMorgan-level data hygiene)
+        if self.strict_leakage_check and not self._internal_call:
+            self._direct_call_count += 1
+            logger.warning(
+                "POTENTIAL DATA LEAKAGE: Direct call to generate_features() detected. "
+                "Use fit_transform() for training data or transform() for test data "
+                "to prevent data leakage from scaling parameters. "
+                f"(Direct call #{self._direct_call_count})"
+            )
+            if self._direct_call_count >= 3:
+                logger.error(
+                    "CRITICAL: Multiple direct generate_features() calls detected. "
+                    "This pattern is likely causing data leakage in your backtest. "
+                    "Review your feature engineering workflow immediately."
+                )
+
         features = pd.DataFrame(index=df.index)
 
         # Technical indicators
@@ -713,10 +742,14 @@ class FeaturePipeline:
         Returns:
             self (for method chaining)
         """
-        features = self.generate_features(df, **kwargs)
-        self.processor.fit(features)
-        self._is_fitted = True
-        logger.info(f"Pipeline fitted on {len(features)} training samples")
+        self._internal_call = True
+        try:
+            features = self.generate_features(df, **kwargs)
+            self.processor.fit(features)
+            self._is_fitted = True
+            logger.info(f"Pipeline fitted on {len(features)} training samples")
+        finally:
+            self._internal_call = False
         return self
 
     def fit_transform(
@@ -749,9 +782,13 @@ class FeaturePipeline:
         Returns:
             Processed feature DataFrame
         """
-        features = self.generate_features(df, **kwargs)
-        self._is_fitted = True
-        return self.processor.fit_transform(features)
+        self._internal_call = True
+        try:
+            features = self.generate_features(df, **kwargs)
+            self._is_fitted = True
+            return self.processor.fit_transform(features)
+        finally:
+            self._internal_call = False
 
     def transform(self, df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """
@@ -777,8 +814,12 @@ class FeaturePipeline:
                 "This error prevents data leakage by ensuring scaling parameters are "
                 "learned only from training data."
             )
-        features = self.generate_features(df, **kwargs)
-        return self.processor.transform(features)
+        self._internal_call = True
+        try:
+            features = self.generate_features(df, **kwargs)
+            return self.processor.transform(features)
+        finally:
+            self._internal_call = False
 
     @property
     def feature_names(self) -> list[str]:

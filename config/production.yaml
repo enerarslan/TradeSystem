@@ -1,0 +1,65 @@
+# AlphaTrade System - Production Environment Configuration
+# JPMorgan-level production settings - USE WITH EXTREME CAUTION
+
+system:
+  log_level: "INFO"
+
+# Data - full production settings
+data:
+  min_bars: 500
+  use_polars: true
+  point_in_time: true
+  survivorship_bias_correction: true
+  corporate_action_adjustment: true
+  min_adv_filter: 1000000
+
+# Backtesting - strict production settings
+backtest:
+  initial_capital: 1000000
+  commission_pct: 0.001
+  slippage_pct: 0.0005
+  market_impact: true
+  execution_simulator: "order_book"
+  partial_fills: true
+  max_participation_rate: 0.02
+  latency_ms: 50
+  rejection_rate: 0.02
+
+# Training - full optimization
+training:
+  cv_splits: 6
+  optuna_trials: 100
+  mlflow_tracking: true
+  cv_type: "combinatorial_purged"
+  n_test_splits: 2
+  min_train_samples: 1000
+
+# Risk - strict production limits
+risk:
+  max_position_pct: 0.05
+  max_drawdown_pct: 0.15
+  var_confidence: 0.99
+  max_position_adv_pct: 5.0
+  max_sector_exposure: 0.25
+  drawdown_flatten_threshold: 0.15
+
+# Production-specific
+production:
+  require_manual_approval: true
+  pre_trade_checks: true
+  circuit_breakers_enabled: true
+  audit_trail_enabled: true
+  real_time_monitoring: true
+  alert_on_anomaly: true
+  max_daily_loss: 0.03
+  auto_halt_on_breach: true
+  require_two_factor: true
+
+# Monitoring
+monitoring:
+  metrics_enabled: true
+  health_check_interval: 60
+  alert_channels:
+    - email
+    - slack
+  pnl_reporting_interval: 300
