@@ -32,6 +32,16 @@ from src.training.optimization import (
     OptunaOptimizer,
     MultiObjectiveOptimizer,
 )
+# Deep Learning - REQUIRED
+from src.training.deep_learning import (
+    LSTMPredictor,
+    AttentionLSTM,
+    TemporalFusionTransformer,
+    SharpeLoss,
+    SortinoLoss,
+    MaxDrawdownLoss,
+    CombinedFinancialLoss,
+)
 
 __all__ = [
     # Experiment tracking
@@ -49,4 +59,12 @@ __all__ = [
     # Optimization
     "OptunaOptimizer",
     "MultiObjectiveOptimizer",
+    # Deep Learning - REQUIRED
+    "LSTMPredictor",
+    "AttentionLSTM",
+    "TemporalFusionTransformer",
+    "SharpeLoss",
+    "SortinoLoss",
+    "MaxDrawdownLoss",
+    "CombinedFinancialLoss",
 ]

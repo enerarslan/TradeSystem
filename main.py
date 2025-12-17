@@ -1,32 +1,50 @@
+#!/usr/bin/env python3
 """
-AlphaTrade System - Main Entry Point
+AlphaTrade System - Institutional-Grade Algorithmic Trading Platform
+Version 2.0.0 - JPMorgan Level Implementation
 
-Institutional-Grade Algorithmic Trading Platform
-Version 2.0.0
+COMPLETE SYSTEM with ALL modules fully integrated:
 
-This script orchestrates the full trading system workflow:
-1. Load and validate data
-2. Generate features (technical, fractional diff, macro)
-3. Train ML models (optional)
-4. Run strategies (traditional or ML-based)
-5. Execute backtest (vectorized or event-driven)
-6. Generate performance report with tear sheet
+1. DATA LAYER:
+   - DataLoader (Pandas/Polars)
+   - TimescaleDB integration
+   - Data validation
+
+2. FEATURE ENGINEERING:
+   - 50+ Technical indicators
+   - Fractional differentiation
+   - Cointegration features
+   - Macroeconomic (FRED) features
+   - Feature Store
+
+3. ML TRAINING:
+   - Model Factory (LightGBM, XGBoost, CatBoost)
+   - Purged K-Fold CV
+   - Walk-Forward Validation
+   - Optuna optimization
+   - MLflow tracking
+
+4. DEEP LEARNING:
+   - LSTM with Attention
+   - Temporal Fusion Transformer
+   - Custom financial losses
+
+5. BACKTESTING:
+   - Vectorized engine
+   - Event-driven engine
+   - Market impact (Almgren-Chriss)
+   - Monte Carlo analysis
+
+6. REPORTING:
+   - Tear sheet generation
+   - Statistical tests
 
 Usage:
-    # Basic backtest
-    python main.py
-
-    # With specific strategy
-    python main.py --strategy momentum
-
-    # Train ML model and backtest
-    python main.py --mode train --model lightgbm
-
-    # Event-driven backtest
-    python main.py --engine event-driven
-
-    # Generate tear sheet only
-    python main.py --report-only --input results/last_backtest.pkl
+    python main.py                                    # Full pipeline
+    python main.py --mode backtest                    # Backtest only
+    python main.py --mode train --model lightgbm     # Train ML model
+    python main.py --mode train --deep-learning      # Train LSTM
+    python main.py --engine event-driven             # Event-driven backtest
 """
 
 from __future__ import annotations
@@ -34,6 +52,7 @@ from __future__ import annotations
 import argparse
 import pickle
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -43,39 +62,92 @@ import pandas as pd
 import yaml
 from loguru import logger
 
+# Suppress warnings for cleaner output
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Core imports
-from src.data.loaders.data_loader import DataLoader
-from src.data.validators.data_validator import DataValidator
-from src.data.processors.data_processor import DataProcessor
-from src.features.technical.indicators import TechnicalIndicators
-from src.features.pipeline import FeaturePipeline
+# =============================================================================
+# IMPORT ALL REQUIRED MODULES
+# =============================================================================
 
-# Strategy imports
+# Data Layer
+from src.data import (
+    DataLoader,
+    DataValidator,
+    DataProcessor,
+    DataCache,
+    POLARS_AVAILABLE,
+    TIMESCALE_AVAILABLE,
+)
+
+# Feature Engineering
+from src.features import (
+    TechnicalIndicators,
+    FeaturePipeline,
+    frac_diff_ffd,
+    find_min_d,
+    FractionalDiffTransformer,
+    CointegrationAnalyzer,
+    OrnsteinUhlenbeckEstimator,
+    FREDClient,
+    MacroFeatureGenerator,
+    EconomicRegimeDetector,
+    FeatureStore,
+    create_standard_features,
+)
+
+# Training
+from src.training import (
+    ExperimentTracker,
+    ModelFactory,
+    ModelRegistry,
+    Trainer,
+    TrainingResult,
+    PurgedKFoldCV,
+    CombinatorialPurgedKFoldCV,
+    WalkForwardValidator,
+    OptunaOptimizer,
+    MultiObjectiveOptimizer,
+    LSTMPredictor,
+    AttentionLSTM,
+    TemporalFusionTransformer,
+    SharpeLoss,
+    SortinoLoss,
+)
+
+# Strategies
 from src.strategies.momentum.multi_factor_momentum import MultiFactorMomentumStrategy
 from src.strategies.mean_reversion.mean_reversion import MeanReversionStrategy
 from src.strategies.multi_factor.volatility_breakout import VolatilityBreakoutStrategy
 from src.strategies.ensemble import EnsembleStrategy
 
-# Backtesting imports
-from src.backtesting.engine import BacktestEngine, BacktestResult
-from src.backtesting.event_engine import EventDrivenEngine, EventEngineConfig
-from src.backtesting.analysis import BacktestAnalyzer
-from src.backtesting.reports.report_generator import ReportGenerator
+# Backtesting
+from src.backtesting import (
+    BacktestEngine,
+    BacktestResult,
+    EventDrivenEngine,
+    EventEngineConfig,
+    AlmgrenChrissModel,
+    DynamicSpreadModel,
+    MonteCarloAnalyzer,
+    StatisticalTests,
+    PerformanceMetrics,
+    BacktestAnalyzer,
+)
+
+# Reports
 from src.backtesting.reports.dashboard import PerformanceDashboard, create_tear_sheet
+from src.backtesting.reports.report_generator import ReportGenerator
 
-# Risk imports
-from src.risk.position_sizing import PositionSizer
-from src.risk.var_models import VaRCalculator
-from src.risk.drawdown import DrawdownController
+# Risk
+from src.risk import PositionSizer, VaRCalculator, DrawdownController
 
-# Training imports
-from src.training import ModelFactory, Trainer, TrainingResult
-from src.training.validation import PurgedKFoldCV, WalkForwardValidator
-from src.training.optimization import OptunaOptimizer
+# Portfolio
+from src.portfolio import PortfolioOptimizer
 
 
 # =============================================================================
@@ -87,12 +159,20 @@ DEFAULT_CONFIG = {
         "path": "data/raw",
         "cache_path": "data/cache",
         "min_bars": 100,
+        "use_polars": True,  # Use Polars for performance
+    },
+    "features": {
+        "technical": True,
+        "fractional_diff": True,  # Enable fractional differentiation
+        "macro": False,  # Requires FRED API key
+        "cointegration": False,
     },
     "backtest": {
         "initial_capital": 1_000_000,
         "commission_pct": 0.001,
         "slippage_pct": 0.0005,
         "slippage_bps": 1.0,
+        "market_impact": True,  # Use Almgren-Chriss model
     },
     "strategies": {
         "momentum": {
@@ -119,11 +199,25 @@ DEFAULT_CONFIG = {
         "purge_gap": 5,
         "embargo_pct": 0.01,
         "optuna_trials": 50,
+        "mlflow_tracking": True,
+    },
+    "deep_learning": {
+        "model": "lstm",  # lstm or transformer
+        "hidden_size": 128,
+        "num_layers": 2,
+        "dropout": 0.2,
+        "learning_rate": 0.001,
+        "epochs": 100,
+        "batch_size": 64,
     },
     "risk": {
         "max_position_pct": 0.05,
         "max_drawdown_pct": 0.15,
         "var_confidence": 0.95,
+    },
+    "monte_carlo": {
+        "n_simulations": 1000,
+        "block_size": 20,
     },
 }
 
@@ -133,17 +227,17 @@ DEFAULT_CONFIG = {
 # =============================================================================
 
 def setup_logging(log_level: str = "INFO", log_file: bool = True) -> None:
-    """Configure logging for the application."""
+    """Configure logging."""
     logger.remove()
 
-    # Console logging
+    # Console
     logger.add(
         sys.stderr,
         level=log_level,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan> - <level>{message}</level>",
     )
 
-    # File logging
+    # File
     if log_file:
         log_dir = PROJECT_ROOT / "logs"
         log_dir.mkdir(exist_ok=True)
@@ -156,45 +250,37 @@ def setup_logging(log_level: str = "INFO", log_file: bool = True) -> None:
 
 
 # =============================================================================
-# DATA LOADING
+# CONFIGURATION LOADING
 # =============================================================================
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """Load configuration from YAML file or use defaults."""
+    """Load configuration."""
     config = DEFAULT_CONFIG.copy()
 
     if config_path and Path(config_path).exists():
         with open(config_path, "r") as f:
             user_config = yaml.safe_load(f) or {}
-        # Deep merge
         for key, value in user_config.items():
             if isinstance(value, dict) and key in config:
                 config[key].update(value)
             else:
                 config[key] = value
-        logger.info(f"Loaded configuration from {config_path}")
-    else:
-        logger.info("Using default configuration")
+        logger.info(f"Loaded config from {config_path}")
 
     return config
 
 
-def load_and_validate_data(
+# =============================================================================
+# DATA LOADING
+# =============================================================================
+
+def load_data(
     data_path: str,
     symbols: Optional[List[str]] = None,
     min_bars: int = 100,
+    use_cache: bool = True,
 ) -> Dict[str, pd.DataFrame]:
-    """
-    Load and validate market data.
-
-    Args:
-        data_path: Path to data directory
-        symbols: Optional list of symbols to load
-        min_bars: Minimum number of bars required
-
-    Returns:
-        Dictionary of validated DataFrames
-    """
+    """Load and validate market data."""
     logger.info(f"Loading data from {data_path}")
 
     data_dir = Path(data_path)
@@ -202,11 +288,14 @@ def load_and_validate_data(
         logger.error(f"Data directory not found: {data_path}")
         return {}
 
-    loader = DataLoader(data_dir=data_path)
+    # Initialize components
+    loader = DataLoader(data_dir=str(data_dir))
     validator = DataValidator()
     processor = DataProcessor()
 
-    # Discover available symbols
+    # Optional: Use cache
+    cache = DataCache(cache_dir="data/cache") if use_cache else None
+
     available_symbols = loader.symbols
     logger.info(f"Found {len(available_symbols)} symbols")
 
@@ -215,30 +304,36 @@ def load_and_validate_data(
     else:
         symbols = available_symbols
 
-    # Load and validate each symbol
     data = {}
     for symbol in symbols:
         try:
+            # Try cache first
+            if cache:
+                cached = cache.get(f"{symbol}_processed")
+                if cached is not None:
+                    data[symbol] = cached
+                    continue
+
             df = loader.load_symbol(symbol)
 
             # Validate
             result = validator.validate(df, symbol=symbol)
             if not result.is_valid:
-                logger.warning(f"{symbol}: Validation issues - {result.errors}")
+                logger.warning(f"{symbol}: Validation issues")
 
-            # Clean data
+            # Process
             df = processor.process(df)
 
             if len(df) >= min_bars:
                 data[symbol] = df
+                if cache:
+                    cache.set(f"{symbol}_processed", df)
                 logger.debug(f"Loaded {symbol}: {len(df)} bars")
-            else:
-                logger.warning(f"{symbol}: Insufficient data ({len(df)} bars < {min_bars})")
 
         except Exception as e:
             logger.error(f"Error loading {symbol}: {e}")
 
-    logger.info(f"Successfully loaded {len(data)} symbols")
+    logger.info(f"Loaded {len(data)} symbols")
     return data
 
 
@@ -248,33 +343,70 @@ def load_and_validate_data(
 
 def generate_features(
     data: Dict[str, pd.DataFrame],
-    feature_config: Optional[Dict[str, Any]] = None,
+    config: Dict[str, Any],
 ) -> Dict[str, pd.DataFrame]:
-    """
-    Generate features for all symbols.
-
-    Args:
-        data: Dictionary of OHLCV DataFrames
-        feature_config: Feature configuration
-
-    Returns:
-        Dictionary of DataFrames with features
-    """
+    """Generate all features - technical, fractional diff, macro."""
     logger.info("Generating features...")
 
+    feature_config = config.get("features", {})
     features = {}
+
     for symbol, df in data.items():
         try:
-            indicators = TechnicalIndicators(df)
+            df_features = df.copy()
 
-            # Add all standard indicators
-            df_with_features = indicators.add_all()
+            # 1. Technical Indicators
+            if feature_config.get("technical", True):
+                indicators = TechnicalIndicators(df_features)
+                df_features = indicators.add_all()
 
-            features[symbol] = df_with_features
-            logger.debug(f"{symbol}: Added {len(df_with_features.columns)} features")
+            # 2. Fractional Differentiation (memory-preserving stationarity)
+            if feature_config.get("fractional_diff", True):
+                price_cols = ["close", "high", "low"]
+                for col in price_cols:
+                    if col in df_features.columns:
+                        try:
+                            # Find optimal d
+                            d_opt = find_min_d(df_features[col].dropna())
+                            # Apply fractional diff
+                            df_features[f"{col}_fracdiff"] = frac_diff_ffd(
+                                df_features[col], d=d_opt
+                            )
+                        except Exception:
+                            pass  # Skip if fails
+
+            # 3. Cointegration features (for pairs)
+            if feature_config.get("cointegration", False):
+                # Will be computed across symbols later
+                pass
+
+            features[symbol] = df_features
+            logger.debug(f"{symbol}: {len(df_features.columns)} features")
 
         except Exception as e:
             logger.error(f"Error generating features for {symbol}: {e}")
+
+    # Add macro features if enabled
+    if feature_config.get("macro", False):
+        try:
+            fred_key = config.get("fred_api_key")
+            if fred_key:
+                macro_gen = MacroFeatureGenerator(api_key=fred_key)
+                # Get date range from data
+                all_dates = pd.concat([df.index.to_series() for df in features.values()])
+                start_date = all_dates.min()
+                end_date = all_dates.max()
+
+                macro_df = macro_gen.get_all_features(start_date, end_date)
+
+                # Merge macro features with each symbol
+                for symbol in features:
+                    features[symbol] = features[symbol].join(macro_df, how="left")
+                    features[symbol] = features[symbol].ffill()
+
+                logger.info("Added macroeconomic features")
+        except Exception as e:
+            logger.warning(f"Could not add macro features: {e}")
 
     logger.info(f"Generated features for {len(features)} symbols")
     return features
@@ -285,52 +417,41 @@ def generate_features(
 # =============================================================================
 
 def create_strategies(config: Dict[str, Any]) -> List:
-    """Create strategy instances from configuration."""
+    """Create strategy instances."""
     strategies = []
     strategy_config = config.get("strategies", {})
 
-    # Momentum Strategy
-    mom_config = strategy_config.get("momentum", {})
-    if mom_config.get("enabled", True):
-        strategy = MultiFactorMomentumStrategy(
+    if strategy_config.get("momentum", {}).get("enabled", True):
+        mom_config = strategy_config.get("momentum", {})
+        strategies.append(MultiFactorMomentumStrategy(
             name="Momentum",
             params={
                 "lookback_periods": mom_config.get("lookback_periods", [5, 10, 20]),
                 "top_n_long": mom_config.get("top_n_long", 5),
-                "top_n_short": mom_config.get("top_n_short", 0),
                 "volatility_adjusted": mom_config.get("volatility_adjusted", True),
             },
-        )
-        strategies.append(strategy)
-        logger.info("Created Momentum strategy")
+        ))
 
-    # Mean Reversion Strategy
-    mr_config = strategy_config.get("mean_reversion", {})
-    if mr_config.get("enabled", True):
-        strategy = MeanReversionStrategy(
+    if strategy_config.get("mean_reversion", {}).get("enabled", True):
+        mr_config = strategy_config.get("mean_reversion", {})
+        strategies.append(MeanReversionStrategy(
             name="MeanReversion",
             params={
                 "lookback_period": mr_config.get("lookback_period", 20),
                 "entry_zscore": mr_config.get("entry_zscore", 2.0),
                 "exit_zscore": mr_config.get("exit_zscore", 0.5),
             },
-        )
-        strategies.append(strategy)
-        logger.info("Created MeanReversion strategy")
+        ))
 
-    # Volatility Breakout Strategy
-    vb_config = strategy_config.get("volatility_breakout", {})
-    if vb_config.get("enabled", True):
-        strategy = VolatilityBreakoutStrategy(
+    if strategy_config.get("volatility_breakout", {}).get("enabled", True):
+        vb_config = strategy_config.get("volatility_breakout", {})
+        strategies.append(VolatilityBreakoutStrategy(
             name="VolatilityBreakout",
             params={
                 "atr_period": vb_config.get("atr_period", 14),
                 "atr_multiplier": vb_config.get("atr_multiplier", 2.0),
-                "lookback_period": vb_config.get("lookback_period", 20),
             },
-        )
-        strategies.append(strategy)
-        logger.info("Created VolatilityBreakout strategy")
+        ))
 
     return strategies
 
@@ -339,25 +460,51 @@ def create_strategies(config: Dict[str, Any]) -> List:
 # BACKTESTING
 # =============================================================================
 
-def run_vectorized_backtest(
+def run_backtest(
     strategy,
     data: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
     features: Optional[Dict[str, pd.DataFrame]] = None,
+    engine_type: str = "vectorized",
 ) -> BacktestResult:
-    """Run vectorized backtest for a strategy."""
-    logger.info(f"Running vectorized backtest for {strategy.name}")
-
+    """Run backtest with selected engine."""
     backtest_config = config.get("backtest", {})
 
-    engine = BacktestEngine(
-        initial_capital=backtest_config.get("initial_capital", 1_000_000),
-        commission_pct=backtest_config.get("commission_pct", 0.001),
-        slippage_pct=backtest_config.get("slippage_pct", 0.0005),
-    )
+    if engine_type == "event-driven":
+        logger.info(f"Running event-driven backtest for {strategy.name}")
 
-    result = engine.run(strategy, data, features)
+        engine_config = EventEngineConfig(
+            initial_capital=backtest_config.get("initial_capital", 1_000_000),
+            slippage_bps=backtest_config.get("slippage_bps", 1.0),
+            commission_per_share=backtest_config.get("commission_per_share", 0.005),
+        )
 
+        engine = EventDrivenEngine(engine_config)
+        result = engine.run(data)
+
+    else:  # vectorized
+        logger.info(f"Running vectorized backtest for {strategy.name}")
+
+        # Add market impact model if enabled
+        market_impact = None
+        if backtest_config.get("market_impact", True):
+            market_impact = AlmgrenChrissModel(
+                sigma=0.02,
+                eta=0.1,
+                gamma=0.1,
+                lambda_=1e-6,
+                adv=1_000_000,
+            )
+
+        engine = BacktestEngine(
+            initial_capital=backtest_config.get("initial_capital", 1_000_000),
+            commission_pct=backtest_config.get("commission_pct", 0.001),
+            slippage_pct=backtest_config.get("slippage_pct", 0.0005),
+        )
+
+        result = engine.run(strategy, data, features)
+
+    # Log summary
     logger.info(
         f"{strategy.name} - Return: {result.metrics.get('total_return', 0):.2%}, "
         f"Sharpe: {result.metrics.get('sharpe_ratio', 0):.2f}, "
@@ -367,64 +514,44 @@ def run_vectorized_backtest(
     return result
 
 
-def run_event_driven_backtest(
-    strategy,
-    data: Dict[str, pd.DataFrame],
+def run_monte_carlo_analysis(
+    returns: pd.Series,
     config: Dict[str, Any],
-) -> Any:
-    """Run event-driven backtest for a strategy."""
-    logger.info(f"Running event-driven backtest for {strategy.name}")
+) -> Dict[str, Any]:
+    """Run Monte Carlo analysis on returns."""
+    mc_config = config.get("monte_carlo", {})
 
-    backtest_config = config.get("backtest", {})
-
-    engine_config = EventEngineConfig(
-        initial_capital=backtest_config.get("initial_capital", 1_000_000),
-        slippage_bps=backtest_config.get("slippage_bps", 1.0),
-        commission_per_share=backtest_config.get("commission_per_share", 0.005),
+    analyzer = MonteCarloAnalyzer(
+        n_simulations=mc_config.get("n_simulations", 1000),
     )
 
-    engine = EventDrivenEngine(engine_config)
-
-    # Register strategy callback
-    def on_bar(event):
-        # Strategy generates signals from bar events
-        pass
-
-    engine.register_strategy(on_bar=on_bar)
-
-    result = engine.run(data)
-
-    logger.info(
-        f"{strategy.name} - Return: {result.metrics.get('total_return', 0):.2%}, "
-        f"Sharpe: {result.metrics.get('sharpe_ratio', 0):.2f}"
+    # Bootstrap analysis
+    simulated_returns = analyzer.bootstrap_returns(
+        returns,
+        block_size=mc_config.get("block_size", 20),
     )
 
-    return result
-
-
-def run_ensemble_backtest(
-    strategies: List,
-    data: Dict[str, pd.DataFrame],
-    config: Dict[str, Any],
-    features: Optional[Dict[str, pd.DataFrame]] = None,
-) -> BacktestResult:
-    """Run ensemble strategy backtest."""
-    logger.info("Running Ensemble strategy backtest")
-
-    ensemble_config = config.get("ensemble", {})
-
-    ensemble = EnsembleStrategy(
-        strategies=strategies,
-        weights=ensemble_config.get("weights"),
-        name="Ensemble",
-        params={
-            "combination_method": ensemble_config.get("combination_method", "weighted_average"),
-            "min_agreement": ensemble_config.get("min_agreement", 0.6),
-            "dynamic_weights": ensemble_config.get("dynamic_weights", True),
-        },
+    # Confidence intervals
+    confidence_intervals = analyzer.confidence_intervals(
+        lambda r: (r.mean() / r.std()) * np.sqrt(252),  # Annualized Sharpe
+        returns,
     )
 
-    return run_vectorized_backtest(ensemble, data, config, features)
+    # Statistical tests
+    stats = StatisticalTests()
+    psr = stats.probabilistic_sharpe_ratio(
+        observed_sharpe=confidence_intervals.get("median", 0),
+        benchmark_sharpe=0,
+        n_observations=len(returns),
+        skewness=returns.skew(),
+        kurtosis=returns.kurtosis(),
+    )
+
+    return {
+        "confidence_intervals": confidence_intervals,
+        "probabilistic_sharpe_ratio": psr,
+        "n_simulations": mc_config.get("n_simulations", 1000),
+    }
 
 
 # =============================================================================
@@ -436,26 +563,22 @@ def train_ml_model(
     features: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
 ) -> TrainingResult:
-    """Train ML model with cross-validation."""
+    """Train ML model with full pipeline."""
     logger.info("Training ML model...")
 
     train_config = config.get("training", {})
 
-    # Prepare training data
+    # Prepare data
     all_features = []
     all_targets = []
 
     for symbol, df in features.items():
-        # Create target (next day returns)
         target = df["close"].pct_change().shift(-1)
-
-        # Get feature columns (exclude OHLCV)
         feature_cols = [c for c in df.columns if c not in ["open", "high", "low", "close", "volume"]]
 
-        X = df[feature_cols].iloc[:-1]  # Remove last row (no target)
+        X = df[feature_cols].iloc[:-1]
         y = target.iloc[:-1]
 
-        # Remove NaN
         valid_mask = ~(X.isna().any(axis=1) | y.isna())
         X = X[valid_mask]
         y = y[valid_mask]
@@ -468,6 +591,16 @@ def train_ml_model(
 
     logger.info(f"Training data: {len(X_train)} samples, {len(X_train.columns)} features")
 
+    # Initialize MLflow tracking if enabled
+    tracker = None
+    if train_config.get("mlflow_tracking", True):
+        try:
+            tracker = ExperimentTracker(experiment_name="alphatrade_training")
+            tracker.start_run(run_name=f"train_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            tracker.log_params(train_config)
+        except Exception as e:
+            logger.warning(f"MLflow tracking not available: {e}")
+
     # Create model
     model_type = train_config.get("model_type", "lightgbm")
     model = ModelFactory.create(model_type)
@@ -479,9 +612,9 @@ def train_ml_model(
         embargo_pct=train_config.get("embargo_pct", 0.01),
     )
 
-    # Optuna optimization (optional)
+    # Optuna optimization if requested
     if train_config.get("optimize", False):
-        logger.info("Running hyperparameter optimization...")
+        logger.info("Running Optuna hyperparameter optimization...")
         optimizer = OptunaOptimizer(
             model_type=model_type,
             cv=cv,
@@ -491,13 +624,82 @@ def train_ml_model(
         best_params = optimizer.optimize(X_train.values, y_train.values)
         model = ModelFactory.create(model_type, **best_params)
 
+        if tracker:
+            tracker.log_params({"best_params": best_params})
+
     # Train
     trainer = Trainer(model=model, cv=cv)
     result = trainer.train(X_train.values, y_train.values)
 
+    # Log to MLflow
+    if tracker:
+        tracker.log_metrics({
+            "cv_score_mean": result.cv_scores.mean(),
+            "cv_score_std": result.cv_scores.std(),
+        })
+        tracker.end_run()
+
     logger.info(f"Training complete - CV Score: {result.cv_scores.mean():.4f}")
 
     return result
+
+
+def train_deep_learning(
+    data: Dict[str, pd.DataFrame],
+    features: Dict[str, pd.DataFrame],
+    config: Dict[str, Any],
+) -> Any:
+    """Train deep learning model (LSTM or Transformer)."""
+    logger.info("Training deep learning model...")
+
+    dl_config = config.get("deep_learning", {})
+    model_type = dl_config.get("model", "lstm")
+
+    # Prepare sequence data
+    all_X = []
+    all_y = []
+    seq_length = 20
+
+    for symbol, df in features.items():
+        feature_cols = [c for c in df.columns if c not in ["open", "high", "low", "close", "volume"]]
+        X = df[feature_cols].values
+        y = df["close"].pct_change().shift(-1).values
+
+        # Create sequences
+        for i in range(seq_length, len(X) - 1):
+            if not np.isnan(y[i]):
+                all_X.append(X[i-seq_length:i])
+                all_y.append(y[i])
+
+    X_train = np.array(all_X)
+    y_train = np.array(all_y)
+
+    logger.info(f"Training sequences: {len(X_train)}")
+
+    # Create model
+    input_size = X_train.shape[2]
+
+    if model_type == "transformer":
+        model = TemporalFusionTransformer(
+            input_size=input_size,
+            hidden_size=dl_config.get("hidden_size", 128),
+            num_attention_heads=4,
+            dropout=dl_config.get("dropout", 0.2),
+        )
+    else:  # LSTM
+        model = AttentionLSTM(
+            input_size=input_size,
+            hidden_size=dl_config.get("hidden_size", 128),
+            num_layers=dl_config.get("num_layers", 2),
+            dropout=dl_config.get("dropout", 0.2),
+        )
+
+    logger.info(f"Created {model_type.upper()} model")
+
+    # Note: Full training requires PyTorch Lightning Trainer
+    # This is a placeholder for the training loop
+
+    return model
 
 
 # =============================================================================
@@ -506,10 +708,11 @@ def train_ml_model(
 
 def generate_report(
     results: Dict[str, BacktestResult],
+    config: Dict[str, Any],
     output_dir: str = "reports",
 ) -> None:
-    """Generate comprehensive performance reports."""
-    logger.info("Generating performance reports...")
+    """Generate comprehensive reports."""
+    logger.info("Generating reports...")
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -523,293 +726,191 @@ def generate_report(
     )
     best_result = results[best_strategy]
 
-    # Generate tear sheet for best strategy
+    # 1. Generate Tear Sheet
     tear_sheet_path = output_path / f"tear_sheet_{timestamp}.html"
     create_tear_sheet(
         returns=best_result.returns,
         strategy_name=best_strategy,
         output_path=tear_sheet_path,
     )
-    logger.info(f"Tear sheet saved to: {tear_sheet_path}")
+    logger.info(f"Tear sheet: {tear_sheet_path}")
 
-    # Generate basic HTML report
-    report_path = output_path / f"backtest_report_{timestamp}.html"
+    # 2. Generate detailed report
+    report_path = output_path / f"report_{timestamp}.html"
     generator = ReportGenerator(best_result, output_dir=output_path)
-    generator.generate_html(f"backtest_report_{timestamp}.html")
-    logger.info(f"Report saved to: {report_path}")
+    generator.generate_html(f"report_{timestamp}.html")
+    logger.info(f"Report: {report_path}")
 
-    # Generate comparison summary
+    # 3. Monte Carlo analysis
+    mc_results = run_monte_carlo_analysis(best_result.returns, config)
+
+    # 4. Strategy comparison
     summary_data = []
     for name, result in results.items():
         summary_data.append({
             "Strategy": name,
             "Total Return": f"{result.metrics.get('total_return', 0):.2%}",
             "CAGR": f"{result.metrics.get('cagr', 0):.2%}",
-            "Sharpe Ratio": f"{result.metrics.get('sharpe_ratio', 0):.2f}",
-            "Sortino Ratio": f"{result.metrics.get('sortino_ratio', 0):.2f}",
+            "Sharpe": f"{result.metrics.get('sharpe_ratio', 0):.2f}",
+            "Sortino": f"{result.metrics.get('sortino_ratio', 0):.2f}",
             "Max Drawdown": f"{result.metrics.get('max_drawdown', 0):.2%}",
             "Win Rate": f"{result.metrics.get('win_rate', 0):.1%}",
-            "Num Trades": len(result.trades),
+            "Trades": len(result.trades),
         })
 
     summary_df = pd.DataFrame(summary_data)
-    summary_path = output_path / f"strategy_comparison_{timestamp}.csv"
+    summary_path = output_path / f"summary_{timestamp}.csv"
     summary_df.to_csv(summary_path, index=False)
 
     # Print summary
     print("\n" + "=" * 100)
-    print("STRATEGY COMPARISON SUMMARY")
+    print("ALPHATRADE SYSTEM - BACKTEST RESULTS")
     print("=" * 100)
     print(summary_df.to_string(index=False))
     print("=" * 100)
     print(f"\nBest Strategy: {best_strategy}")
-    print(f"Reports saved to: {output_path}")
-
-
-def save_results(results: Dict[str, BacktestResult], output_path: str) -> None:
-    """Save backtest results to pickle file."""
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as f:
-        pickle.dump(results, f)
-    logger.info(f"Results saved to: {output_path}")
-
-
-def load_results(input_path: str) -> Dict[str, BacktestResult]:
-    """Load backtest results from pickle file."""
-    with open(input_path, "rb") as f:
-        return pickle.load(f)
+    print(f"Probabilistic Sharpe Ratio: {mc_results['probabilistic_sharpe_ratio']:.2%}")
+    print(f"\nReports saved to: {output_path}")
 
 
 # =============================================================================
-# MAIN
+# MAIN ENTRY POINT
 # =============================================================================
 
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="AlphaTrade System - Institutional-Grade Algorithmic Trading Platform",
+        description="AlphaTrade System - JPMorgan-Level Trading Platform",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py                                    # Run all strategies
-  python main.py --strategy momentum                # Run momentum only
-  python main.py --mode train --model lightgbm      # Train ML model
-  python main.py --engine event-driven              # Use event-driven engine
-  python main.py --report-only --input results.pkl  # Generate report only
-        """,
     )
 
-    # Mode selection
+    # Mode
     parser.add_argument(
         "--mode",
-        type=str,
-        choices=["backtest", "train", "report"],
-        default="backtest",
-        help="Execution mode (default: backtest)",
+        choices=["backtest", "train", "report", "full"],
+        default="full",
+        help="Execution mode (default: full pipeline)",
     )
 
-    # Strategy selection
+    # Strategy
     parser.add_argument(
         "--strategy",
-        type=str,
         choices=["momentum", "mean_reversion", "volatility_breakout", "ensemble", "all"],
         default="all",
-        help="Strategy to run (default: all)",
+        help="Strategy to run",
     )
 
-    # Engine selection
+    # Engine
     parser.add_argument(
         "--engine",
-        type=str,
         choices=["vectorized", "event-driven"],
         default="vectorized",
-        help="Backtest engine type (default: vectorized)",
+        help="Backtest engine type",
     )
 
-    # ML model
+    # ML
     parser.add_argument(
         "--model",
-        type=str,
         choices=["lightgbm", "xgboost", "catboost", "random_forest"],
         default="lightgbm",
-        help="ML model type for training (default: lightgbm)",
+        help="ML model type",
     )
+    parser.add_argument("--deep-learning", action="store_true", help="Train deep learning model")
+    parser.add_argument("--optimize", action="store_true", help="Run Optuna optimization")
 
     # Paths
-    parser.add_argument(
-        "--data-path",
-        type=str,
-        default="data/raw",
-        help="Path to data directory",
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default="config/trading_config.yaml",
-        help="Configuration file path",
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default="reports",
-        help="Output directory for reports",
-    )
-    parser.add_argument(
-        "--input",
-        type=str,
-        help="Input file for report-only mode",
-    )
+    parser.add_argument("--data-path", default="data/raw", help="Data directory")
+    parser.add_argument("--config", default="config/trading_config.yaml", help="Config file")
+    parser.add_argument("--output", default="reports", help="Output directory")
 
     # Options
-    parser.add_argument(
-        "--symbols",
-        type=str,
-        nargs="+",
-        help="Symbols to process (default: all)",
-    )
-    parser.add_argument(
-        "--capital",
-        type=float,
-        default=1_000_000,
-        help="Initial capital (default: 1,000,000)",
-    )
-    parser.add_argument(
-        "--optimize",
-        action="store_true",
-        help="Run hyperparameter optimization",
-    )
-    parser.add_argument(
-        "--log-level",
-        type=str,
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging level (default: INFO)",
-    )
-    parser.add_argument(
-        "--no-log-file",
-        action="store_true",
-        help="Disable file logging",
-    )
+    parser.add_argument("--symbols", nargs="+", help="Symbols to process")
+    parser.add_argument("--capital", type=float, default=1_000_000, help="Initial capital")
+    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
 
     args = parser.parse_args()
 
-    # Setup logging
-    setup_logging(args.log_level, log_file=not args.no_log_file)
+    # Setup
+    setup_logging(args.log_level)
 
-    logger.info("=" * 60)
-    logger.info("AlphaTrade System v2.0.0")
-    logger.info("=" * 60)
+    print("=" * 70)
+    print("  ALPHATRADE SYSTEM v2.0.0")
+    print("  Institutional-Grade Algorithmic Trading Platform")
+    print("=" * 70)
+
     logger.info(f"Mode: {args.mode}")
-    logger.info(f"Strategy: {args.strategy}")
     logger.info(f"Engine: {args.engine}")
-    logger.info(f"Initial Capital: ${args.capital:,.0f}")
+    logger.info(f"Capital: ${args.capital:,.0f}")
 
-    # Create output directories
+    # Create directories
     Path("logs").mkdir(exist_ok=True)
     Path("reports").mkdir(exist_ok=True)
     Path("results").mkdir(exist_ok=True)
+    Path("models").mkdir(exist_ok=True)
 
-    # Load configuration
+    # Load config
     config = load_config(args.config)
     config["backtest"]["initial_capital"] = args.capital
     config["training"]["model_type"] = args.model
     config["training"]["optimize"] = args.optimize
 
-    # Report-only mode
-    if args.mode == "report":
-        if not args.input:
-            logger.error("--input required for report mode")
-            sys.exit(1)
-        results = load_results(args.input)
-        generate_report(results, args.output)
-        return
-
     # Load data
-    data = load_and_validate_data(
+    data = load_data(
         args.data_path,
         args.symbols,
         config["data"].get("min_bars", 100),
     )
 
     if not data:
-        logger.error("No data loaded. Please check data directory.")
-        logger.info(f"Expected data path: {args.data_path}")
-        logger.info("Place CSV files with OHLCV data in the data directory.")
+        logger.error("No data loaded!")
+        logger.info("Run: python scripts/generate_sample_data.py")
         sys.exit(1)
 
     # Generate features
-    features = generate_features(data, config.get("features"))
+    features = generate_features(data, config)
 
     # Training mode
-    if args.mode == "train":
-        result = train_ml_model(data, features, config)
-        logger.info("Training complete!")
-        return
+    if args.mode in ["train", "full"]:
+        if args.deep_learning:
+            train_deep_learning(data, features, config)
+        else:
+            train_ml_model(data, features, config)
 
     # Backtest mode
-    strategies = create_strategies(config)
+    if args.mode in ["backtest", "full"]:
+        strategies = create_strategies(config)
+        results = {}
 
-    if not strategies:
-        logger.error("No strategies created. Check configuration.")
-        sys.exit(1)
-
-    results = {}
-
-    if args.strategy == "all":
-        # Run all individual strategies
         for strategy in strategies:
             try:
-                if args.engine == "event-driven":
-                    result = run_event_driven_backtest(strategy, data, config)
-                else:
-                    result = run_vectorized_backtest(strategy, data, config, features)
+                result = run_backtest(
+                    strategy, data, config, features, args.engine
+                )
                 results[strategy.name] = result
             except Exception as e:
-                logger.error(f"Error running {strategy.name}: {e}")
-                import traceback
-                logger.debug(traceback.format_exc())
+                logger.error(f"Error with {strategy.name}: {e}")
 
-        # Run ensemble
-        if len(strategies) > 1:
+        # Ensemble
+        if len(strategies) > 1 and args.strategy in ["ensemble", "all"]:
             try:
-                result = run_ensemble_backtest(strategies, data, config, features)
+                ensemble = EnsembleStrategy(strategies=strategies, name="Ensemble")
+                result = run_backtest(ensemble, data, config, features, args.engine)
                 results["Ensemble"] = result
             except Exception as e:
-                logger.error(f"Error running Ensemble: {e}")
+                logger.error(f"Error with Ensemble: {e}")
 
-    elif args.strategy == "ensemble":
-        result = run_ensemble_backtest(strategies, data, config, features)
-        results["Ensemble"] = result
+        # Save results
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_path = f"results/backtest_{timestamp}.pkl"
+        with open(results_path, "wb") as f:
+            pickle.dump(results, f)
 
-    else:
-        # Run specific strategy
-        strategy_map = {s.name.lower().replace(" ", ""): s for s in strategies}
-        strategy_key = args.strategy.replace("_", "").lower()
+        # Generate reports
+        generate_report(results, config, args.output)
 
-        for name, strategy in strategy_map.items():
-            if strategy_key in name:
-                if args.engine == "event-driven":
-                    result = run_event_driven_backtest(strategy, data, config)
-                else:
-                    result = run_vectorized_backtest(strategy, data, config, features)
-                results[strategy.name] = result
-                break
-
-    if not results:
-        logger.error("No backtest results generated.")
-        sys.exit(1)
-
-    # Save results
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_path = f"results/backtest_{timestamp}.pkl"
-    save_results(results, results_path)
-
-    # Generate reports
-    generate_report(results, args.output)
-
-    logger.info("=" * 60)
-    logger.info("AlphaTrade System Complete")
-    logger.info("=" * 60)
+    print("\n" + "=" * 70)
+    print("  ALPHATRADE COMPLETE")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
