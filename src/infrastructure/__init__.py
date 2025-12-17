@@ -8,7 +8,7 @@ Provides:
 """
 
 from src.infrastructure.health_monitor import HealthMonitor, HealthStatus, ComponentHealth
-from src.infrastructure.failover import FailoverManager, RecoveryAction
+from src.infrastructure.failover import FailoverManager, RecoveryAction, StateManager
 
 __all__ = [
     "HealthMonitor",
@@ -16,4 +16,5 @@ __all__ = [
     "ComponentHealth",
     "FailoverManager",
     "RecoveryAction",
+    "StateManager",
 ]

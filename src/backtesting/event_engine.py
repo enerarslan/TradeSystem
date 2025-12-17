@@ -1079,3 +1079,101 @@ def run_event_backtest(
     engine.register_strategy(on_bar=on_bar)
 
     return engine.run(data, **kwargs)
+
+
+@dataclass
+class ExecutionEngine:
+    """
+    Execution engine for realistic trade simulation.
+
+    Provides institutional-grade execution modeling including:
+    - Market impact calculation
+    - Latency simulation
+    - Partial fills
+    - Order rejection probability
+    - Commission and slippage modeling
+
+    This is a simpler interface than EventDrivenEngine for tests and
+    simpler use cases.
+    """
+
+    # Market impact
+    market_impact_bps: float = 5.0
+    max_participation_rate: float = 0.02  # 2% of volume
+
+    # Execution
+    use_order_book: bool = True
+    partial_fills: bool = True
+    latency_ms: float = 50.0
+    rejection_rate: float = 0.001  # 0.1% rejection probability
+
+    # Costs
+    commission_bps: float = 10.0
+    slippage_bps: float = 5.0
+
+    def calculate_impact(
+        self,
+        order_size: float,
+        adv: float,
+        impact_model: str = "sqrt",
+    ) -> float:
+        """
+        Calculate market impact for an order.
+
+        Args:
+            order_size: Number of shares
+            adv: Average daily volume
+            impact_model: 'linear' or 'sqrt'
+
+        Returns:
+            Impact in basis points
+        """
+        participation = order_size / adv
+
+        if impact_model == "sqrt":
+            return self.market_impact_bps * np.sqrt(participation)
+        else:
+            return self.market_impact_bps * participation
+
+    def max_order_size(self, bar_volume: float) -> float:
+        """Calculate maximum order size based on participation limit."""
+        return bar_volume * self.max_participation_rate
+
+    def calculate_fill_price(
+        self,
+        order_price: float,
+        is_buy: bool,
+        order_size: float = 0,
+        adv: float = 1_000_000,
+    ) -> float:
+        """
+        Calculate fill price including impact and slippage.
+
+        Args:
+            order_price: Reference price
+            is_buy: True for buy orders
+            order_size: Order size (for impact calculation)
+            adv: Average daily volume
+
+        Returns:
+            Adjusted fill price
+        """
+        # Calculate impact
+        impact = self.calculate_impact(order_size, adv) if order_size > 0 else 0
+
+        # Total cost in bps
+        total_cost_bps = impact + self.slippage_bps
+
+        # Apply direction
+        if is_buy:
+            return order_price * (1 + total_cost_bps / 10000)
+        else:
+            return order_price * (1 - total_cost_bps / 10000)
+
+    def should_reject(self) -> bool:
+        """Determine if order should be rejected."""
+        return np.random.random() < self.rejection_rate
+
+    def calculate_commission(self, trade_value: float) -> float:
+        """Calculate commission for a trade."""
+        return trade_value * (self.commission_bps / 10000)

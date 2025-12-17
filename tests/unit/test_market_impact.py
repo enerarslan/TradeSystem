@@ -133,7 +133,7 @@ class TestOrderBookSimulation:
         spread = best_ask - best_bid
         spread_bps = (spread / self.mid_price) * 10000
 
-        assert spread == 0.02
+        assert spread == pytest.approx(0.02, rel=0.001)  # ~2 cents (use approx for float)
         assert spread_bps == pytest.approx(2.0, rel=0.01)  # ~2 bps
 
     def test_fill_price_small_order(self):
@@ -295,7 +295,7 @@ class TestTransactionCosts:
         slippage_cost = (fill_price - entry_price) * shares
         slippage_bps = (fill_price / entry_price - 1) * 10000
 
-        assert slippage_cost == 50  # $50 slippage
+        assert slippage_cost == pytest.approx(50, rel=0.001)  # $50 slippage
         assert slippage_bps == pytest.approx(5, rel=0.01)  # ~5 bps
 
     def test_total_execution_cost(self):

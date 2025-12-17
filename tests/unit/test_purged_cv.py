@@ -164,7 +164,7 @@ class TestCombinatorialPurgedKFoldCV:
         assert len(paths) == expected_paths
 
     def test_multiple_test_folds_per_path(self):
-        """Test that each path has multiple non-contiguous test folds."""
+        """Test that CPCV generates paths with varying test fold configurations."""
         from src.training.validation import CombinatorialPurgedKFoldCV
 
         cv = CombinatorialPurgedKFoldCV(
@@ -173,13 +173,22 @@ class TestCombinatorialPurgedKFoldCV:
             purge_gap=20,
         )
 
+        total_paths = 0
+        paths_with_gaps = 0
+
         for train_idx, test_idx in cv.split(self.X):
-            # Test indices should span multiple regions
+            total_paths += 1
+            # Test indices should span multiple regions in some paths
             test_diff = np.diff(np.sort(test_idx))
             large_gaps = np.sum(test_diff > 10)  # Gaps larger than 10
 
-            # Should have at least one large gap (non-contiguous)
-            assert large_gaps >= 1, "Test set appears to be contiguous"
+            if large_gaps >= 1:
+                paths_with_gaps += 1
+
+        # At least some paths should have non-contiguous test sets
+        # (when n_test_splits=2, some combinations will create gaps)
+        assert paths_with_gaps > 0, "At least some paths should have non-contiguous test sets"
+        assert total_paths == 15, f"Expected 15 paths (C(6,2)), got {total_paths}"
 
     def test_purge_gap_all_test_regions(self):
         """Test that purge gap is applied around all test regions."""

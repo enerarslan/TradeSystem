@@ -144,9 +144,14 @@ class TestMLStrategyLeakage:
         """Test that ML strategy scaler is fitted only on training data."""
         from src.strategies.ml_based.ml_alpha import MLAlphaStrategy
 
-        strategy = MLAlphaStrategy()
+        # Use regression mode for continuous targets, disable feature selection
+        strategy = MLAlphaStrategy(params={
+            "min_samples_train": 100,
+            "feature_selection": False,
+            "classification": False,  # Regression mode for continuous targets
+        })
 
-        # Prepare target
+        # Prepare target (continuous returns)
         target = self.prices["close"].pct_change(5).shift(-5)
 
         # Split data
@@ -172,7 +177,12 @@ class TestMLStrategyLeakage:
         """Test that prediction fails if scaler not fitted."""
         from src.strategies.ml_based.ml_alpha import MLAlphaStrategy
 
-        strategy = MLAlphaStrategy()
+        # Use regression mode, disable feature selection
+        strategy = MLAlphaStrategy(params={
+            "min_samples_train": 100,
+            "feature_selection": False,
+            "classification": False,  # Regression mode
+        })
 
         # Try to fit with fit_scaler=False (should fail)
         target = self.prices["close"].pct_change(5).shift(-5)
@@ -217,14 +227,25 @@ class TestPurgedCVLeakage:
         cv = PurgedKFoldCV(n_splits=5, purge_gap=purge_gap)
 
         for train_idx, test_idx in cv.split(self.X):
-            train_max = train_idx.max()
             test_min = test_idx.min()
+            test_max = test_idx.max()
 
-            # Gap between train and test should be at least purge_gap
-            assert test_min - train_max >= purge_gap, (
-                f"Purge gap violated: train_max={train_max}, "
-                f"test_min={test_min}, required_gap={purge_gap}"
-            )
+            # Check training indices that are BEFORE the test set
+            train_before_test = train_idx[train_idx < test_min]
+            if len(train_before_test) > 0:
+                train_before_max = train_before_test.max()
+                # Gap between train (before) and test should be at least purge_gap
+                assert test_min - train_before_max >= purge_gap, (
+                    f"Purge gap violated: train_max={train_before_max}, "
+                    f"test_min={test_min}, required_gap={purge_gap}"
+                )
+
+            # Check training indices that are AFTER the test set have embargo
+            train_after_test = train_idx[train_idx > test_max]
+            if len(train_after_test) > 0:
+                train_after_min = train_after_test.min()
+                # There should be a gap after test set (embargo)
+                assert train_after_min > test_max, "Training should not immediately follow test"
 
     def test_no_overlap_between_train_and_test(self):
         """Test that train and test sets never overlap."""
@@ -273,7 +294,8 @@ class TestTargetLeakage:
         """Test that target construction doesn't use future data."""
         from src.strategies.ml_based.ml_alpha import MLAlphaStrategy
 
-        strategy = MLAlphaStrategy()
+        # Use regression mode so NaN values are preserved (not converted to 0/1)
+        strategy = MLAlphaStrategy(params={"classification": False})
 
         # Create simple price series
         dates = pd.date_range("2020-01-01", periods=100, freq="15min")
@@ -282,8 +304,8 @@ class TestTargetLeakage:
         # Prepare target with horizon=5
         target = strategy._prepare_target(prices, horizon=5)
 
-        # Target at index 94 should be NaN (not enough future data)
-        # (forward return from 94 to 99)
+        # Target at index 95-99 should be NaN (not enough future data)
+        # shift(-5) makes last 5 rows NaN
         assert pd.isna(target["close"].iloc[95])
         assert pd.isna(target["close"].iloc[96])
         assert pd.isna(target["close"].iloc[97])

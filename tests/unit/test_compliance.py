@@ -277,7 +277,9 @@ class TestPreTradeCompliance:
 
     def test_daily_trade_count_limit(self, checker):
         """Test daily trade count limit."""
+        from datetime import datetime
         checker._daily_trade_count = 100  # At limit
+        checker._last_reset_date = datetime.now()  # Prevent reset
         checker.update_security_data("AAPL", adv=10_000_000)
 
         order = Order(

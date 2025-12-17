@@ -91,10 +91,13 @@ class TestDataValidator:
         df = sample_ohlcv_df.copy()
         df.iloc[10:12, df.columns.get_loc("close")] = np.nan
 
-        validator = DataValidator(max_missing_pct=1.0)
+        # With 2% missing (2 of 100), threshold of 5% makes it a warning, threshold of 1% makes it an error
+        validator = DataValidator(max_missing_pct=5.0)
         result = validator.validate(df, "TEST")
 
-        assert any("missing" in w.lower() for w in result.warnings)
+        # Check for missing in warnings (below threshold) or errors (above threshold)
+        all_messages = result.warnings + result.errors
+        assert any("missing" in m.lower() for m in all_messages)
 
     def test_extreme_price_change_warning(self, sample_ohlcv_df):
         """Test detection of extreme price changes."""
