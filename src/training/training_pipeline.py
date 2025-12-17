@@ -31,6 +31,30 @@ import numpy as np
 import pandas as pd
 import joblib
 
+# Optional GPU detection
+try:
+    import torch
+    CUDA_AVAILABLE = torch.cuda.is_available()
+    MPS_AVAILABLE = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+except ImportError:
+    CUDA_AVAILABLE = False
+    MPS_AVAILABLE = False
+
+# Optional MLflow
+try:
+    import mlflow
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
+    mlflow = None
+
+# Optional TimescaleDB
+try:
+    import psycopg2
+    TIMESCALE_AVAILABLE = True
+except ImportError:
+    TIMESCALE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -170,6 +194,10 @@ class TrainingPipeline:
         experiment_tracker: Optional[Any] = None,
         model_registry: Optional[Any] = None,
         output_dir: str = "outputs",
+        use_gpu: bool = True,
+        use_mlflow: bool = True,
+        use_timescaledb: bool = False,
+        timescale_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the training pipeline.
@@ -181,6 +209,10 @@ class TrainingPipeline:
             experiment_tracker: MLflow experiment tracker (optional)
             model_registry: Model registry for production models (optional)
             output_dir: Directory for outputs
+            use_gpu: Enable GPU acceleration for supported models
+            use_mlflow: Enable MLflow experiment tracking
+            use_timescaledb: Enable TimescaleDB for data storage
+            timescale_config: TimescaleDB connection config
         """
         self.config = config
         self.feature_pipeline = feature_pipeline
@@ -189,6 +221,25 @@ class TrainingPipeline:
         self.model_registry = model_registry
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # GPU Configuration
+        self.use_gpu = use_gpu and (CUDA_AVAILABLE or MPS_AVAILABLE)
+        self.device = self._detect_device() if self.use_gpu else "cpu"
+
+        # MLflow Configuration
+        self.use_mlflow = use_mlflow and MLFLOW_AVAILABLE
+        self._mlflow_run_id: Optional[str] = None
+
+        # TimescaleDB Configuration
+        self.use_timescaledb = use_timescaledb and TIMESCALE_AVAILABLE
+        self.timescale_config = timescale_config or {}
+        self._db_connection = None
+
+        # Log capabilities
+        logger.info(f"Pipeline initialized:")
+        logger.info(f"  GPU: {'ENABLED (' + self.device + ')' if self.use_gpu else 'DISABLED'}")
+        logger.info(f"  MLflow: {'ENABLED' if self.use_mlflow else 'DISABLED'}")
+        logger.info(f"  TimescaleDB: {'ENABLED' if self.use_timescaledb else 'DISABLED'}")
 
         # Stage results
         self._stage_results: Dict[PipelineStage, StageResult] = {}
@@ -203,6 +254,248 @@ class TrainingPipeline:
         self._y_test: Optional[pd.Series] = None
         self._model: Optional[Any] = None
         self._cv: Optional[Any] = None
+
+    def _detect_device(self) -> str:
+        """Detect best available device for training."""
+        if CUDA_AVAILABLE:
+            import torch
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info(f"CUDA GPU detected: {gpu_name}")
+            return "cuda"
+        elif MPS_AVAILABLE:
+            logger.info("Apple MPS (Metal) detected")
+            return "mps"
+        return "cpu"
+
+    def _init_mlflow(self, run_name: str) -> None:
+        """Initialize MLflow tracking."""
+        if not self.use_mlflow:
+            return
+
+        try:
+            mlflow.set_tracking_uri("mlruns")
+            mlflow.set_experiment("alphatrade_pipeline")
+
+            run = mlflow.start_run(run_name=run_name)
+            self._mlflow_run_id = run.info.run_id
+
+            # Log config as params
+            flat_config = self._flatten_dict(self.config)
+            for key, value in flat_config.items():
+                try:
+                    mlflow.log_param(key[:250], str(value)[:250])  # MLflow limits
+                except Exception:
+                    pass
+
+            logger.info(f"MLflow run started: {self._mlflow_run_id}")
+        except Exception as e:
+            logger.warning(f"MLflow init failed: {e}")
+            self.use_mlflow = False
+
+    def _log_mlflow_metrics(self, metrics: Dict[str, Any], step: Optional[int] = None) -> None:
+        """Log metrics to MLflow."""
+        if not self.use_mlflow or not self._mlflow_run_id:
+            return
+
+        try:
+            for key, value in metrics.items():
+                if isinstance(value, (int, float)) and not np.isnan(value):
+                    mlflow.log_metric(key, value, step=step)
+        except Exception as e:
+            logger.warning(f"MLflow metric logging failed: {e}")
+
+    def _end_mlflow(self, success: bool) -> None:
+        """End MLflow run."""
+        if not self.use_mlflow or not self._mlflow_run_id:
+            return
+
+        try:
+            mlflow.log_param("pipeline_success", success)
+            mlflow.end_run()
+            logger.info(f"MLflow run ended: {self._mlflow_run_id}")
+        except Exception as e:
+            logger.warning(f"MLflow end failed: {e}")
+
+    def _flatten_dict(self, d: Dict, parent_key: str = '', sep: str = '.') -> Dict:
+        """Flatten nested dictionary for MLflow params."""
+        items = []
+        for k, v in d.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict):
+                items.extend(self._flatten_dict(v, new_key, sep=sep).items())
+            else:
+                items.append((new_key, v))
+        return dict(items)
+
+    def _init_timescaledb(self) -> None:
+        """Initialize TimescaleDB connection."""
+        if not self.use_timescaledb:
+            return
+
+        try:
+            self._db_connection = psycopg2.connect(
+                host=self.timescale_config.get("host", "localhost"),
+                port=self.timescale_config.get("port", 5432),
+                database=self.timescale_config.get("database", "alphatrade"),
+                user=self.timescale_config.get("user", "postgres"),
+                password=self.timescale_config.get("password", ""),
+            )
+            logger.info("TimescaleDB connection established")
+        except Exception as e:
+            logger.warning(f"TimescaleDB connection failed: {e}")
+            self.use_timescaledb = False
+            self._db_connection = None
+
+    def _save_to_timescaledb(self, table: str, data: pd.DataFrame) -> None:
+        """Save data to TimescaleDB."""
+        if not self.use_timescaledb or self._db_connection is None:
+            return
+
+        try:
+            from io import StringIO
+            buffer = StringIO()
+            data.to_csv(buffer, index=True, header=False)
+            buffer.seek(0)
+
+            cursor = self._db_connection.cursor()
+            cursor.copy_from(buffer, table, sep=',')
+            self._db_connection.commit()
+            logger.info(f"Saved {len(data)} rows to TimescaleDB table: {table}")
+        except Exception as e:
+            logger.warning(f"TimescaleDB save failed: {e}")
+
+    def _save_features_to_db(self, features: pd.DataFrame, symbol: str = "UNKNOWN") -> None:
+        """Save features to TimescaleDB features_store table."""
+        if not self.use_timescaledb or self._db_connection is None:
+            return
+
+        try:
+            cursor = self._db_connection.cursor()
+
+            # Melt features DataFrame for storage
+            for col in features.columns:
+                for idx, value in features[col].items():
+                    if pd.notna(value):
+                        cursor.execute(
+                            """
+                            INSERT INTO features_store (time, symbol, feature_name, feature_value)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (time, symbol, feature_name) DO UPDATE
+                            SET feature_value = EXCLUDED.feature_value
+                            """,
+                            (idx, symbol, col, float(value))
+                        )
+
+            self._db_connection.commit()
+            logger.info(f"Saved {len(features)} rows x {len(features.columns)} features to TimescaleDB")
+        except Exception as e:
+            logger.warning(f"TimescaleDB features save failed: {e}")
+
+    def _save_predictions_to_db(self, predictions: np.ndarray, model_id: str) -> None:
+        """Save model predictions to TimescaleDB."""
+        if not self.use_timescaledb or self._db_connection is None:
+            return
+
+        try:
+            cursor = self._db_connection.cursor()
+
+            # Get test data indices for timestamps
+            if self._X_test is not None and hasattr(self._X_test, 'index'):
+                for i, (idx, pred) in enumerate(zip(self._X_test.index, predictions)):
+                    # Determine symbol from data if available
+                    symbol = "UNKNOWN"
+                    if self._data is not None and "symbol" in self._data.columns:
+                        try:
+                            symbol = self._data.loc[idx, "symbol"]
+                        except Exception:
+                            pass
+
+                    cursor.execute(
+                        """
+                        INSERT INTO model_predictions (time, symbol, model_id, prediction, horizon)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (time, symbol, model_id) DO UPDATE
+                        SET prediction = EXCLUDED.prediction
+                        """,
+                        (idx, symbol, model_id, float(pred), self.config.get("training", {}).get("prediction_horizon", 5))
+                    )
+
+            self._db_connection.commit()
+            logger.info(f"Saved {len(predictions)} predictions to TimescaleDB")
+        except Exception as e:
+            logger.warning(f"TimescaleDB predictions save failed: {e}")
+
+    def _save_metrics_to_db(self, metrics: Dict[str, float], metric_type: str, entity_id: str) -> None:
+        """Save performance metrics to TimescaleDB."""
+        if not self.use_timescaledb or self._db_connection is None:
+            return
+
+        try:
+            cursor = self._db_connection.cursor()
+
+            for metric_name, value in metrics.items():
+                if isinstance(value, (int, float)) and not np.isnan(value):
+                    cursor.execute(
+                        """
+                        INSERT INTO performance_metrics (time, metric_type, metric_name, metric_value, entity_id)
+                        VALUES (NOW(), %s, %s, %s, %s)
+                        """,
+                        (metric_type, metric_name, float(value), entity_id)
+                    )
+
+            self._db_connection.commit()
+            logger.info(f"Saved {len(metrics)} metrics to TimescaleDB")
+        except Exception as e:
+            logger.warning(f"TimescaleDB metrics save failed: {e}")
+
+    def _register_model_to_db(self, model_id: str, metrics: Dict[str, Any]) -> None:
+        """Register model in TimescaleDB model_registry."""
+        if not self.use_timescaledb or self._db_connection is None:
+            return
+
+        try:
+            import json as json_module
+            cursor = self._db_connection.cursor()
+
+            cursor.execute(
+                """
+                INSERT INTO model_registry (
+                    model_id, model_type, status,
+                    cv_mean_ic, cv_std_ic, test_ic, direction_accuracy,
+                    config, feature_names, mlflow_run_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (model_id) DO UPDATE SET
+                    updated_at = NOW(),
+                    cv_mean_ic = EXCLUDED.cv_mean_ic,
+                    test_ic = EXCLUDED.test_ic
+                """,
+                (
+                    model_id,
+                    self.config.get("training", {}).get("model_type", "unknown"),
+                    "active",
+                    metrics.get("cv_mean_ic"),
+                    metrics.get("cv_std_ic"),
+                    metrics.get("test_ic"),
+                    metrics.get("direction_accuracy"),
+                    json_module.dumps(self.config),
+                    json_module.dumps(list(self._X_train.columns) if self._X_train is not None else []),
+                    self._mlflow_run_id
+                )
+            )
+
+            self._db_connection.commit()
+            logger.info(f"Model {model_id} registered in TimescaleDB")
+        except Exception as e:
+            logger.warning(f"TimescaleDB model registration failed: {e}")
+
+    def _close_timescaledb(self) -> None:
+        """Close TimescaleDB connection."""
+        if self._db_connection:
+            try:
+                self._db_connection.close()
+                logger.info("TimescaleDB connection closed")
+            except Exception:
+                pass
 
     def run(
         self,
@@ -226,7 +519,15 @@ class TrainingPipeline:
 
         logger.info("=" * 60)
         logger.info("STARTING TRAINING PIPELINE")
+        logger.info(f"  Device: {self.device}")
+        logger.info(f"  MLflow: {'ON' if self.use_mlflow else 'OFF'}")
+        logger.info(f"  TimescaleDB: {'ON' if self.use_timescaledb else 'OFF'}")
         logger.info("=" * 60)
+
+        # Initialize integrations
+        run_name = f"pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self._init_mlflow(run_name)
+        self._init_timescaledb()
 
         # Convert dict to single DataFrame if needed
         if isinstance(data, dict):
@@ -319,8 +620,22 @@ class TrainingPipeline:
                         PipelineStage.MODEL_EVALUATION, PipelineStatus.SKIPPED, 0.0
                     )
                 ).metrics,
+                "device": self.device,
+                "mlflow_run_id": self._mlflow_run_id,
             },
         )
+
+        # Log final metrics to MLflow
+        final_metrics = result.metadata.get("final_metrics", {})
+        if final_metrics:
+            self._log_mlflow_metrics(final_metrics)
+            self._log_mlflow_metrics({"total_duration_seconds": total_duration})
+
+        # End MLflow run
+        self._end_mlflow(success)
+
+        # Close TimescaleDB connection
+        self._close_timescaledb()
 
         logger.info(result.summary())
 
@@ -499,8 +814,17 @@ class TrainingPipeline:
         # Get training config
         train_config = self.config.get("training", {})
         test_size = train_config.get("test_size", 0.2)
-        purge_gap = train_config.get("purge_gap", 50)
         prediction_horizon = train_config.get("prediction_horizon", 5)
+
+        # Handle purge_gap - can be "auto" string or int
+        purge_gap_setting = train_config.get("purge_gap", 50)
+        if purge_gap_setting == "auto" or not isinstance(purge_gap_setting, (int, float)):
+            # Calculate auto purge gap: prediction_horizon + max_feature_lookback + buffer
+            max_lookback = train_config.get("max_feature_lookback", 200)
+            purge_gap = prediction_horizon + max_lookback + 10  # 10 bar buffer
+            logger.info(f"Auto-calculated purge_gap: {purge_gap}")
+        else:
+            purge_gap = int(purge_gap_setting)
 
         # Create target
         target_col = train_config.get("target_column", "close")
@@ -556,15 +880,24 @@ class TrainingPipeline:
 
     def _train_model(self) -> Dict[str, Any]:
         """
-        Step 4: Train model with cross-validation.
+        Step 4: Train model with cross-validation and GPU support.
         """
-        logger.info("Training model...")
+        logger.info(f"Training model on device: {self.device}...")
 
         if self._X_train is None or self._y_train is None:
             raise ValueError("Training data not prepared")
 
         train_config = self.config.get("training", {})
         model_type = train_config.get("model_type", "lightgbm_regressor")
+
+        # Get base model params
+        model_params = train_config.get("model_params") or {}
+
+        # Add GPU parameters if available
+        gpu_params = self._get_gpu_params(model_type)
+        if gpu_params:
+            model_params = {**model_params, **gpu_params}
+            logger.info(f"GPU params applied: {gpu_params}")
 
         # Create model
         if self.model_factory is None:
@@ -573,7 +906,7 @@ class TrainingPipeline:
 
         model = self.model_factory.create_model(
             model_type=model_type,
-            params=train_config.get("model_params"),
+            params=model_params,
         )
 
         # Cross-validation scores
@@ -581,16 +914,23 @@ class TrainingPipeline:
         X_np = self._X_train.values
         y_np = self._y_train.values
 
-        for fold_idx, (train_idx, val_idx) in enumerate(self._cv.split(X_np, y_np)):
+        from tqdm import tqdm
+        n_splits = self._cv.n_splits if hasattr(self._cv, 'n_splits') else 5
+
+        for fold_idx, (train_idx, val_idx) in enumerate(tqdm(
+            self._cv.split(X_np, y_np),
+            total=n_splits,
+            desc="CV Folds"
+        )):
             X_fold_train = X_np[train_idx]
             y_fold_train = y_np[train_idx]
             X_fold_val = X_np[val_idx]
             y_fold_val = y_np[val_idx]
 
-            # Clone model for this fold
+            # Clone model for this fold with GPU params
             fold_model = self.model_factory.create_model(
                 model_type=model_type,
-                params=train_config.get("model_params"),
+                params=model_params,
             )
 
             # Train
@@ -604,9 +944,13 @@ class TrainingPipeline:
             ic, _ = spearmanr(y_fold_val, y_pred)
             cv_scores.append(ic if not np.isnan(ic) else 0.0)
 
+            # Log to MLflow
+            self._log_mlflow_metrics({"fold_ic": cv_scores[-1]}, step=fold_idx)
+
             logger.info(f"Fold {fold_idx + 1}: IC = {cv_scores[-1]:.4f}")
 
         # Train final model on all training data
+        logger.info("Training final model on all data...")
         model.fit(X_np, y_np)
         self._model = model
 
@@ -615,11 +959,51 @@ class TrainingPipeline:
 
         logger.info(f"CV Complete: Mean IC = {mean_cv:.4f} (+/- {std_cv:.4f})")
 
+        # Log CV results to MLflow
+        self._log_mlflow_metrics({
+            "cv_mean_ic": mean_cv,
+            "cv_std_ic": std_cv,
+            "n_folds": len(cv_scores),
+        })
+
         return {
             "cv_mean_ic": mean_cv,
             "cv_std_ic": std_cv,
             "n_folds": len(cv_scores),
+            "device": self.device,
         }
+
+    def _get_gpu_params(self, model_type: str) -> Dict[str, Any]:
+        """Get GPU-specific parameters for model type."""
+        if not self.use_gpu or self.device == "cpu":
+            return {}
+
+        model_type_lower = model_type.lower()
+
+        if "lightgbm" in model_type_lower:
+            # LightGBM GPU parameters
+            return {
+                "device": "gpu",
+                "gpu_platform_id": 0,
+                "gpu_device_id": 0,
+            }
+        elif "xgboost" in model_type_lower:
+            # XGBoost GPU parameters
+            if self.device == "cuda":
+                return {
+                    "tree_method": "gpu_hist",
+                    "predictor": "gpu_predictor",
+                    "gpu_id": 0,
+                }
+            return {}
+        elif "catboost" in model_type_lower:
+            # CatBoost GPU parameters
+            return {
+                "task_type": "GPU",
+                "devices": "0",
+            }
+
+        return {}
 
     def _evaluate_model(self) -> Dict[str, Any]:
         """
@@ -775,6 +1159,21 @@ class TrainingPipeline:
         metadata_path = self.output_dir / f"{model_id}_metadata.json"
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2, default=str)
+
+        # Register to TimescaleDB
+        cv_metrics = self._stage_results.get(PipelineStage.MODEL_TRAINING)
+        all_metrics = {**metrics}
+        if cv_metrics and cv_metrics.metrics:
+            all_metrics.update(cv_metrics.metrics)
+        self._register_model_to_db(model_id, all_metrics)
+
+        # Save predictions to TimescaleDB
+        if self._model is not None and self._X_test is not None:
+            y_pred = self._model.predict(self._X_test.values)
+            self._save_predictions_to_db(y_pred, model_id)
+
+        # Save metrics to TimescaleDB
+        self._save_metrics_to_db(metrics, "model", model_id)
 
         logger.info(f"Model registered: {model_id}")
 

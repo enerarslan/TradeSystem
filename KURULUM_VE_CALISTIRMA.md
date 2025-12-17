@@ -6,6 +6,7 @@
 - Python 3.10+ (3.11 önerilir)
 - 16GB+ RAM (Deep Learning için 32GB önerilir)
 - NVIDIA GPU (opsiyonel, Deep Learning için)
+- PostgreSQL 14+ + TimescaleDB (opsiyonel, production için önerilir)
 
 ### Veri
 - 46 adet hisse senedi (15 dakikalık OHLCV)
@@ -36,6 +37,25 @@ pip install -r requirements.txt
 pip uninstall torch
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
+
+### TimescaleDB Kurulumu (Opsiyonel - Production için önerilir)
+```bash
+# Windows için:
+# 1. PostgreSQL 14+ indir: https://www.postgresql.org/download/windows/
+# 2. TimescaleDB indir: https://docs.timescale.com/install/latest/self-hosted/installation-windows/
+
+# Kurulumdan sonra:
+python scripts/setup_timescaledb.py --host localhost --port 5432 --user postgres --password postgres
+
+# Doğrulama
+python scripts/setup_timescaledb.py --verify-only
+```
+
+**TimescaleDB Avantajları:**
+- Zaman serisi verileri için optimize edilmiş PostgreSQL
+- Otomatik chunk'lama ve sıkıştırma
+- Hızlı time-bucket sorguları
+- Model, prediction ve metrik kayıtları
 
 ---
 

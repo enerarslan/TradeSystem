@@ -320,3 +320,128 @@ features:
     scaling: robust  # standard, robust, minmax
     handle_inf: clip  # clip, replace_nan
     clip_outliers: 5.0  # Standard deviations
+
+# =============================================================================
+# DATABASE SETTINGS
+# =============================================================================
+database:
+  # TimescaleDB for time-series data storage
+  timescaledb:
+    enabled: true
+    host: localhost
+    port: 5432
+    database: alphatrade
+    user: postgres
+    password: postgres  # Change in production!
+
+    # Connection pool settings
+    pool_size: 5
+    max_overflow: 10
+    pool_timeout: 30
+
+    # Tables
+    tables:
+      ohlcv: market_data_ohlcv
+      features: features_store
+      predictions: model_predictions
+      trades: executed_trades
+      metrics: performance_metrics
+
+    # Hypertable settings (TimescaleDB specific)
+    hypertable:
+      chunk_time_interval: "1 week"
+      compression_after: "7 days"
+      retention_policy: "2 years"
+
+  # Redis for caching (optional)
+  redis:
+    enabled: false
+    host: localhost
+    port: 6379
+    db: 0
+    password: null
+    ttl_seconds: 3600
+
+# =============================================================================
+# MLFLOW SETTINGS
+# =============================================================================
+mlflow:
+  enabled: true
+  tracking_uri: "mlruns"  # or "sqlite:///mlflow.db" for SQLite backend
+  experiment_name: "alphatrade_pipeline"
+  artifact_location: "mlartifacts"
+
+  # Auto-logging
+  autolog:
+    log_models: true
+    log_input_examples: false
+    log_model_signatures: true
+
+# =============================================================================
+# TRAINING SETTINGS
+# =============================================================================
+training:
+  # Model settings
+  model_type: lightgbm_regressor
+
+  # Cross-validation
+  cv_type: combinatorial_purged  # purged, combinatorial_purged, walk_forward
+  cv_splits: 5
+  n_test_splits: 2
+
+  # Purge settings (CRITICAL for preventing data leakage)
+  purge_gap: auto  # "auto" calculates based on prediction_horizon + max_lookback
+  embargo_pct: 0.01
+  prediction_horizon: 5
+  max_feature_lookback: 200
+
+  # Optimization
+  optimize: true
+  n_trials: 50
+  optuna_timeout: 3600  # seconds
+
+  # MLflow tracking
+  mlflow_tracking: true
+
+  # GPU settings
+  use_gpu: true
+  gpu_device: auto  # auto, 0, 1, cuda, mps
+
+  # Model registration thresholds
+  min_ic_threshold: 0.02
+  min_direction_accuracy: 0.52
+
+  # Checkpointing
+  checkpoint_dir: "checkpoints"
+  save_every_n_epochs: 10
+
+# =============================================================================
+# DEEP LEARNING SETTINGS
+# =============================================================================
+deep_learning:
+  model: lstm  # lstm, attention_lstm, transformer
+
+  # Architecture
+  architecture:
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.2
+    bidirectional: false
+    attention_heads: 4  # for transformer/attention_lstm
+
+  # Training
+  training:
+    seq_length: 20
+    batch_size: 64
+    max_epochs: 100
+    patience: 10
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    gradient_clip: 1.0
+    validation_split: 0.2
+
+  # Loss function
+  loss: sharpe  # mse, sharpe, sortino
+
+  # Device
+  device: auto  # auto, cpu, cuda, mps

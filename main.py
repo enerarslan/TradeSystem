@@ -2123,14 +2123,30 @@ def main():
                 },
             }
 
-            # Initialize pipeline
+            # Determine device for GPU
+            if args.device == "auto":
+                use_gpu = True  # Let pipeline auto-detect
+            elif args.device == "cpu":
+                use_gpu = False
+            else:
+                use_gpu = True  # cuda or mps
+
+            # TimescaleDB config from config file
+            timescale_config = config.get("database", {}).get("timescaledb", {})
+            use_timescaledb = timescale_config.get("enabled", False)
+
+            # Initialize pipeline with all features
             pipeline = TrainingPipeline(
                 config=pipeline_config,
                 feature_pipeline=None,  # Will be created automatically
                 model_factory=ModelFactory,
-                experiment_tracker=None,  # Can add MLflow tracker
+                experiment_tracker=None,
                 model_registry=None,
                 output_dir="outputs",
+                use_gpu=use_gpu,
+                use_mlflow=True,  # Enable MLflow tracking
+                use_timescaledb=use_timescaledb,
+                timescale_config=timescale_config,
             )
 
             # Merge all data into single DataFrame for pipeline
