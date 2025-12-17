@@ -1,0 +1,450 @@
+# =============================================================================
+# AlphaTrade System - Machine Learning Configuration
+# =============================================================================
+# Institutional-grade ML configuration for quantitative trading
+# All parameters externalized for production flexibility
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Random Seed Configuration
+# -----------------------------------------------------------------------------
+random_seeds:
+  primary: 42              # Primary seed for reproducibility
+  ensemble_seeds:          # Seeds for ensemble model diversity
+    - 42
+    - 123
+    - 456
+    - 789
+    - 2024
+
+# -----------------------------------------------------------------------------
+# Periods Per Year for Different Timeframes
+# -----------------------------------------------------------------------------
+# Critical for annualization of returns and risk metrics
+periods_per_year:
+  tick: 16380000          # ~65,000 ticks/day * 252 days
+  second_1: 23400         # 6.5 hours * 3600 seconds * 252 days / 252
+  minute_1: 98280         # 390 minutes/day * 252 days
+  minute_5: 19656         # 78 bars/day * 252 days
+  minute_15: 6552         # 26 bars/day * 252 days
+  minute_30: 3276         # 13 bars/day * 252 days
+  hour_1: 1638            # 6.5 bars/day * 252 days
+  hour_4: 410             # ~1.6 bars/day * 252 days
+  daily: 252              # Trading days per year
+  weekly: 52              # Weeks per year
+  monthly: 12             # Months per year
+
+# Default timeframe for the system
+default_timeframe: minute_15
+
+# -----------------------------------------------------------------------------
+# Feature Selection Configuration
+# -----------------------------------------------------------------------------
+feature_selection:
+  max_features: 50                  # Maximum features after selection
+  min_features: 10                  # Minimum features to keep
+  method: importance                # importance, variance, correlation, rfe
+  importance_threshold: 0.001       # Minimum importance score
+  variance_threshold: 0.01          # For variance-based selection
+  correlation_threshold: 0.95       # Drop highly correlated features
+
+# -----------------------------------------------------------------------------
+# Cross-Validation Configuration
+# -----------------------------------------------------------------------------
+cross_validation:
+  n_splits: 5                       # Number of CV folds
+  purge_gap: 10                     # Bars between train and test
+  embargo_pct: 0.01                 # % of test set as embargo
+  prediction_horizon: 1             # Bars ahead for prediction
+  max_feature_lookback: 20          # Longest lookback in features
+
+  # Walk-forward validation
+  walk_forward:
+    train_period_bars: 5040         # ~2 months at 15-min
+    test_period_bars: 1260          # ~1 month at 15-min
+    step_size: null                 # null = test_period_bars
+    expanding: false                # true = expanding window
+    min_train_samples: 1000         # Minimum samples for training
+
+# -----------------------------------------------------------------------------
+# Hyperparameter Optimization (Optuna)
+# -----------------------------------------------------------------------------
+optimization:
+  n_trials: 100                     # Number of optimization trials
+  timeout: 3600                     # Maximum time in seconds (1 hour)
+  n_jobs: -1                        # Parallel jobs (-1 = all cores)
+  direction: maximize               # maximize or minimize
+  objective_metric: sharpe_ratio    # Primary optimization metric
+
+  # Sampler configuration
+  sampler:
+    type: TPESampler                # TPESampler, CmaEsSampler, etc.
+    seed: 42
+    n_startup_trials: 10
+
+  # Pruner configuration
+  pruner:
+    type: MedianPruner              # MedianPruner, HyperbandPruner
+    n_startup_trials: 5
+    n_warmup_steps: 10
+    interval_steps: 1
+
+  # Multi-objective optimization
+  multi_objective:
+    enabled: false
+    objectives:
+      - sharpe_ratio
+      - max_drawdown
+    directions:
+      - maximize
+      - minimize
+
+# -----------------------------------------------------------------------------
+# Model-Specific Configurations
+# -----------------------------------------------------------------------------
+models:
+  # LightGBM Configuration
+  lightgbm:
+    default_params:
+      boosting_type: gbdt
+      objective: binary               # binary, multiclass, regression
+      metric: auc
+      n_estimators: 100
+      max_depth: -1
+      num_leaves: 31
+      learning_rate: 0.1
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.1
+      reg_lambda: 0.1
+      min_child_samples: 20
+      verbose: -1
+      n_jobs: -1
+
+    # Hyperparameter search space for Optuna
+    param_space:
+      n_estimators:
+        type: int
+        low: 50
+        high: 500
+      max_depth:
+        type: int
+        low: 3
+        high: 12
+      num_leaves:
+        type: int
+        low: 20
+        high: 100
+      learning_rate:
+        type: float_log
+        low: 0.01
+        high: 0.3
+      subsample:
+        type: float
+        low: 0.6
+        high: 1.0
+      colsample_bytree:
+        type: float
+        low: 0.6
+        high: 1.0
+      reg_alpha:
+        type: float_log
+        low: 1.0e-8
+        high: 10.0
+      reg_lambda:
+        type: float_log
+        low: 1.0e-8
+        high: 10.0
+      min_child_samples:
+        type: int
+        low: 10
+        high: 100
+
+  # XGBoost Configuration
+  xgboost:
+    default_params:
+      objective: binary:logistic
+      eval_metric: auc
+      n_estimators: 100
+      max_depth: 6
+      learning_rate: 0.1
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_alpha: 0.1
+      reg_lambda: 0.1
+      min_child_weight: 1
+      gamma: 0
+      tree_method: hist
+      verbosity: 0
+      n_jobs: -1
+
+    param_space:
+      n_estimators:
+        type: int
+        low: 50
+        high: 500
+      max_depth:
+        type: int
+        low: 3
+        high: 12
+      learning_rate:
+        type: float_log
+        low: 0.01
+        high: 0.3
+      subsample:
+        type: float
+        low: 0.6
+        high: 1.0
+      colsample_bytree:
+        type: float
+        low: 0.6
+        high: 1.0
+      reg_alpha:
+        type: float_log
+        low: 1.0e-8
+        high: 10.0
+      reg_lambda:
+        type: float_log
+        low: 1.0e-8
+        high: 10.0
+      min_child_weight:
+        type: int
+        low: 1
+        high: 20
+      gamma:
+        type: float
+        low: 0
+        high: 5
+
+  # CatBoost Configuration
+  catboost:
+    default_params:
+      objective: Logloss
+      eval_metric: AUC
+      iterations: 100
+      depth: 6
+      learning_rate: 0.1
+      l2_leaf_reg: 3
+      bootstrap_type: Bayesian
+      bagging_temperature: 1
+      random_strength: 1
+      verbose: false
+      thread_count: -1
+
+    param_space:
+      iterations:
+        type: int
+        low: 50
+        high: 500
+      depth:
+        type: int
+        low: 3
+        high: 10
+      learning_rate:
+        type: float_log
+        low: 0.01
+        high: 0.3
+      l2_leaf_reg:
+        type: float_log
+        low: 1.0
+        high: 10.0
+      bagging_temperature:
+        type: float
+        low: 0
+        high: 3
+      random_strength:
+        type: float
+        low: 0
+        high: 3
+
+  # Random Forest Configuration
+  random_forest:
+    default_params:
+      n_estimators: 100
+      max_depth: null
+      min_samples_split: 2
+      min_samples_leaf: 1
+      max_features: sqrt
+      bootstrap: true
+      n_jobs: -1
+
+    param_space:
+      n_estimators:
+        type: int
+        low: 50
+        high: 300
+      max_depth:
+        type: int
+        low: 5
+        high: 30
+      min_samples_split:
+        type: int
+        low: 2
+        high: 20
+      min_samples_leaf:
+        type: int
+        low: 1
+        high: 10
+      max_features:
+        type: categorical
+        choices:
+          - sqrt
+          - log2
+          - 0.5
+          - 0.7
+
+# -----------------------------------------------------------------------------
+# Deep Learning Configuration
+# -----------------------------------------------------------------------------
+deep_learning:
+  # General settings
+  device: auto                      # auto, cpu, cuda, mps
+  mixed_precision: true             # Use FP16 for faster training
+  gradient_clip: 1.0                # Max gradient norm
+
+  # Training defaults
+  training:
+    batch_size: 64
+    max_epochs: 100
+    patience: 10                    # Early stopping patience
+    min_delta: 1.0e-4               # Min improvement for early stopping
+
+  # Learning rate scheduling
+  lr_scheduler:
+    type: OneCycleLR                # OneCycleLR, ReduceLROnPlateau, CosineAnnealingLR
+    max_lr: 1.0e-3
+    pct_start: 0.3
+    div_factor: 25.0
+    final_div_factor: 10000.0
+
+  # LSTM Configuration
+  lstm:
+    default_params:
+      input_size: null              # Set from data
+      hidden_size: 128
+      num_layers: 2
+      dropout: 0.2
+      bidirectional: false
+      batch_first: true
+
+    param_space:
+      hidden_size:
+        type: categorical
+        choices: [64, 128, 256, 512]
+      num_layers:
+        type: int
+        low: 1
+        high: 4
+      dropout:
+        type: float
+        low: 0.1
+        high: 0.5
+      bidirectional:
+        type: categorical
+        choices: [true, false]
+
+  # Transformer Configuration
+  transformer:
+    default_params:
+      d_model: 128
+      nhead: 4
+      num_encoder_layers: 2
+      num_decoder_layers: 2
+      dim_feedforward: 512
+      dropout: 0.1
+
+    param_space:
+      d_model:
+        type: categorical
+        choices: [64, 128, 256]
+      nhead:
+        type: categorical
+        choices: [2, 4, 8]
+      num_encoder_layers:
+        type: int
+        low: 1
+        high: 4
+      dim_feedforward:
+        type: categorical
+        choices: [256, 512, 1024]
+      dropout:
+        type: float
+        low: 0.1
+        high: 0.5
+
+  # Temporal Fusion Transformer Configuration
+  tft:
+    default_params:
+      hidden_size: 160
+      attention_head_size: 4
+      num_attention_heads: 4
+      hidden_continuous_size: 16
+      dropout: 0.1
+      output_size: 1
+
+# -----------------------------------------------------------------------------
+# Custom Loss Functions
+# -----------------------------------------------------------------------------
+loss_functions:
+  # Sharpe ratio loss
+  sharpe:
+    enabled: true
+    risk_free_rate: 0.0             # Adjust for current rates
+
+  # Sortino ratio loss
+  sortino:
+    enabled: true
+    target_return: 0.0
+
+  # Max drawdown penalty
+  max_drawdown:
+    enabled: true
+    penalty_weight: 1.0
+
+  # Combined multi-objective loss
+  combined:
+    sharpe_weight: 0.5
+    sortino_weight: 0.3
+    drawdown_weight: 0.2
+
+# -----------------------------------------------------------------------------
+# MLflow Configuration
+# -----------------------------------------------------------------------------
+mlflow:
+  tracking_uri: mlruns              # Local or remote URI
+  experiment_prefix: alphatrade
+  artifact_location: null           # null = use default
+
+  # Auto-logging settings
+  autolog:
+    sklearn: true
+    lightgbm: true
+    xgboost: true
+    pytorch: false                  # Can cause issues, enable carefully
+
+  # Tags to add to all runs
+  default_tags:
+    project: alphatrade
+    environment: development        # development, staging, production
+
+# -----------------------------------------------------------------------------
+# Model Registry Configuration
+# -----------------------------------------------------------------------------
+model_registry:
+  # Staging workflow
+  stages:
+    - None
+    - Staging
+    - Production
+    - Archived
+
+  # Auto-promotion rules
+  auto_promote:
+    enabled: false
+    staging_threshold:              # Metrics required for staging
+      sharpe_ratio: 0.5
+      max_drawdown: 0.30
+    production_threshold:           # Metrics required for production
+      sharpe_ratio: 1.0
+      max_drawdown: 0.20
+      min_observations: 252         # At least 1 year of data
