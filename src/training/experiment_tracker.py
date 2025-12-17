@@ -17,9 +17,11 @@ Designed for JPMorgan-level requirements:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import subprocess
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -580,6 +582,175 @@ class ExperimentTracker:
         """Set multiple tags on the active run."""
         if self._active_run:
             mlflow.set_tags(tags)
+
+    def log_data_lineage(
+        self,
+        data_hash: str,
+        data_path: Optional[str] = None,
+        data_version: Optional[str] = None,
+        n_samples: Optional[int] = None,
+        n_features: Optional[int] = None,
+        feature_names: Optional[List[str]] = None,
+        data_stats: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Log data lineage information for reproducibility.
+
+        This is CRITICAL for JPMorgan compliance - every model must
+        be traceable to the exact data used to train it.
+
+        Args:
+            data_hash: Hash/checksum of the training data
+            data_path: Path to data source (if applicable)
+            data_version: Version of the data (e.g., date, commit)
+            n_samples: Number of training samples
+            n_features: Number of features
+            feature_names: List of feature names
+            data_stats: Additional data statistics
+        """
+        if not self._active_run:
+            logger.warning("No active run. Call start_run() first.")
+            return
+
+        # Log as tags (always visible in MLflow UI)
+        mlflow.set_tag("data.hash", data_hash)
+
+        if data_path:
+            mlflow.set_tag("data.path", str(data_path))
+        if data_version:
+            mlflow.set_tag("data.version", data_version)
+
+        # Log as params
+        if n_samples:
+            mlflow.log_param("data.n_samples", n_samples)
+        if n_features:
+            mlflow.log_param("data.n_features", n_features)
+
+        # Log git commit if available
+        git_commit = self._get_git_commit()
+        if git_commit:
+            mlflow.set_tag("git.commit", git_commit)
+            mlflow.set_tag("git.branch", self._get_git_branch() or "unknown")
+
+        # Save detailed lineage as artifact
+        lineage_info = {
+            "data_hash": data_hash,
+            "data_path": data_path,
+            "data_version": data_version,
+            "n_samples": n_samples,
+            "n_features": n_features,
+            "feature_names": feature_names[:100] if feature_names else None,  # Limit size
+            "git_commit": git_commit,
+            "git_branch": self._get_git_branch(),
+            "timestamp": datetime.now().isoformat(),
+            "data_stats": data_stats,
+        }
+
+        self.log_dict(lineage_info, "data_lineage")
+        logger.info(f"Data lineage logged: hash={data_hash}, git={git_commit}")
+
+    def log_training_result(
+        self,
+        result: Any,  # TrainingResult
+    ) -> None:
+        """
+        Log a complete TrainingResult object.
+
+        Convenience method that logs all result components.
+
+        Args:
+            result: TrainingResult from trainer
+        """
+        if not self._active_run:
+            return
+
+        # Log params
+        self.log_params(result.params)
+
+        # Log metrics
+        all_metrics = {**result.train_metrics, **result.validation_metrics}
+        self.log_metrics(all_metrics)
+
+        # Log data lineage
+        if hasattr(result, 'data_hash') and result.data_hash:
+            self.log_data_lineage(
+                data_hash=result.data_hash,
+                n_samples=result.n_train_samples,
+                n_features=result.n_features,
+            )
+
+        # Log CV scores if available
+        if result.cv_scores:
+            for metric, scores in result.cv_scores.items():
+                for i, score in enumerate(scores):
+                    mlflow.log_metric(f"cv_{metric}", score, step=i)
+
+        # Log feature importance stability if available
+        if hasattr(result, 'cv_feature_importances') and result.cv_feature_importances:
+            stable_importance = result.get_stable_feature_importance()
+            if stable_importance is not None:
+                self.log_dataframe(
+                    stable_importance,
+                    "feature_importance_stability",
+                    file_format="csv"
+                )
+
+        # Log model
+        if result.model is not None:
+            self.log_model(result.model, "model")
+
+    def _get_git_commit(self) -> Optional[str]:
+        """Get current git commit hash."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()[:12]  # Short hash
+        except Exception:
+            pass
+        return None
+
+    def _get_git_branch(self) -> Optional[str]:
+        """Get current git branch name."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    def _get_git_status(self) -> Dict[str, Any]:
+        """Get comprehensive git status."""
+        status = {
+            "commit": self._get_git_commit(),
+            "branch": self._get_git_branch(),
+            "is_dirty": False,
+        }
+
+        try:
+            # Check for uncommitted changes
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                status["is_dirty"] = len(result.stdout.strip()) > 0
+        except Exception:
+            pass
+
+        return status
 
     def get_run(self, run_id: str) -> Any:
         """Get a run by ID."""

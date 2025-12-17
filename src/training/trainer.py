@@ -17,6 +17,8 @@ Designed for JPMorgan-level requirements:
 
 from __future__ import annotations
 
+import gc
+import hashlib
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -36,6 +38,121 @@ from .experiment_tracker import ExperimentTracker, RunMetrics
 logger = logging.getLogger(__name__)
 
 
+def _compute_data_hash(X: Union[pd.DataFrame, np.ndarray], y: Union[pd.Series, np.ndarray]) -> str:
+    """
+    Compute a deterministic hash of the training data.
+
+    Used for reproducibility tracking - ensures we know exactly
+    which data was used to train a model.
+    """
+    if isinstance(X, pd.DataFrame):
+        X = X.values
+    if isinstance(y, (pd.Series, pd.DataFrame)):
+        y = y.values
+
+    # Create hash from data statistics (faster than hashing all data)
+    data_repr = (
+        f"shape={X.shape},"
+        f"X_mean={np.nanmean(X):.6f},"
+        f"X_std={np.nanstd(X):.6f},"
+        f"X_min={np.nanmin(X):.6f},"
+        f"X_max={np.nanmax(X):.6f},"
+        f"y_mean={np.nanmean(y):.6f},"
+        f"y_unique={len(np.unique(y[~np.isnan(y)]))},"
+        f"first_row={X[0, :5].tobytes().hex()[:32]},"
+        f"last_row={X[-1, :5].tobytes().hex()[:32]}"
+    )
+    return hashlib.sha256(data_repr.encode()).hexdigest()[:16]
+
+
+def _validate_data(
+    X: Union[pd.DataFrame, np.ndarray],
+    y: Union[pd.Series, np.ndarray],
+    check_inf: bool = True,
+    check_nan: bool = True,
+) -> Dict[str, Any]:
+    """
+    Validate training data and return diagnostics.
+
+    Checks for common data quality issues:
+    - NaN values
+    - Infinite values
+    - Constant features
+    - Highly correlated features
+
+    Returns:
+        Dictionary with validation results and warnings
+    """
+    if isinstance(X, pd.DataFrame):
+        X_arr = X.values
+        feature_names = list(X.columns)
+    else:
+        X_arr = X
+        feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+
+    if isinstance(y, (pd.Series, pd.DataFrame)):
+        y_arr = y.values
+    else:
+        y_arr = y
+
+    warnings = []
+    stats = {}
+
+    # Check for NaN
+    if check_nan:
+        nan_mask = np.isnan(X_arr)
+        nan_count = nan_mask.sum()
+        nan_features = nan_mask.any(axis=0)
+
+        if nan_count > 0:
+            nan_pct = nan_count / X_arr.size * 100
+            warnings.append(
+                f"Data contains {nan_count} NaN values ({nan_pct:.2f}%). "
+                f"Affected features: {[feature_names[i] for i, v in enumerate(nan_features) if v][:5]}"
+            )
+        stats['nan_count'] = int(nan_count)
+        stats['nan_features'] = int(nan_features.sum())
+
+    # Check for Inf
+    if check_inf:
+        inf_mask = np.isinf(X_arr)
+        inf_count = inf_mask.sum()
+
+        if inf_count > 0:
+            warnings.append(
+                f"Data contains {inf_count} Inf values. "
+                f"Use Pipeline with InfinityHandler."
+            )
+        stats['inf_count'] = int(inf_count)
+
+    # Check for constant features
+    stds = np.nanstd(X_arr, axis=0)
+    constant_features = stds == 0
+    if constant_features.any():
+        warnings.append(
+            f"{constant_features.sum()} constant features detected. "
+            f"Consider removing: {[feature_names[i] for i, v in enumerate(constant_features) if v][:5]}"
+        )
+    stats['constant_features'] = int(constant_features.sum())
+
+    # Check target variable
+    if np.isnan(y_arr).any():
+        warnings.append("Target variable contains NaN values!")
+
+    unique_targets = len(np.unique(y_arr[~np.isnan(y_arr)]))
+    stats['unique_targets'] = unique_targets
+
+    # Log warnings
+    for warning in warnings:
+        logger.warning(warning)
+
+    return {
+        'valid': len(warnings) == 0,
+        'warnings': warnings,
+        'stats': stats,
+    }
+
+
 @dataclass
 class TrainingResult:
     """Container for training results."""
@@ -53,6 +170,11 @@ class TrainingResult:
     params: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    # Feature Importance Stability (across CV folds)
+    cv_feature_importances: Optional[List[pd.DataFrame]] = None
+    data_hash: Optional[str] = None
+    data_validation: Optional[Dict[str, Any]] = None
+
     def get_cv_mean(self, metric: str) -> Optional[float]:
         """Get mean CV score for a metric."""
         if self.cv_scores and metric in self.cv_scores:
@@ -65,6 +187,79 @@ class TrainingResult:
             return np.std(self.cv_scores[metric])
         return None
 
+    def get_stable_feature_importance(self) -> Optional[pd.DataFrame]:
+        """
+        Get feature importance with stability metrics across CV folds.
+
+        Returns DataFrame with:
+        - mean_importance: Average importance across folds
+        - std_importance: Standard deviation across folds
+        - cv_importance: Coefficient of variation (std/mean)
+        - stability_rank: Rank based on CV (lower = more stable)
+
+        Features with low CV are more stable/reliable.
+        """
+        if not self.cv_feature_importances or len(self.cv_feature_importances) == 0:
+            return self.feature_importance
+
+        # Stack all fold importances
+        all_importances = []
+        for fold_df in self.cv_feature_importances:
+            if fold_df is not None and 'importance' in fold_df.columns:
+                all_importances.append(
+                    fold_df.set_index('feature')['importance']
+                )
+
+        if len(all_importances) == 0:
+            return self.feature_importance
+
+        # Combine into DataFrame
+        importance_matrix = pd.concat(all_importances, axis=1)
+        importance_matrix.columns = [f"fold_{i}" for i in range(len(all_importances))]
+
+        # Calculate stability metrics
+        result = pd.DataFrame({
+            'feature': importance_matrix.index,
+            'mean_importance': importance_matrix.mean(axis=1).values,
+            'std_importance': importance_matrix.std(axis=1).values,
+            'min_importance': importance_matrix.min(axis=1).values,
+            'max_importance': importance_matrix.max(axis=1).values,
+        })
+
+        # Coefficient of variation (lower = more stable)
+        result['cv_importance'] = result['std_importance'] / (result['mean_importance'] + 1e-10)
+
+        # Stability rank (1 = most stable)
+        result['stability_rank'] = result['cv_importance'].rank().astype(int)
+
+        # Sort by mean importance
+        result = result.sort_values('mean_importance', ascending=False)
+
+        # Add normalized importance
+        result['importance_normalized'] = (
+            result['mean_importance'] / result['mean_importance'].sum()
+        )
+
+        return result
+
+    def get_top_stable_features(self, top_n: int = 20) -> pd.DataFrame:
+        """
+        Get top features that are both important AND stable.
+
+        Uses a combined score of importance and stability.
+        """
+        stable_importance = self.get_stable_feature_importance()
+        if stable_importance is None:
+            return None
+
+        # Combined score: high importance + low CV
+        stable_importance['stability_score'] = (
+            stable_importance['importance_normalized'] *
+            (1 / (stable_importance['cv_importance'] + 0.1))
+        )
+
+        return stable_importance.nlargest(top_n, 'stability_score')
+
     def summary(self) -> str:
         """Generate text summary of results."""
         lines = [
@@ -76,9 +271,13 @@ class TrainingResult:
             f"Training time: {self.training_time_seconds:.2f}s",
             f"Train samples: {self.n_train_samples:,}",
             f"Features: {self.n_features}",
-            "",
-            "Validation Metrics:",
         ]
+
+        if self.data_hash:
+            lines.append(f"Data hash: {self.data_hash}")
+
+        lines.append("")
+        lines.append("Validation Metrics:")
 
         for metric, value in self.validation_metrics.items():
             cv_mean = self.get_cv_mean(metric)
@@ -87,6 +286,20 @@ class TrainingResult:
                 lines.append(f"  {metric}: {value:.4f} (CV: {cv_mean:.4f} +/- {cv_std:.4f})")
             else:
                 lines.append(f"  {metric}: {value:.4f}")
+
+        # Add feature importance stability summary
+        if self.cv_feature_importances:
+            stable = self.get_stable_feature_importance()
+            if stable is not None:
+                lines.append("")
+                lines.append("Top 5 Stable Features:")
+                top5 = self.get_top_stable_features(5)
+                if top5 is not None:
+                    for _, row in top5.iterrows():
+                        lines.append(
+                            f"  {row['feature']}: {row['mean_importance']:.4f} "
+                            f"(CV: {row['cv_importance']:.2f})"
+                        )
 
         lines.append("=" * 60)
         return "\n".join(lines)
@@ -367,6 +580,7 @@ class Trainer:
         val_sample_weights: Optional[np.ndarray] = None,
         feature_names: Optional[List[str]] = None,
         categorical_features: Optional[List[str]] = None,
+        validate_data: bool = True,
     ) -> TrainingResult:
         """
         Train the model.
@@ -380,11 +594,26 @@ class Trainer:
             val_sample_weights: Validation sample weights
             feature_names: Feature names
             categorical_features: Categorical feature names
+            validate_data: Whether to validate data before training
 
         Returns:
             TrainingResult with model and metrics
         """
         start_time = time.time()
+
+        # Compute data hash for reproducibility
+        data_hash = _compute_data_hash(X, y)
+        logger.info(f"Data hash: {data_hash}")
+
+        # Validate data
+        data_validation = None
+        if validate_data:
+            data_validation = _validate_data(X, y)
+            if data_validation['warnings']:
+                logger.warning(
+                    f"Data validation warnings: {len(data_validation['warnings'])}. "
+                    "Consider using Pipeline for preprocessing."
+                )
 
         # Store feature names
         if isinstance(X, pd.DataFrame):
@@ -473,7 +702,9 @@ class Trainer:
             metadata={
                 "timestamp": datetime.now().isoformat(),
                 "random_state": self.random_state,
-            }
+            },
+            data_hash=data_hash,
+            data_validation=data_validation,
         )
 
         # Trigger callbacks
@@ -495,9 +726,14 @@ class Trainer:
         cv,
         sample_weights: Optional[np.ndarray] = None,
         return_estimator: bool = False,
+        collect_feature_importance: bool = True,
+        validate_data: bool = True,
     ) -> TrainingResult:
         """
         Train with cross-validation.
+
+        Includes memory management (gc.collect after each fold) and
+        feature importance stability analysis across folds.
 
         Args:
             X: Features
@@ -505,51 +741,112 @@ class Trainer:
             cv: Cross-validation splitter
             sample_weights: Sample weights
             return_estimator: If True, train final model on all data
+            collect_feature_importance: Collect importance from each fold
+            validate_data: Whether to validate data before training
 
         Returns:
-            TrainingResult with CV scores
+            TrainingResult with CV scores and feature importance stability
         """
-        from sklearn.model_selection import cross_validate
-
         start_time = time.time()
+
+        # Compute data hash for reproducibility
+        data_hash = _compute_data_hash(X, y)
+        logger.info(f"Data hash: {data_hash}")
+
+        # Validate data
+        data_validation = None
+        if validate_data:
+            data_validation = _validate_data(X, y)
 
         # Store feature names
         if isinstance(X, pd.DataFrame):
             self._feature_names = list(X.columns)
+            X_arr = X.values
+        else:
+            X_arr = X
+
+        if isinstance(y, (pd.Series, pd.DataFrame)):
+            y_arr = y.values
+        else:
+            y_arr = y
 
         # Determine scoring based on task type
         if self.task_type == TaskType.CLASSIFICATION:
-            scoring = ['accuracy', 'roc_auc', 'f1', 'precision', 'recall']
+            scoring_dict = {
+                'accuracy': 'accuracy',
+                'roc_auc': 'roc_auc',
+                'f1': 'f1',
+            }
         else:
-            scoring = ['r2', 'neg_mean_squared_error', 'neg_mean_absolute_error']
+            scoring_dict = {
+                'r2': 'r2',
+                'neg_mse': 'neg_mean_squared_error',
+                'neg_mae': 'neg_mean_absolute_error',
+            }
 
-        # Create model
-        model = ModelFactory.create_model(
-            self.model_type,
-            params=self.params,
-            random_state=self.random_state,
-            n_jobs=self.n_jobs,
-            gpu_enabled=self.gpu_enabled,
-        )
+        # Manual CV loop for memory management and feature importance
+        n_splits = cv.get_n_splits(X_arr)
+        logger.info(f"Running {n_splits}-fold cross-validation with memory management")
 
-        # Run cross-validation
-        logger.info(f"Running {cv.get_n_splits(X)}-fold cross-validation")
+        cv_scores = {metric: [] for metric in scoring_dict.keys()}
+        cv_feature_importances = []
 
-        cv_results = cross_validate(
-            model, X, y,
-            cv=cv,
-            scoring=scoring,
-            return_train_score=True,
-            n_jobs=self.n_jobs,
-            fit_params={"sample_weight": sample_weights} if sample_weights else None,
-        )
+        for fold_idx, (train_idx, val_idx) in enumerate(cv.split(X_arr, y_arr)):
+            logger.info(f"Training fold {fold_idx + 1}/{n_splits}")
 
-        # Process CV scores
-        cv_scores = {}
-        for key, values in cv_results.items():
-            if key.startswith("test_"):
-                metric_name = key.replace("test_", "")
-                cv_scores[metric_name] = values.tolist()
+            # Trigger fold callbacks
+            for callback in self.callbacks:
+                callback.on_fold_begin(self, fold_idx)
+
+            # Create fold data
+            X_train_fold = X_arr[train_idx]
+            y_train_fold = y_arr[train_idx]
+            X_val_fold = X_arr[val_idx]
+            y_val_fold = y_arr[val_idx]
+
+            # Create model for this fold
+            fold_model = ModelFactory.create_model(
+                self.model_type,
+                params=self.params,
+                random_state=self.random_state + fold_idx,  # Different seed per fold
+                n_jobs=self.n_jobs,
+                gpu_enabled=self.gpu_enabled,
+            )
+
+            # Fit
+            fit_kwargs = {}
+            if sample_weights is not None:
+                fit_kwargs["sample_weight"] = sample_weights[train_idx]
+
+            fold_model.fit(X_train_fold, y_train_fold, **fit_kwargs)
+
+            # Evaluate
+            fold_metrics = self._evaluate_fold(
+                fold_model, X_val_fold, y_val_fold, scoring_dict
+            )
+            for metric, value in fold_metrics.items():
+                cv_scores[metric].append(value)
+
+            # Collect feature importance from this fold
+            if collect_feature_importance and self._feature_names:
+                try:
+                    fold_importance = ModelFactory.get_feature_importance(
+                        fold_model, self._feature_names
+                    )
+                    cv_feature_importances.append(fold_importance)
+                except Exception as e:
+                    logger.warning(f"Could not get feature importance for fold {fold_idx}: {e}")
+
+            # Trigger fold end callbacks
+            for callback in self.callbacks:
+                callback.on_fold_end(self, fold_idx, fold_metrics)
+
+            # Memory management: delete fold model and collect garbage
+            del fold_model
+            del X_train_fold, y_train_fold, X_val_fold, y_val_fold
+            gc.collect()
+
+            logger.debug(f"Fold {fold_idx + 1} complete, memory cleaned")
 
         # Calculate aggregated metrics
         val_metrics = {}
@@ -559,16 +856,18 @@ class Trainer:
 
         # Train final model if requested
         if return_estimator:
+            logger.info("Training final model on all data")
             self.model = ModelFactory.create_model(
                 self.model_type,
                 params=self.params,
                 random_state=self.random_state,
+                n_jobs=self.n_jobs,
                 gpu_enabled=self.gpu_enabled,
             )
             fit_kwargs = {}
             if sample_weights is not None:
                 fit_kwargs["sample_weight"] = sample_weights
-            self.model.fit(X, y, **fit_kwargs)
+            self.model.fit(X_arr, y_arr, **fit_kwargs)
         else:
             self.model = None
 
@@ -594,17 +893,69 @@ class Trainer:
             feature_importance=feature_importance,
             training_time_seconds=training_time,
             n_train_samples=len(X),
-            n_features=X.shape[1],
+            n_features=X_arr.shape[1],
             params=self.params,
             metadata={
-                "cv_folds": cv.get_n_splits(X),
+                "cv_folds": n_splits,
                 "timestamp": datetime.now().isoformat(),
-            }
+            },
+            cv_feature_importances=cv_feature_importances if collect_feature_importance else None,
+            data_hash=data_hash,
+            data_validation=data_validation,
         )
 
         # Log to tracker
         if self.tracker:
             self._log_to_tracker(result)
+
+        # Final garbage collection
+        gc.collect()
+
+        return result
+
+    def _evaluate_fold(
+        self,
+        model: Any,
+        X_val: np.ndarray,
+        y_val: np.ndarray,
+        scoring_dict: Dict[str, str],
+    ) -> Dict[str, float]:
+        """Evaluate model on validation fold."""
+        from sklearn import metrics as sklearn_metrics
+
+        predictions = model.predict(X_val)
+        result = {}
+
+        for name, scorer in scoring_dict.items():
+            try:
+                if scorer == 'accuracy':
+                    result[name] = sklearn_metrics.accuracy_score(y_val, predictions)
+                elif scorer == 'roc_auc':
+                    if hasattr(model, 'predict_proba'):
+                        proba = model.predict_proba(X_val)
+                        if proba.shape[1] == 2:
+                            result[name] = sklearn_metrics.roc_auc_score(y_val, proba[:, 1])
+                        else:
+                            result[name] = sklearn_metrics.roc_auc_score(
+                                y_val, proba, multi_class='ovr'
+                            )
+                    else:
+                        result[name] = 0.0
+                elif scorer == 'f1':
+                    result[name] = sklearn_metrics.f1_score(
+                        y_val, predictions, average='weighted', zero_division=0
+                    )
+                elif scorer == 'r2':
+                    result[name] = sklearn_metrics.r2_score(y_val, predictions)
+                elif scorer == 'neg_mean_squared_error':
+                    result[name] = -sklearn_metrics.mean_squared_error(y_val, predictions)
+                elif scorer == 'neg_mean_absolute_error':
+                    result[name] = -sklearn_metrics.mean_absolute_error(y_val, predictions)
+                else:
+                    result[name] = 0.0
+            except Exception as e:
+                logger.warning(f"Could not compute {name}: {e}")
+                result[name] = 0.0
 
         return result
 

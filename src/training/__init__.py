@@ -11,12 +11,16 @@ This module provides:
 - Hyperparameter optimization with Optuna
 - Deep learning model implementations
 - Custom financial loss functions
+- Preprocessing pipelines with data leakage prevention
+- Probability calibration for reliable predictions
+- Time-series data loading for deep learning
 
 Designed to meet JPMorgan-level requirements for:
 - Reproducible experiments
 - Model governance and audit trails
 - Statistical rigor in validation
 - Production-ready model deployment
+- Data lineage tracking
 """
 
 from src.training.experiment_tracker import ExperimentTracker
@@ -32,6 +36,28 @@ from src.training.optimization import (
     OptunaOptimizer,
     MultiObjectiveOptimizer,
 )
+
+# Pipeline - Preprocessing with data leakage prevention
+from src.training.pipeline import (
+    ModelPipelineFactory,
+    PipelineConfig,
+    ScalerType,
+    ImputerType,
+    FinancialPreprocessor,
+    Winsorizer,
+    create_financial_pipeline,
+)
+
+# Calibration - Probability calibration for reliable predictions
+from src.training.calibration import (
+    ProbabilityCalibrator,
+    CalibratedModel,
+    CalibrationMethod,
+    CalibrationResult,
+    calibrate_model_predictions,
+    plot_calibration_curve,
+)
+
 # Deep Learning - REQUIRED
 from src.training.deep_learning import (
     LSTMPredictor,
@@ -41,6 +67,16 @@ from src.training.deep_learning import (
     SortinoLoss,
     MaxDrawdownLoss,
     CombinedFinancialLoss,
+)
+
+# Deep Learning Data Loading
+from src.training.deep_learning.dataset import (
+    TimeSeriesDataset,
+    TimeSeriesDataModule,
+    MultiHorizonDataset,
+    create_dataloaders,
+    create_cv_dataloaders,
+    prepare_data_for_dl,
 )
 
 __all__ = [
@@ -59,7 +95,22 @@ __all__ = [
     # Optimization
     "OptunaOptimizer",
     "MultiObjectiveOptimizer",
-    # Deep Learning - REQUIRED
+    # Pipeline - Preprocessing
+    "ModelPipelineFactory",
+    "PipelineConfig",
+    "ScalerType",
+    "ImputerType",
+    "FinancialPreprocessor",
+    "Winsorizer",
+    "create_financial_pipeline",
+    # Calibration
+    "ProbabilityCalibrator",
+    "CalibratedModel",
+    "CalibrationMethod",
+    "CalibrationResult",
+    "calibrate_model_predictions",
+    "plot_calibration_curve",
+    # Deep Learning - Models
     "LSTMPredictor",
     "AttentionLSTM",
     "TemporalFusionTransformer",
@@ -67,4 +118,11 @@ __all__ = [
     "SortinoLoss",
     "MaxDrawdownLoss",
     "CombinedFinancialLoss",
+    # Deep Learning - Data Loading
+    "TimeSeriesDataset",
+    "TimeSeriesDataModule",
+    "MultiHorizonDataset",
+    "create_dataloaders",
+    "create_cv_dataloaders",
+    "prepare_data_for_dl",
 ]
