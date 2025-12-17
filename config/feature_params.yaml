@@ -373,3 +373,24 @@ walk_forward:
 
   # Expanding window (vs sliding)
   expanding: false
+# ... (Mevcut technical_indicators bölümü bittikten sonra) ...
+
+# YENİ BÖLÜM: Microstructure (Order Book) Features
+microstructure:
+  enabled: true
+  
+  # Order Book Imbalance (Alıcı/Satıcı Baskısı)
+  obi:
+    enabled: true
+    columns:
+      bid_vol: "bid_size"
+      ask_vol: "ask_size"
+
+  # Weighted Mid Price (Hacim Ağırlıklı Fiyat)
+  wmp:
+    enabled: true
+    columns:
+      bid_px: "bid_price"
+      ask_px: "ask_price"
+      bid_vol: "bid_size"
+      ask_vol: "ask_size"
