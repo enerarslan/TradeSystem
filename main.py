@@ -132,6 +132,11 @@ from src.training import (
     TemporalFusionTransformer,
     SharpeLoss,
     SortinoLoss,
+    # Training Pipeline Orchestrator
+    TrainingPipeline,
+    PipelineResult,
+    PipelineStage,
+    PipelineStatus,
 )
 
 # Strategies
@@ -1187,17 +1192,28 @@ def train_ml_model(
 
     # Optuna optimization if requested (uses proper manual CV internally)
     best_params = {}
-    if train_config.get("optimize", False):
-        logger.info("Running Optuna hyperparameter optimization...")
+    n_trials = train_config.get("n_trials", train_config.get("optuna_trials", 50))
+
+    if train_config.get("optimize", False) or n_trials > 0:
+        logger.info(f"Running Optuna hyperparameter optimization ({n_trials} trials)...")
+        from tqdm import tqdm
+
         optimizer = OptunaOptimizer(
             model_type=model_type,
-            cv=cv,
-            metric="sharpe_ratio",
-            n_trials=train_config.get("optuna_trials", 50),
+            validation_strategy=cv,
+            objective_metric="sharpe_ratio",
+            n_trials=n_trials,
         )
-        best_params = optimizer.optimize(X_np, y_np)
-        if tracker:
-            tracker.log_params({"best_params": best_params})
+
+        try:
+            opt_result = optimizer.optimize(X_np, y_np)
+            best_params = opt_result.best_params if hasattr(opt_result, 'best_params') else opt_result
+            logger.info(f"Optimization complete. Best params: {best_params}")
+            if tracker:
+                tracker.log_params({"best_params": best_params})
+        except Exception as e:
+            logger.error(f"Optimization failed: {e}")
+            best_params = {}
 
     # ==========================================================================
     # CRITICAL: MANUAL CV LOOP WITH LEAKAGE VERIFICATION
@@ -1796,6 +1812,38 @@ def main():
         help="Number of cross-validation splits"
     )
     parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=50,
+        help="Number of Optuna optimization trials"
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=100,
+        help="Number of epochs for deep learning training"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Batch size for deep learning training"
+    )
+    parser.add_argument(
+        "--dl-model",
+        type=str,
+        default="lstm",
+        choices=["lstm", "attention_lstm", "transformer"],
+        help="Deep learning model type"
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "cuda", "mps"],
+        help="Device for deep learning (auto, cpu, cuda, mps)"
+    )
+    parser.add_argument(
         "--use-pipeline",
         action="store_true",
         help="Use TrainingPipeline orchestrator for full workflow"
@@ -1828,6 +1876,11 @@ def main():
         config["training"]["model_type"] = args.model
         config["training"]["optimize"] = args.optimize
         config["training"]["cv_splits"] = args.cv_splits
+        config["training"]["n_trials"] = args.n_trials
+        config["training"]["epochs"] = args.epochs
+        config["training"]["batch_size"] = args.batch_size
+        config["training"]["dl_model"] = args.dl_model
+        config["training"]["device"] = args.device
     except FileNotFoundError:
         logger.error(f"Config file not found: {args.config}")
         sys.exit(1)
@@ -1982,6 +2035,7 @@ def main():
 
         # Ensure models directory exists
         Path("models").mkdir(parents=True, exist_ok=True)
+        Path("outputs").mkdir(parents=True, exist_ok=True)
 
         if args.deep_learning:
             if not TORCH_AVAILABLE:
@@ -2030,8 +2084,103 @@ def main():
             else:
                 logger.warning("Deep learning training returned None - model not saved")
 
+        elif args.use_pipeline:
+            # ================================================================
+            # USE TRAINING PIPELINE ORCHESTRATOR (JPMorgan-level workflow)
+            # ================================================================
+            # TrainingPipeline provides complete orchestrated workflow:
+            # 1. Data validation
+            # 2. Feature generation with leakage prevention
+            # 3. Train/test split with proper purging
+            # 4. Model training with cross-validation
+            # 5. Out-of-sample evaluation
+            # 6. Statistical significance tests
+            # 7. Model registration if metrics pass threshold
+            # ================================================================
+            logger.info("=" * 70)
+            logger.info("  USING TRAINING PIPELINE ORCHESTRATOR")
+            logger.info("=" * 70)
+
+            # Build pipeline config from args and config file
+            pipeline_config = {
+                "training": {
+                    "model_type": f"{args.model}_regressor",
+                    "test_size": 0.2,
+                    "purge_gap": config.get("training", {}).get("purge_gap", 50),
+                    "prediction_horizon": config.get("training", {}).get("prediction_horizon", 5),
+                    "cv_splits": args.cv_splits,
+                    "embargo_pct": config.get("training", {}).get("embargo_pct", 0.01),
+                    "model_params": config.get("training", {}).get("model_params"),
+                    "n_trials": args.n_trials,
+                },
+                "feature_scaling": config.get("features", {}).get("scaling", "robust"),
+                "include_technical": True,
+                "include_statistical": True,
+                "include_lagged": True,
+                "model_registration": {
+                    "min_ic": 0.02,
+                    "min_direction_accuracy": 0.52,
+                },
+            }
+
+            # Initialize pipeline
+            pipeline = TrainingPipeline(
+                config=pipeline_config,
+                feature_pipeline=None,  # Will be created automatically
+                model_factory=ModelFactory,
+                experiment_tracker=None,  # Can add MLflow tracker
+                model_registry=None,
+                output_dir="outputs",
+            )
+
+            # Merge all data into single DataFrame for pipeline
+            merged_data = []
+            for symbol, df in data.items():
+                df_copy = df.copy()
+                df_copy["symbol"] = symbol
+                merged_data.append(df_copy)
+
+            combined_data = pd.concat(merged_data, ignore_index=False)
+            combined_data = combined_data.sort_index()
+
+            logger.info(f"Pipeline input: {len(combined_data)} rows, {len(data)} symbols")
+
+            # Run the complete pipeline
+            try:
+                pipeline_result: PipelineResult = pipeline.run(
+                    data=combined_data,
+                    mode="full",  # Full workflow including registration
+                    skip_stages=None,  # Run all stages
+                )
+
+                # Print summary
+                print("\n" + pipeline_result.summary())
+
+                if pipeline_result.success:
+                    logger.info("Training Pipeline completed successfully!")
+
+                    # Additional model save with standard naming
+                    if pipeline_result.model is not None:
+                        model_filename = Path(f"models/{args.model}_{timestamp}_pipeline.pkl")
+                        with open(model_filename, "wb") as f:
+                            pickle.dump(pipeline_result.model, f)
+                        logger.info(f"Model also saved to {model_filename}")
+
+                else:
+                    logger.error("Training Pipeline failed!")
+                    # Print failed stages
+                    for stage, result in pipeline_result.stage_results.items():
+                        if result.status == PipelineStatus.FAILED:
+                            logger.error(f"  Failed stage: {stage.value}")
+                            logger.error(f"  Error: {result.error_message}")
+
+            except Exception as e:
+                logger.error(f"Training Pipeline error: {e}")
+                import traceback
+                traceback.print_exc()
+
         else:
-            # Train ML model
+            # Train ML model (legacy method)
             result = train_ml_model(data, features, config)
 
             # Save result and model with metadata

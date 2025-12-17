@@ -15,38 +15,67 @@ Designed for institutional-grade requirements:
 - Memory-efficient data loading
 """
 
-from .lstm import LSTMPredictor, AttentionLSTM
-from .transformer import TemporalFusionTransformer
-from .losses import (
-    SharpeLoss,
-    SortinoLoss,
-    MaxDrawdownLoss,
-    CombinedFinancialLoss,
-)
-from .dataset import (
-    TimeSeriesDataset,
-    TimeSeriesDataModule,
-    MultiHorizonDataset,
-    create_dataloaders,
-    create_cv_dataloaders,
-    prepare_data_for_dl,
-)
+# Check if PyTorch is available
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
-__all__ = [
-    # Models
-    "LSTMPredictor",
-    "AttentionLSTM",
-    "TemporalFusionTransformer",
-    # Losses
-    "SharpeLoss",
-    "SortinoLoss",
-    "MaxDrawdownLoss",
-    "CombinedFinancialLoss",
-    # Data Loading
-    "TimeSeriesDataset",
-    "TimeSeriesDataModule",
-    "MultiHorizonDataset",
-    "create_dataloaders",
-    "create_cv_dataloaders",
-    "prepare_data_for_dl",
-]
+__all__ = []
+
+# Models - require PyTorch
+if TORCH_AVAILABLE:
+    try:
+        from .lstm import LSTMPredictor, AttentionLSTM
+        from .transformer import TemporalFusionTransformer
+        __all__.extend([
+            "LSTMPredictor",
+            "AttentionLSTM",
+            "TemporalFusionTransformer",
+        ])
+    except ImportError as e:
+        import logging
+        logging.warning(f"Could not import deep learning models: {e}")
+
+# Losses - require PyTorch
+if TORCH_AVAILABLE:
+    try:
+        from .losses import (
+            SharpeLoss,
+            SortinoLoss,
+            MaxDrawdownLoss,
+            CombinedFinancialLoss,
+        )
+        __all__.extend([
+            "SharpeLoss",
+            "SortinoLoss",
+            "MaxDrawdownLoss",
+            "CombinedFinancialLoss",
+        ])
+    except ImportError as e:
+        import logging
+        logging.warning(f"Could not import loss functions: {e}")
+
+# Data Loading - require PyTorch
+if TORCH_AVAILABLE:
+    try:
+        from .dataset import (
+            TimeSeriesDataset,
+            TimeSeriesDataModule,
+            MultiHorizonDataset,
+            create_dataloaders,
+            create_cv_dataloaders,
+            prepare_data_for_dl,
+        )
+        __all__.extend([
+            "TimeSeriesDataset",
+            "TimeSeriesDataModule",
+            "MultiHorizonDataset",
+            "create_dataloaders",
+            "create_cv_dataloaders",
+            "prepare_data_for_dl",
+        ])
+    except ImportError as e:
+        import logging
+        logging.warning(f"Could not import dataset utilities: {e}")

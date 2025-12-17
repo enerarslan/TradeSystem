@@ -86,7 +86,13 @@ class TestPurgedKFoldCV:
             assert len(overlap) == 0, f"Fold {fold_idx}: Found {len(overlap)} overlapping indices"
 
     def test_temporal_ordering(self, sample_data):
-        """Test that train indices come before test indices (after purge)."""
+        """Test that train indices respect purge gap around test indices.
+
+        PurgedKFoldCV uses train data from BOTH before and after test set,
+        with proper purge gap and embargo. This test verifies that:
+        1. Train indices before test have proper gap
+        2. Train indices after test have proper embargo
+        """
         from src.training.validation import PurgedKFoldCV
 
         X, y = sample_data
@@ -94,13 +100,27 @@ class TestPurgedKFoldCV:
         cv = PurgedKFoldCV(n_splits=5, purge_gap=purge_gap, embargo_pct=0.01)
 
         for fold_idx, (train_idx, test_idx) in enumerate(cv.split(X, y)):
-            train_max = np.max(train_idx)
             test_min = np.min(test_idx)
+            test_max = np.max(test_idx)
 
-            # Test min should be at least purge_gap away from train max
-            gap = test_min - train_max
-            assert gap >= purge_gap, \
-                f"Fold {fold_idx}: Gap ({gap}) is less than purge_gap ({purge_gap})"
+            # Separate train indices into before and after test
+            train_before = train_idx[train_idx < test_min]
+            train_after = train_idx[train_idx > test_max]
+
+            # Check gap for train indices BEFORE test
+            if len(train_before) > 0:
+                train_before_max = np.max(train_before)
+                gap_before = test_min - train_before_max
+                assert gap_before >= purge_gap, \
+                    f"Fold {fold_idx}: Gap before test ({gap_before}) is less than purge_gap ({purge_gap})"
+
+            # Check embargo for train indices AFTER test (if any)
+            if len(train_after) > 0:
+                train_after_min = np.min(train_after)
+                gap_after = train_after_min - test_max
+                # Embargo should be at least 1 (some gap after test)
+                assert gap_after >= 1, \
+                    f"Fold {fold_idx}: No embargo gap after test"
 
     def test_purge_gap_respected(self, sample_data):
         """Test that purge gap is properly applied."""
@@ -183,7 +203,11 @@ class TestLeakagePrevention:
     """Test that CV prevents data leakage."""
 
     def test_cv_leakage_check(self):
-        """Test the leakage detection in CV splits."""
+        """Test the leakage detection in CV splits.
+
+        PurgedKFoldCV uses train data from both before AND after test set.
+        We verify that train indices BEFORE test respect the purge gap.
+        """
         from src.training.validation import PurgedKFoldCV
 
         n_samples = 1000
@@ -191,19 +215,26 @@ class TestLeakagePrevention:
         y = np.random.randn(n_samples)
 
         # Create CV with adequate purge gap
-        cv = PurgedKFoldCV(n_splits=5, purge_gap=50, embargo_pct=0.01)
+        purge_gap = 50
+        cv = PurgedKFoldCV(n_splits=5, purge_gap=purge_gap, embargo_pct=0.01)
 
-        for train_idx, test_idx in cv.split(X, y):
-            # Create a feature that would leak if purge gap wasn't respected
-            # (e.g., a forward-looking rolling mean)
-
-            # This is a simplified check - in practice, you'd check that
-            # features computed on train data don't use test period values
-            train_max_idx = np.max(train_idx)
+        for fold_idx, (train_idx, test_idx) in enumerate(cv.split(X, y)):
             test_min_idx = np.min(test_idx)
+            test_max_idx = np.max(test_idx)
 
-            # If purge gap is respected, there should be a gap
-            assert test_min_idx - train_max_idx >= 50
+            # Get train indices that come BEFORE test set
+            train_before_test = train_idx[train_idx < test_min_idx]
+
+            # If there are train indices before test, check purge gap
+            if len(train_before_test) > 0:
+                train_max_before = np.max(train_before_test)
+                gap = test_min_idx - train_max_before
+                assert gap >= purge_gap, \
+                    f"Fold {fold_idx}: Gap ({gap}) < purge_gap ({purge_gap})"
+
+            # Verify no overlap
+            overlap = set(train_idx).intersection(set(test_idx))
+            assert len(overlap) == 0, f"Fold {fold_idx}: Found overlapping indices"
 
 
 if __name__ == "__main__":

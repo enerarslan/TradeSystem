@@ -64,26 +64,45 @@ from src.training.calibration import (
     plot_calibration_curve,
 )
 
-# Deep Learning - REQUIRED
-from src.training.deep_learning import (
-    LSTMPredictor,
-    AttentionLSTM,
-    TemporalFusionTransformer,
-    SharpeLoss,
-    SortinoLoss,
-    MaxDrawdownLoss,
-    CombinedFinancialLoss,
-)
+# Deep Learning - Optional (requires PyTorch)
+try:
+    from src.training.deep_learning import (
+        LSTMPredictor,
+        AttentionLSTM,
+        TemporalFusionTransformer,
+        SharpeLoss,
+        SortinoLoss,
+        MaxDrawdownLoss,
+        CombinedFinancialLoss,
+    )
+    DEEP_LEARNING_AVAILABLE = True
+except ImportError:
+    DEEP_LEARNING_AVAILABLE = False
+    LSTMPredictor = None
+    AttentionLSTM = None
+    TemporalFusionTransformer = None
+    SharpeLoss = None
+    SortinoLoss = None
+    MaxDrawdownLoss = None
+    CombinedFinancialLoss = None
 
-# Deep Learning Data Loading
-from src.training.deep_learning.dataset import (
-    TimeSeriesDataset,
-    TimeSeriesDataModule,
-    MultiHorizonDataset,
-    create_dataloaders,
-    create_cv_dataloaders,
-    prepare_data_for_dl,
-)
+# Deep Learning Data Loading - Optional
+try:
+    from src.training.deep_learning.dataset import (
+        TimeSeriesDataset,
+        TimeSeriesDataModule,
+        MultiHorizonDataset,
+        create_dataloaders,
+        create_cv_dataloaders,
+        prepare_data_for_dl,
+    )
+except ImportError:
+    TimeSeriesDataset = None
+    TimeSeriesDataModule = None
+    MultiHorizonDataset = None
+    create_dataloaders = None
+    create_cv_dataloaders = None
+    prepare_data_for_dl = None
 
 # Drift Detection
 from src.training.drift_detection import (
