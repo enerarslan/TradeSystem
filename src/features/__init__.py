@@ -41,6 +41,16 @@ from src.features.macro_features import (
     EconomicRegimeDetector,
     align_macro_to_price_data,
 )
+from src.features.feature_store import (
+    FeatureStore,
+    FeatureDefinition,
+    FeatureView,
+    FeatureBuilder,
+    FeatureType,
+    DataSource,
+    create_standard_features,
+    initialize_feature_store,
+)
 
 __all__ = [
     # Technical indicators
@@ -64,4 +74,13 @@ __all__ = [
     "MacroFeatureGenerator",
     "EconomicRegimeDetector",
     "align_macro_to_price_data",
+    # Feature store
+    "FeatureStore",
+    "FeatureDefinition",
+    "FeatureView",
+    "FeatureBuilder",
+    "FeatureType",
+    "DataSource",
+    "create_standard_features",
+    "initialize_feature_store",
 ]
