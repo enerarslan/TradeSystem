@@ -891,9 +891,189 @@ class FeaturePipeline:
         return recommended
 
 
+def validate_ohlcv_data(
+    df: pd.DataFrame,
+    min_rows: int = 100,
+    check_negative: bool = True,
+    check_ohlc_order: bool = True,
+    check_gaps: bool = True,
+) -> dict:
+    """
+    Validate OHLCV data before feature generation.
+
+    Checks for common data quality issues that can cause problems
+    during feature engineering.
+
+    Args:
+        df: OHLCV DataFrame
+        min_rows: Minimum required rows
+        check_negative: Check for negative prices
+        check_ohlc_order: Check high >= low and reasonable OHLC relationships
+        check_gaps: Check for large timestamp gaps
+
+    Returns:
+        Dictionary with validation results and issues found
+    """
+    results = {
+        'valid': True,
+        'issues': [],
+        'warnings': [],
+        'stats': {},
+    }
+
+    # Check required columns
+    required_cols = ['open', 'high', 'low', 'close', 'volume']
+    missing_cols = [c for c in required_cols if c not in df.columns]
+    if missing_cols:
+        results['valid'] = False
+        results['issues'].append(f"Missing required columns: {missing_cols}")
+        return results
+
+    # Check minimum rows
+    if len(df) < min_rows:
+        results['valid'] = False
+        results['issues'].append(
+            f"Insufficient data: {len(df)} rows (minimum: {min_rows})"
+        )
+
+    # Check for negative prices
+    if check_negative:
+        for col in ['open', 'high', 'low', 'close']:
+            if col in df.columns:
+                neg_count = (df[col] < 0).sum()
+                if neg_count > 0:
+                    results['valid'] = False
+                    results['issues'].append(
+                        f"{col} has {neg_count} negative values"
+                    )
+
+    # Check OHLC ordering
+    if check_ohlc_order:
+        # High should be >= Low
+        violations = (df['high'] < df['low']).sum()
+        if violations > 0:
+            results['warnings'].append(
+                f"{violations} rows where high < low"
+            )
+
+        # High should be >= Open and Close
+        violations_high = ((df['high'] < df['open']) | (df['high'] < df['close'])).sum()
+        if violations_high > 0:
+            results['warnings'].append(
+                f"{violations_high} rows where high < open or close"
+            )
+
+        # Low should be <= Open and Close
+        violations_low = ((df['low'] > df['open']) | (df['low'] > df['close'])).sum()
+        if violations_low > 0:
+            results['warnings'].append(
+                f"{violations_low} rows where low > open or close"
+            )
+
+    # Check for NaN values
+    nan_counts = df[required_cols].isna().sum()
+    total_nans = nan_counts.sum()
+    if total_nans > 0:
+        nan_pct = total_nans / (len(df) * len(required_cols)) * 100
+        if nan_pct > 5:
+            results['warnings'].append(
+                f"High NaN percentage: {nan_pct:.1f}%"
+            )
+        results['stats']['nan_count'] = int(total_nans)
+        results['stats']['nan_pct'] = float(nan_pct)
+
+    # Check for zero volume
+    if 'volume' in df.columns:
+        zero_vol = (df['volume'] == 0).sum()
+        if zero_vol > len(df) * 0.1:  # More than 10%
+            results['warnings'].append(
+                f"{zero_vol} rows with zero volume ({zero_vol/len(df)*100:.1f}%)"
+            )
+
+    # Check for timestamp gaps (if datetime index)
+    if check_gaps and isinstance(df.index, pd.DatetimeIndex):
+        diffs = df.index.to_series().diff()
+        if len(diffs) > 1:
+            median_diff = diffs.median()
+            large_gaps = diffs > median_diff * 10
+            if large_gaps.sum() > 0:
+                results['warnings'].append(
+                    f"{large_gaps.sum()} large timestamp gaps detected"
+                )
+
+    # Stats
+    results['stats']['n_rows'] = len(df)
+    results['stats']['date_range'] = (
+        f"{df.index[0]} to {df.index[-1]}"
+        if isinstance(df.index, pd.DatetimeIndex)
+        else f"index 0 to {len(df)-1}"
+    )
+
+    return results
+
+
+def optimize_memory(df: pd.DataFrame, inplace: bool = False) -> pd.DataFrame:
+    """
+    Optimize DataFrame memory usage by downcasting numeric types.
+
+    For large datasets, this can significantly reduce memory usage
+    and improve performance.
+
+    Args:
+        df: DataFrame to optimize
+        inplace: If True, modify in place
+
+    Returns:
+        Memory-optimized DataFrame
+    """
+    if not inplace:
+        df = df.copy()
+
+    initial_mem = df.memory_usage(deep=True).sum() / 1024**2
+
+    for col in df.columns:
+        col_type = df[col].dtype
+
+        # Downcast integers
+        if col_type in ['int64', 'int32']:
+            c_min = df[col].min()
+            c_max = df[col].max()
+
+            if c_min >= 0:
+                if c_max < 255:
+                    df[col] = df[col].astype(np.uint8)
+                elif c_max < 65535:
+                    df[col] = df[col].astype(np.uint16)
+                elif c_max < 4294967295:
+                    df[col] = df[col].astype(np.uint32)
+            else:
+                if c_min > -128 and c_max < 127:
+                    df[col] = df[col].astype(np.int8)
+                elif c_min > -32768 and c_max < 32767:
+                    df[col] = df[col].astype(np.int16)
+                elif c_min > -2147483648 and c_max < 2147483647:
+                    df[col] = df[col].astype(np.int32)
+
+        # Downcast floats
+        elif col_type == 'float64':
+            df[col] = pd.to_numeric(df[col], downcast='float')
+
+    final_mem = df.memory_usage(deep=True).sum() / 1024**2
+    reduction = (initial_mem - final_mem) / initial_mem * 100
+
+    logger.info(
+        f"Memory optimized: {initial_mem:.2f}MB -> {final_mem:.2f}MB "
+        f"({reduction:.1f}% reduction)"
+    )
+
+    return df
+
+
 def create_feature_matrix(
     data: dict[str, pd.DataFrame],
     pipeline: FeaturePipeline | None = None,
+    validate: bool = True,
+    optimize_memory_usage: bool = True,
 ) -> dict[str, pd.DataFrame]:
     """
     Create feature matrices for multiple stocks.
@@ -901,6 +1081,8 @@ def create_feature_matrix(
     Args:
         data: Dictionary mapping symbols to OHLCV DataFrames
         pipeline: FeaturePipeline instance (creates new if None)
+        validate: Validate input data before processing
+        optimize_memory_usage: Optimize memory after feature generation
 
     Returns:
         Dictionary mapping symbols to feature DataFrames
@@ -911,6 +1093,71 @@ def create_feature_matrix(
     features = {}
     for symbol, df in data.items():
         logger.info(f"Generating features for {symbol}")
-        features[symbol] = pipeline.generate_features(df)
+
+        # Validate input data
+        if validate:
+            validation = validate_ohlcv_data(df)
+            if not validation['valid']:
+                logger.error(f"{symbol}: Validation failed - {validation['issues']}")
+                continue
+            if validation['warnings']:
+                for warning in validation['warnings']:
+                    logger.warning(f"{symbol}: {warning}")
+
+        # Generate features
+        try:
+            symbol_features = pipeline.generate_features(df)
+
+            # Optimize memory
+            if optimize_memory_usage:
+                symbol_features = optimize_memory(symbol_features)
+
+            features[symbol] = symbol_features
+        except Exception as e:
+            logger.error(f"{symbol}: Feature generation failed - {e}")
+            continue
 
     return features
+
+
+def combine_features_with_target(
+    features: pd.DataFrame,
+    target: pd.Series,
+    forward_shift: int = 5,
+    drop_na: bool = True,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """
+    Combine features with forward-shifted target for ML training.
+
+    Creates the target variable by shifting future values backwards,
+    ensuring proper alignment for prediction.
+
+    Args:
+        features: Feature DataFrame
+        target: Target variable (e.g., returns)
+        forward_shift: Periods to shift target backwards (prediction horizon)
+        drop_na: Drop rows with NaN values
+
+    Returns:
+        Tuple of (X, y) aligned DataFrames
+    """
+    # Create forward-shifted target
+    y = target.shift(-forward_shift)
+
+    # Align indices
+    common_idx = features.index.intersection(y.dropna().index)
+    X = features.loc[common_idx]
+    y = y.loc[common_idx]
+
+    if drop_na:
+        # Drop rows where either X or y has NaN
+        valid_mask = ~(X.isna().any(axis=1) | y.isna())
+        X = X[valid_mask]
+        y = y[valid_mask]
+
+    logger.info(
+        f"Combined features and target: {len(X)} samples, "
+        f"{len(X.columns)} features, horizon={forward_shift}"
+    )
+
+    return X, y

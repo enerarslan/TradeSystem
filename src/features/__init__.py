@@ -24,6 +24,9 @@ from src.features.pipeline import (
     FeaturePipeline,
     FeatureProcessor,
     create_feature_matrix,
+    validate_ohlcv_data,
+    optimize_memory,
+    combine_features_with_target,
 )
 from src.features.fractional_diff import (
     frac_diff_ffd,
@@ -64,6 +67,20 @@ from src.features.microstructure import (
     AmihudIlliquidity,
     OrderBookDynamics,
 )
+from src.features.leakage_prevention import (
+    LeakageChecker,
+    LeakageResult,
+    LeakageReport,
+    LeakageType,
+    LeakageSeverity,
+    validate_no_leakage,
+)
+from src.features.feature_selection import (
+    FeatureSelector,
+    SelectionResult,
+    SelectionMethod,
+    select_features,
+)
 
 __all__ = [
     # Technical indicators
@@ -74,6 +91,9 @@ __all__ = [
     "FeaturePipeline",
     "FeatureProcessor",
     "create_feature_matrix",
+    "validate_ohlcv_data",
+    "optimize_memory",
+    "combine_features_with_target",
     # Fractional differentiation
     "frac_diff_ffd",
     "find_min_d",
@@ -108,4 +128,16 @@ __all__ = [
     "RollSpread",
     "AmihudIlliquidity",
     "OrderBookDynamics",
+    # Leakage prevention
+    "LeakageChecker",
+    "LeakageResult",
+    "LeakageReport",
+    "LeakageType",
+    "LeakageSeverity",
+    "validate_no_leakage",
+    # Feature selection
+    "FeatureSelector",
+    "SelectionResult",
+    "SelectionMethod",
+    "select_features",
 ]

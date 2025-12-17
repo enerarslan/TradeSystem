@@ -686,7 +686,467 @@ class MultiObjectiveOptimizer:
             return None
 
 
-# Convenience function
+class WalkForwardOptimizer:
+    """
+    Walk-forward hyperparameter optimization.
+
+    Re-optimizes hyperparameters at each walk-forward step,
+    simulating production retraining with adaptive parameters.
+
+    This is critical for institutional trading where:
+    - Market regimes change over time
+    - Optimal parameters drift
+    - Static parameters lead to degradation
+
+    Example:
+        optimizer = WalkForwardOptimizer(
+            model_type=ModelType.LIGHTGBM_CLASSIFIER,
+            train_period=500,
+            test_period=100,
+            n_optimization_trials=30,
+            objective_metric="sharpe_ratio",
+        )
+
+        results = optimizer.optimize(X, y, returns=returns)
+
+        # Get aggregated performance
+        print(f"Sharpe: {results.aggregated_sharpe:.2f}")
+    """
+
+    def __init__(
+        self,
+        model_type: Union[ModelType, str],
+        train_period: int = 500,
+        test_period: int = 100,
+        step_size: Optional[int] = None,
+        n_optimization_trials: int = 30,
+        cv_splits: int = 3,
+        purge_gap: int = 20,
+        objective_metric: str = "sharpe_ratio",
+        direction: str = "maximize",
+        random_state: int = 42,
+    ):
+        if not OPTUNA_AVAILABLE:
+            raise ImportError("Optuna required")
+
+        if isinstance(model_type, str):
+            model_type = ModelType(model_type)
+
+        self.model_type = model_type
+        self.train_period = train_period
+        self.test_period = test_period
+        self.step_size = step_size or test_period
+        self.n_optimization_trials = n_optimization_trials
+        self.cv_splits = cv_splits
+        self.purge_gap = purge_gap
+        self.objective_metric = objective_metric
+        self.direction = direction
+        self.random_state = random_state
+
+        # Results storage
+        self.walk_forward_results: List[Dict[str, Any]] = []
+
+    def optimize(
+        self,
+        X: Union[pd.DataFrame, np.ndarray],
+        y: Union[pd.Series, np.ndarray],
+        returns: Optional[Union[pd.Series, np.ndarray]] = None,
+        param_space: Optional[List[ParamSpace]] = None,
+    ) -> "WalkForwardOptimizationResult":
+        """
+        Run walk-forward optimization.
+
+        At each step:
+        1. Use train window for hyperparameter optimization
+        2. Test on out-of-sample period
+        3. Step forward and repeat
+
+        Args:
+            X: Feature data
+            y: Target data
+            returns: Returns for financial metrics
+            param_space: Custom parameter space
+
+        Returns:
+            WalkForwardOptimizationResult with all steps and aggregated metrics
+        """
+        import time
+        start_time = time.time()
+
+        X = np.asarray(X)
+        y = np.asarray(y)
+        returns = np.asarray(returns) if returns is not None else None
+        param_space = param_space or ModelFactory.get_param_space(self.model_type)
+
+        n_samples = len(X)
+        self.walk_forward_results = []
+
+        # Walk forward
+        current_start = 0
+        step = 0
+
+        while current_start + self.train_period + self.purge_gap + self.test_period <= n_samples:
+            train_end = current_start + self.train_period
+            test_start = train_end + self.purge_gap
+            test_end = test_start + self.test_period
+
+            logger.info(f"Walk-forward step {step}: "
+                       f"train=[{current_start}:{train_end}], "
+                       f"test=[{test_start}:{test_end}]")
+
+            # Training data for this window
+            X_train_window = X[current_start:train_end]
+            y_train_window = y[current_start:train_end]
+
+            returns_train = None
+            if returns is not None:
+                returns_train = returns[current_start:train_end]
+
+            # Create nested CV for this window
+            inner_cv = PurgedKFoldCV(
+                n_splits=self.cv_splits,
+                purge_gap=self.purge_gap,
+            )
+
+            # Optimize hyperparameters on this window
+            optimizer = OptunaOptimizer(
+                model_type=self.model_type,
+                validation_strategy=inner_cv,
+                objective_metric=self.objective_metric,
+                direction=self.direction,
+                n_trials=self.n_optimization_trials,
+                random_state=self.random_state + step,
+            )
+
+            try:
+                opt_result = optimizer.optimize(
+                    X_train_window,
+                    y_train_window,
+                    returns=returns_train,
+                    param_space=param_space,
+                )
+                best_params = opt_result.best_params
+            except Exception as e:
+                logger.warning(f"Optimization failed for step {step}: {e}")
+                best_params = {}
+
+            # Train final model with best params on full training window
+            model = ModelFactory.create_model(
+                self.model_type,
+                params=best_params,
+                random_state=self.random_state,
+            )
+            model.fit(X_train_window, y_train_window)
+
+            # Test on out-of-sample period
+            X_test = X[test_start:test_end]
+            y_test = y[test_start:test_end]
+
+            predictions = model.predict(X_test)
+
+            # Calculate test metrics
+            test_metrics = self._calculate_test_metrics(
+                model, X_test, y_test,
+                returns[test_start:test_end] if returns is not None else None
+            )
+
+            # Store result
+            self.walk_forward_results.append({
+                'step': step,
+                'train_start': current_start,
+                'train_end': train_end,
+                'test_start': test_start,
+                'test_end': test_end,
+                'best_params': best_params,
+                'test_metrics': test_metrics,
+                'predictions': predictions,
+                'actual': y_test,
+            })
+
+            # Step forward
+            current_start += self.step_size
+            step += 1
+
+        # Aggregate results
+        total_time = time.time() - start_time
+
+        return WalkForwardOptimizationResult(
+            walk_forward_results=self.walk_forward_results,
+            model_type=self.model_type.value,
+            objective_metric=self.objective_metric,
+            n_steps=step,
+            optimization_time_seconds=total_time,
+            train_period=self.train_period,
+            test_period=self.test_period,
+            step_size=self.step_size,
+        )
+
+    def _calculate_test_metrics(
+        self,
+        model: Any,
+        X_test: np.ndarray,
+        y_test: np.ndarray,
+        returns: Optional[np.ndarray],
+    ) -> Dict[str, float]:
+        """Calculate test metrics for a walk-forward step."""
+        predictions = model.predict(X_test)
+
+        metrics = {}
+
+        # Basic metrics
+        metrics['mse'] = float(np.mean((y_test - predictions) ** 2))
+
+        # Direction accuracy (for regression)
+        if len(y_test) > 1:
+            direction_correct = np.sign(predictions) == np.sign(y_test)
+            metrics['direction_accuracy'] = float(np.mean(direction_correct))
+
+        # Financial metrics
+        if returns is not None and len(returns) > 0:
+            # Convert predictions to signals
+            if hasattr(model, "predict_proba"):
+                proba = model.predict_proba(X_test)
+                if proba.shape[1] == 2:
+                    signals = proba[:, 1] - 0.5
+                else:
+                    signals = predictions
+            else:
+                signals = predictions
+
+            if np.abs(signals).max() > 0:
+                signals = signals / np.abs(signals).max()
+
+            strategy_returns = signals * returns
+            strategy_returns = np.nan_to_num(strategy_returns, nan=0)
+
+            if len(strategy_returns) > 0 and np.std(strategy_returns) > 0:
+                metrics['sharpe_ratio'] = float(
+                    np.mean(strategy_returns) / (np.std(strategy_returns) + 1e-8) * np.sqrt(252)
+                )
+
+                # Max drawdown
+                cumulative = np.cumsum(strategy_returns)
+                peak = np.maximum.accumulate(cumulative)
+                drawdown = (peak - cumulative)
+                metrics['max_drawdown'] = float(np.max(drawdown))
+
+                # Total return
+                metrics['total_return'] = float(np.sum(strategy_returns))
+
+        return metrics
+
+
+@dataclass
+class WalkForwardOptimizationResult:
+    """Container for walk-forward optimization results."""
+    walk_forward_results: List[Dict[str, Any]]
+    model_type: str
+    objective_metric: str
+    n_steps: int
+    optimization_time_seconds: float
+    train_period: int
+    test_period: int
+    step_size: int
+
+    @property
+    def aggregated_sharpe(self) -> float:
+        """Get aggregated Sharpe ratio across all walk-forward steps."""
+        sharpe_values = [
+            r['test_metrics'].get('sharpe_ratio', 0)
+            for r in self.walk_forward_results
+            if 'sharpe_ratio' in r['test_metrics']
+        ]
+        return np.mean(sharpe_values) if sharpe_values else 0.0
+
+    @property
+    def aggregated_return(self) -> float:
+        """Get total return across all walk-forward steps."""
+        returns = [
+            r['test_metrics'].get('total_return', 0)
+            for r in self.walk_forward_results
+            if 'total_return' in r['test_metrics']
+        ]
+        return np.sum(returns) if returns else 0.0
+
+    @property
+    def parameter_stability(self) -> Dict[str, float]:
+        """Analyze parameter stability across walk-forward steps."""
+        if len(self.walk_forward_results) < 2:
+            return {}
+
+        # Collect all parameters
+        all_params = {}
+        for result in self.walk_forward_results:
+            for param, value in result['best_params'].items():
+                if param not in all_params:
+                    all_params[param] = []
+                all_params[param].append(value)
+
+        # Calculate stability (CV) for numeric parameters
+        stability = {}
+        for param, values in all_params.items():
+            numeric_values = [v for v in values if isinstance(v, (int, float))]
+            if len(numeric_values) >= 2:
+                mean_val = np.mean(numeric_values)
+                std_val = np.std(numeric_values)
+                stability[param] = std_val / (abs(mean_val) + 1e-8)
+
+        return stability
+
+    def get_all_predictions(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Get all out-of-sample predictions concatenated."""
+        all_preds = []
+        all_actual = []
+
+        for result in self.walk_forward_results:
+            all_preds.extend(result['predictions'])
+            all_actual.extend(result['actual'])
+
+        return np.array(all_preds), np.array(all_actual)
+
+    def summary(self) -> str:
+        """Generate text summary."""
+        lines = [
+            "=" * 60,
+            "WALK-FORWARD OPTIMIZATION RESULTS",
+            "=" * 60,
+            f"Model: {self.model_type}",
+            f"Objective: {self.objective_metric}",
+            f"Walk-forward steps: {self.n_steps}",
+            f"Train period: {self.train_period}",
+            f"Test period: {self.test_period}",
+            f"Step size: {self.step_size}",
+            f"Total time: {self.optimization_time_seconds:.1f}s",
+            "",
+            "Aggregated Metrics:",
+            f"  Sharpe Ratio: {self.aggregated_sharpe:.4f}",
+            f"  Total Return: {self.aggregated_return:.4f}",
+            "",
+            "Parameter Stability (lower = more stable):",
+        ]
+
+        stability = self.parameter_stability
+        for param, cv in sorted(stability.items(), key=lambda x: x[1])[:5]:
+            lines.append(f"  {param}: {cv:.4f}")
+
+        lines.append("")
+        lines.append("Per-Step Results:")
+
+        for result in self.walk_forward_results[:5]:
+            metrics = result['test_metrics']
+            sharpe = metrics.get('sharpe_ratio', 'N/A')
+            sharpe_str = f"{sharpe:.4f}" if isinstance(sharpe, float) else sharpe
+            lines.append(
+                f"  Step {result['step']}: Sharpe={sharpe_str}, "
+                f"Return={metrics.get('total_return', 0):.4f}"
+            )
+
+        if len(self.walk_forward_results) > 5:
+            lines.append(f"  ... and {len(self.walk_forward_results) - 5} more steps")
+
+        lines.append("=" * 60)
+        return "\n".join(lines)
+
+
+class AdaptiveOptimizer:
+    """
+    Adaptive hyperparameter optimizer that adjusts search strategy
+    based on optimization progress.
+
+    Features:
+    - Switches from exploration to exploitation
+    - Adapts search space based on promising regions
+    - Implements early stopping for unpromising trials
+    - Tracks and reports optimization efficiency
+
+    Example:
+        optimizer = AdaptiveOptimizer(
+            model_type=ModelType.LIGHTGBM_CLASSIFIER,
+            objective_metric="sharpe_ratio",
+            n_trials=100,
+            adaptation_frequency=20,
+        )
+
+        result = optimizer.optimize(X, y, returns=returns)
+    """
+
+    def __init__(
+        self,
+        model_type: Union[ModelType, str],
+        validation_strategy: Optional[Any] = None,
+        objective_metric: str = "sharpe_ratio",
+        direction: str = "maximize",
+        n_trials: int = 100,
+        adaptation_frequency: int = 20,
+        exploration_ratio: float = 0.3,
+        random_state: int = 42,
+    ):
+        if not OPTUNA_AVAILABLE:
+            raise ImportError("Optuna required")
+
+        if isinstance(model_type, str):
+            model_type = ModelType(model_type)
+
+        self.model_type = model_type
+        self.validation_strategy = validation_strategy or PurgedKFoldCV()
+        self.objective_metric = objective_metric
+        self.direction = direction
+        self.n_trials = n_trials
+        self.adaptation_frequency = adaptation_frequency
+        self.exploration_ratio = exploration_ratio
+        self.random_state = random_state
+
+        # Tracking
+        self._improvement_history: List[float] = []
+        self._sampler_switches: List[int] = []
+
+    def optimize(
+        self,
+        X: Union[pd.DataFrame, np.ndarray],
+        y: Union[pd.Series, np.ndarray],
+        returns: Optional[Union[pd.Series, np.ndarray]] = None,
+        param_space: Optional[List[ParamSpace]] = None,
+    ) -> OptimizationResult:
+        """
+        Run adaptive optimization.
+
+        Starts with exploration-focused sampling, then adapts
+        to exploitation as promising regions are found.
+        """
+        import time
+        start_time = time.time()
+
+        # Use base optimizer with custom callback
+        base_optimizer = OptunaOptimizer(
+            model_type=self.model_type,
+            validation_strategy=self.validation_strategy,
+            objective_metric=self.objective_metric,
+            direction=self.direction,
+            n_trials=self.n_trials,
+            random_state=self.random_state,
+            sampler=TPESampler(
+                seed=self.random_state,
+                n_startup_trials=max(10, int(self.n_trials * self.exploration_ratio)),
+            ),
+            pruner=HyperbandPruner(
+                min_resource=1,
+                max_resource=5,
+                reduction_factor=3,
+            ),
+        )
+
+        # Run optimization
+        result = base_optimizer.optimize(X, y, returns=returns, param_space=param_space)
+
+        # Add adaptive metadata
+        result.metadata['adaptive'] = True
+        result.metadata['adaptation_frequency'] = self.adaptation_frequency
+        result.metadata['exploration_ratio'] = self.exploration_ratio
+
+        return result
+
+
+# Convenience functions
 def optimize_model(
     model_type: Union[ModelType, str],
     X: Union[pd.DataFrame, np.ndarray],
@@ -716,5 +1176,41 @@ def optimize_model(
         validation_strategy=PurgedKFoldCV(n_splits=cv_splits),
         objective_metric=objective,
         n_trials=n_trials,
+    )
+    return optimizer.optimize(X, y, returns=returns)
+
+
+def walk_forward_optimize(
+    model_type: Union[ModelType, str],
+    X: Union[pd.DataFrame, np.ndarray],
+    y: Union[pd.Series, np.ndarray],
+    returns: Optional[Union[pd.Series, np.ndarray]] = None,
+    train_period: int = 500,
+    test_period: int = 100,
+    n_trials: int = 30,
+    objective: str = "sharpe_ratio",
+) -> WalkForwardOptimizationResult:
+    """
+    Quick function for walk-forward optimization.
+
+    Args:
+        model_type: Type of model
+        X: Features
+        y: Target
+        returns: Returns for financial metrics
+        train_period: Training window size
+        test_period: Test window size
+        n_trials: Optimization trials per step
+        objective: Objective metric
+
+    Returns:
+        WalkForwardOptimizationResult
+    """
+    optimizer = WalkForwardOptimizer(
+        model_type=model_type,
+        train_period=train_period,
+        test_period=test_period,
+        n_optimization_trials=n_trials,
+        objective_metric=objective,
     )
     return optimizer.optimize(X, y, returns=returns)

@@ -710,3 +710,153 @@ def validate_cv_splits(
             return False
 
     return True
+
+
+def check_cv_leakage(
+    cv,
+    X: Union[pd.DataFrame, np.ndarray],
+    purge_gap: Optional[int] = None,
+) -> dict:
+    """
+    Check cross-validation splits for potential data leakage.
+
+    Validates that:
+    1. No overlap between train and test indices
+    2. Proper temporal ordering is maintained
+    3. Purge gap is respected
+
+    Args:
+        cv: Cross-validation splitter
+        X: Data to split
+        purge_gap: Expected minimum gap between train max and test min
+
+    Returns:
+        Dictionary with leakage check results
+    """
+    results = {
+        'has_leakage': False,
+        'issues': [],
+        'warnings': [],
+        'splits_checked': 0,
+        'all_gaps': [],
+    }
+
+    # Get purge_gap from cv if available
+    if purge_gap is None and hasattr(cv, 'purge_gap'):
+        purge_gap = cv.purge_gap
+
+    for i, (train_idx, test_idx) in enumerate(cv.split(X)):
+        results['splits_checked'] += 1
+
+        # Check 1: No overlap
+        train_set = set(train_idx)
+        test_set = set(test_idx)
+        overlap = train_set.intersection(test_set)
+
+        if len(overlap) > 0:
+            results['has_leakage'] = True
+            results['issues'].append(
+                f"Fold {i}: Found {len(overlap)} overlapping indices"
+            )
+
+        # Check 2: Temporal ordering
+        if len(train_idx) > 0 and len(test_idx) > 0:
+            train_max = np.max(train_idx)
+            test_min = np.min(test_idx)
+            gap = test_min - train_max
+
+            results['all_gaps'].append(gap)
+
+            # Gap must be positive
+            if gap <= 0:
+                results['has_leakage'] = True
+                results['issues'].append(
+                    f"Fold {i}: Test indices ({test_min}) not after train indices ({train_max})"
+                )
+
+            # Check purge gap
+            if purge_gap is not None and gap < purge_gap:
+                results['warnings'].append(
+                    f"Fold {i}: Gap ({gap}) is less than purge_gap ({purge_gap}). "
+                    f"Risk of look-ahead bias."
+                )
+
+    # Summary statistics
+    if results['all_gaps']:
+        results['min_gap'] = min(results['all_gaps'])
+        results['max_gap'] = max(results['all_gaps'])
+        results['mean_gap'] = np.mean(results['all_gaps'])
+
+    return results
+
+
+def validate_cv_for_finance(
+    cv,
+    X: Union[pd.DataFrame, np.ndarray],
+    prediction_horizon: int = 5,
+    max_feature_lookback: int = 200,
+    buffer: int = 10,
+) -> dict:
+    """
+    Comprehensive validation for financial time-series cross-validation.
+
+    Checks that the CV configuration is appropriate for preventing
+    data leakage in financial ML.
+
+    Args:
+        cv: Cross-validation splitter
+        X: Data to split
+        prediction_horizon: How many bars ahead predictions target
+        max_feature_lookback: Maximum lookback in feature engineering
+        buffer: Additional safety buffer
+
+    Returns:
+        Dictionary with validation results and recommendations
+    """
+    # Calculate recommended purge gap
+    recommended_purge = prediction_horizon + max_feature_lookback + buffer
+
+    # Check current purge gap
+    current_purge = getattr(cv, 'purge_gap', None)
+
+    results = {
+        'valid': True,
+        'issues': [],
+        'recommendations': [],
+        'recommended_purge_gap': recommended_purge,
+        'current_purge_gap': current_purge,
+    }
+
+    # Check if purge gap is sufficient
+    if current_purge is not None and current_purge < recommended_purge:
+        results['valid'] = False
+        results['issues'].append(
+            f"Purge gap ({current_purge}) is less than recommended "
+            f"({recommended_purge} = {prediction_horizon} + {max_feature_lookback} + {buffer}). "
+            f"This may cause look-ahead bias."
+        )
+        results['recommendations'].append(
+            f"Set purge_gap >= {recommended_purge}"
+        )
+
+    # Run leakage check
+    leakage_results = check_cv_leakage(cv, X, purge_gap=recommended_purge)
+
+    if leakage_results['has_leakage']:
+        results['valid'] = False
+        results['issues'].extend(leakage_results['issues'])
+
+    if leakage_results['warnings']:
+        results['recommendations'].extend(
+            [f"Address warning: {w}" for w in leakage_results['warnings']]
+        )
+
+    # Check split sizes
+    split_valid = validate_cv_splits(cv, X)
+    if not split_valid:
+        results['valid'] = False
+        results['issues'].append("Some CV splits have insufficient samples")
+
+    results['leakage_check'] = leakage_results
+
+    return results

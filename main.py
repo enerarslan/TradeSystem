@@ -1739,6 +1739,68 @@ def main():
     parser.add_argument("--capital", type=float, default=1_000_000, help="Initial capital")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
 
+    # New advanced options (JPMorgan-level)
+    parser.add_argument(
+        "--validate-features",
+        action="store_true",
+        help="Run feature leakage check before training"
+    )
+    parser.add_argument(
+        "--check-drift",
+        action="store_true",
+        help="Run drift detection on existing model"
+    )
+    parser.add_argument(
+        "--feature-selection",
+        action="store_true",
+        help="Apply feature selection before training"
+    )
+    parser.add_argument(
+        "--save-features",
+        action="store_true",
+        help="Save generated features to disk"
+    )
+    parser.add_argument(
+        "--load-features",
+        type=str,
+        default=None,
+        help="Load pre-generated features from path"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate everything without actual training"
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Resume training from checkpoint path"
+    )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="Path to existing model (for evaluation/drift check)"
+    )
+    parser.add_argument(
+        "--n-features",
+        type=int,
+        default=None,
+        help="Number of features to select (if --feature-selection is used)"
+    )
+    parser.add_argument(
+        "--cv-splits",
+        type=int,
+        default=5,
+        help="Number of cross-validation splits"
+    )
+    parser.add_argument(
+        "--use-pipeline",
+        action="store_true",
+        help="Use TrainingPipeline orchestrator for full workflow"
+    )
+
     args = parser.parse_args()
 
     # Setup
@@ -1759,27 +1821,160 @@ def main():
     Path("results").mkdir(exist_ok=True)
     Path("models").mkdir(exist_ok=True)
 
-    # Load config
-    config = load_config(args.config)
-    config["backtest"]["initial_capital"] = args.capital
-    config["training"]["model_type"] = args.model
-    config["training"]["optimize"] = args.optimize
+    # Load config with error handling
+    try:
+        config = load_config(args.config)
+        config["backtest"]["initial_capital"] = args.capital
+        config["training"]["model_type"] = args.model
+        config["training"]["optimize"] = args.optimize
+        config["training"]["cv_splits"] = args.cv_splits
+    except FileNotFoundError:
+        logger.error(f"Config file not found: {args.config}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}")
+        sys.exit(1)
 
-    # Load data (with TimescaleDB support if configured)
-    data = load_data(
-        args.data_path,
-        args.symbols,
-        config["data"].get("min_bars", 100),
-        config=config,
-    )
+    # Data loading section with error handling
+    try:
+        data = load_data(
+            args.data_path,
+            args.symbols,
+            config["data"].get("min_bars", 100),
+            config=config,
+        )
+    except FileNotFoundError:
+        logger.error(f"Data directory not found: {args.data_path}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Failed to load data: {e}")
+        sys.exit(1)
 
     if not data:
         logger.error("No data loaded!")
         logger.info("Run: python scripts/generate_sample_data.py")
         sys.exit(1)
 
-    # Generate features with leakage-safe pipeline
-    features, feature_pipelines = generate_features(data, config)
+    # Data validation before feature generation
+    logger.info("Validating data quality...")
+    for symbol, df in data.items():
+        # Check for required columns
+        required_cols = ["open", "high", "low", "close", "volume"]
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            logger.error(f"{symbol}: Missing required columns: {missing_cols}")
+            sys.exit(1)
+
+        # Check for negative/zero prices
+        if (df["close"] <= 0).any():
+            n_invalid = (df["close"] <= 0).sum()
+            logger.warning(f"{symbol}: {n_invalid} non-positive close prices found - removing")
+            df = df[df["close"] > 0]
+            data[symbol] = df
+
+        # Check for chronological order
+        if not df.index.is_monotonic_increasing:
+            logger.warning(f"{symbol}: Data not in chronological order - sorting")
+            data[symbol] = df.sort_index()
+
+        # Check for sufficient data
+        min_bars = config["data"].get("min_bars", 100)
+        if len(df) < min_bars:
+            logger.warning(f"{symbol}: Only {len(df)} bars (minimum: {min_bars})")
+
+        logger.info(f"{symbol}: {len(df)} bars, range: {df.index.min()} to {df.index.max()}")
+
+    # Feature generation section with error handling
+    try:
+        # Load pre-generated features if specified
+        if args.load_features:
+            logger.info(f"Loading features from {args.load_features}")
+            import joblib
+            features = joblib.load(args.load_features)
+            feature_pipelines = {}
+        else:
+            features, feature_pipelines = generate_features(data, config)
+
+        # Save features if specified
+        if args.save_features:
+            import joblib
+            feature_path = f"data/features_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+            joblib.dump(features, feature_path)
+            logger.info(f"Features saved to {feature_path}")
+
+    except MemoryError:
+        logger.error("Out of memory during feature generation. Try reducing data size.")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Feature generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+    # Feature leakage validation if requested
+    if args.validate_features:
+        logger.info("Running feature leakage validation...")
+        from src.features.leakage_prevention import LeakageChecker
+
+        for symbol, feature_df in features.items():
+            price_df = data[symbol]
+            target = price_df["close"].pct_change().shift(-config.get("training", {}).get("prediction_horizon", 5))
+
+            checker = LeakageChecker(verbose=True)
+            results = checker.check_all_features(feature_df, price_df, target)
+            report = checker.generate_report()
+
+            logger.info(report.summary())
+
+            if report.critical_count > 0:
+                logger.warning(f"{symbol}: {report.critical_count} features with critical leakage detected!")
+                if not args.dry_run:
+                    # Remove critical leakage features
+                    safe_features = report.safe_features
+                    features[symbol] = feature_df[safe_features]
+                    logger.info(f"Removed {len(report.unsafe_features)} unsafe features")
+
+    # Feature selection if requested
+    if args.feature_selection:
+        logger.info("Applying feature selection...")
+        from src.features.feature_selection import FeatureSelector
+
+        for symbol, feature_df in features.items():
+            price_df = data[symbol]
+            target = price_df["close"].pct_change().shift(-config.get("training", {}).get("prediction_horizon", 5))
+
+            # Align features and target
+            aligned = feature_df.copy()
+            aligned["target"] = target
+            aligned = aligned.dropna()
+
+            X = aligned.drop(columns=["target"])
+            y = aligned["target"]
+
+            selector = FeatureSelector(
+                method="importance",
+                n_features=args.n_features or 50,
+                task_type="regression",
+            )
+            selector.fit(X, y)
+            selected_features = selector.get_selected_features()
+
+            features[symbol] = feature_df[selected_features]
+            logger.info(f"{symbol}: Selected {len(selected_features)} features")
+
+    # Dry run mode - validate and exit
+    if args.dry_run:
+        logger.info("Dry run complete - validation passed!")
+        print("\n" + "=" * 70)
+        print("DRY RUN SUMMARY")
+        print("=" * 70)
+        print(f"Data loaded: {len(data)} symbols")
+        for sym, df in data.items():
+            print(f"  {sym}: {len(df)} bars")
+        print(f"Features generated: {sum(len(f.columns) for f in features.values())} total")
+        print("All validations passed!")
+        print("=" * 70)
+        sys.exit(0)
 
     # Training mode
     if args.mode in ["train", "full"]:

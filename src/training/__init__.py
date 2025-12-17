@@ -35,6 +35,12 @@ from src.training.validation import (
 from src.training.optimization import (
     OptunaOptimizer,
     MultiObjectiveOptimizer,
+    WalkForwardOptimizer,
+    WalkForwardOptimizationResult,
+    AdaptiveOptimizer,
+    OptimizationResult,
+    optimize_model,
+    walk_forward_optimize,
 )
 
 # Pipeline - Preprocessing with data leakage prevention
@@ -79,6 +85,36 @@ from src.training.deep_learning.dataset import (
     prepare_data_for_dl,
 )
 
+# Drift Detection
+from src.training.drift_detection import (
+    DriftDetector,
+    DriftResult,
+    DriftThresholds,
+    DriftSeverity,
+    DriftType,
+    DriftRecommendation,
+)
+
+# Training Pipeline Orchestrator
+from src.training.training_pipeline import (
+    TrainingPipeline,
+    PipelineResult,
+    PipelineStage,
+    PipelineStatus,
+    ValidationResult,
+    EvaluationResult,
+)
+
+# Checkpointing - Fault-tolerant training with resumption
+from src.training.checkpointing import (
+    CheckpointManager,
+    CheckpointConfig,
+    CheckpointMetadata,
+    TrainingState,
+    ResumableTrainer,
+    create_checkpoint_callback,
+)
+
 __all__ = [
     # Experiment tracking
     "ExperimentTracker",
@@ -95,6 +131,12 @@ __all__ = [
     # Optimization
     "OptunaOptimizer",
     "MultiObjectiveOptimizer",
+    "WalkForwardOptimizer",
+    "WalkForwardOptimizationResult",
+    "AdaptiveOptimizer",
+    "OptimizationResult",
+    "optimize_model",
+    "walk_forward_optimize",
     # Pipeline - Preprocessing
     "ModelPipelineFactory",
     "PipelineConfig",
@@ -125,4 +167,25 @@ __all__ = [
     "create_dataloaders",
     "create_cv_dataloaders",
     "prepare_data_for_dl",
+    # Drift Detection
+    "DriftDetector",
+    "DriftResult",
+    "DriftThresholds",
+    "DriftSeverity",
+    "DriftType",
+    "DriftRecommendation",
+    # Training Pipeline
+    "TrainingPipeline",
+    "PipelineResult",
+    "PipelineStage",
+    "PipelineStatus",
+    "ValidationResult",
+    "EvaluationResult",
+    # Checkpointing
+    "CheckpointManager",
+    "CheckpointConfig",
+    "CheckpointMetadata",
+    "TrainingState",
+    "ResumableTrainer",
+    "create_checkpoint_callback",
 ]
