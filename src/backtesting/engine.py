@@ -128,6 +128,7 @@ class BacktestEngine:
 
     Provides high-performance backtesting with:
     - Realistic transaction costs
+    - Per-symbol market impact (JPMorgan-level)
     - Position tracking
     - Risk management integration
     """
@@ -140,6 +141,7 @@ class BacktestEngine:
         execution_price: Literal["open", "close", "vwap"] = "open",
         risk_limits: dict | None = None,
         use_drawdown_control: bool = True,
+        symbol_adv: dict[str, float] | None = None,
     ) -> None:
         """
         Initialize the engine.
@@ -151,10 +153,13 @@ class BacktestEngine:
             execution_price: Price for trade execution
             risk_limits: Risk limit parameters
             use_drawdown_control: Enable drawdown-based controls
+            symbol_adv: Per-symbol Average Daily Value for market impact
+                       (CRITICAL: Required for realistic market impact modeling)
         """
         self.initial_capital = initial_capital
         self.execution_price = execution_price
         self.use_drawdown_control = use_drawdown_control
+        self.symbol_adv = symbol_adv or {}
 
         self.cost_model = TransactionCostModel(
             commission_pct=commission_pct,
@@ -256,9 +261,13 @@ class BacktestEngine:
                     if abs(trade_value) > 100:  # Minimum trade size
                         price = current_prices.get(symbol, 0)
                         if price > 0:
-                            # Calculate costs
+                            # CRITICAL: Use per-symbol ADV for market impact (JPMorgan-level)
+                            # Each symbol has different liquidity characteristics
+                            symbol_avg_volume = self.symbol_adv.get(symbol, 1_000_000)
+
+                            # Calculate costs with symbol-specific ADV
                             comm, slip, total_cost = self.cost_model.calculate_costs(
-                                abs(trade_value), price
+                                abs(trade_value), price, avg_volume=symbol_avg_volume / price
                             )
 
                             # Execute trade

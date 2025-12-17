@@ -400,9 +400,16 @@ class UniverseManager:
         with open(path, "r") as f:
             data = json.load(f)
 
-        for symbol_data in data.get("symbols", []):
-            meta = SymbolMetadata.from_dict(symbol_data)
-            self._symbols[meta.symbol] = meta
+        symbols_data = data.get("symbols", {})
+        # Support both list and dict format
+        if isinstance(symbols_data, dict):
+            for symbol, symbol_data in symbols_data.items():
+                meta = SymbolMetadata.from_dict(symbol_data)
+                self._symbols[meta.symbol] = meta
+        else:
+            for symbol_data in symbols_data:
+                meta = SymbolMetadata.from_dict(symbol_data)
+                self._symbols[meta.symbol] = meta
 
         logger.info(f"Loaded metadata for {len(self._symbols)} symbols from {path}")
 

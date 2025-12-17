@@ -92,7 +92,7 @@ def generate_ohlcv(
         volume = int(base_volume * volatility_factor)
 
         data.append({
-            "date": current_date.strftime("%Y-%m-%d"),
+            "timestamp": current_date.strftime("%Y-%m-%d %H:%M:%S"),
             "open": round(open_price, 2),
             "high": round(high, 2),
             "low": round(low, 2),
@@ -103,8 +103,8 @@ def generate_ohlcv(
         current_date += timedelta(days=1)
 
     df = pd.DataFrame(data)
-    df["date"] = pd.to_datetime(df["date"])
-    df.set_index("date", inplace=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df.set_index("timestamp", inplace=True)
 
     return df
 
@@ -112,9 +112,12 @@ def generate_ohlcv(
 def generate_sample_symbols(
     num_symbols: int = 10,
     num_days: int = 500,
-    output_dir: str = "data/raw",
+    output_dir: str = "data/sample",
 ) -> None:
-    """Generate sample data for multiple symbols."""
+    """Generate sample data for multiple symbols.
+
+    NOTE: Default output is data/sample to avoid overwriting real data in data/raw!
+    """
 
     # Sample symbol names
     symbols = [
@@ -177,8 +180,8 @@ def generate_sample_symbols(
             seed=hash(symbol) % (2**32),  # Reproducible per symbol
         )
 
-        # Save to CSV
-        filepath = output_path / f"{symbol}.csv"
+        # Save to CSV with correct naming format (SYMBOL_15min.csv)
+        filepath = output_path / f"{symbol}_15min.csv"
         df.to_csv(filepath)
 
         print(f"  [{i+1}/{len(symbols)}] {symbol}: {len(df)} bars, "
@@ -212,8 +215,8 @@ def main():
     parser.add_argument(
         "--output",
         type=str,
-        default="data/raw",
-        help="Output directory (default: data/raw)",
+        default="data/sample",
+        help="Output directory (default: data/sample - NOT data/raw to protect real data!)",
     )
 
     args = parser.parse_args()

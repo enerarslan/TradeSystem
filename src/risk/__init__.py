@@ -52,6 +52,40 @@ from src.risk.pretrade_compliance import (
     ComplianceReport,
 )
 
+# New institutional-grade modules
+from src.risk.execution_quality import (
+    ExecutionQualityAnalyzer,
+    TradeExecution,
+    ExecutionMetrics,
+    AggregateExecutionReport,
+    analyze_execution_quality,
+)
+from src.risk.attribution import (
+    RiskAttribution,
+    FactorExposure,
+    SectorAttribution,
+    FactorModel,
+    BrinsonAttribution,
+    run_risk_attribution,
+)
+from src.risk.stress_testing import (
+    StressTester,
+    StressScenario,
+    ScenarioResult,
+    StressTestReport,
+    HISTORICAL_SCENARIOS,
+    HYPOTHETICAL_SCENARIOS,
+    run_stress_test,
+)
+from src.risk.monitoring import (
+    RiskMonitor as InstitutionalRiskMonitor,
+    LiquidityMonitor,
+    ModelDecayMonitor,
+    LiquidityMetrics,
+    ModelDecayMetrics,
+    MonitoringReport,
+)
+
 __all__ = [
     # Position sizing
     "PositionSizer",
@@ -86,4 +120,32 @@ __all__ = [
     "Order",
     "ComplianceResult",
     "ComplianceReport",
+    # Execution Quality
+    "ExecutionQualityAnalyzer",
+    "TradeExecution",
+    "ExecutionMetrics",
+    "AggregateExecutionReport",
+    "analyze_execution_quality",
+    # Risk Attribution
+    "RiskAttribution",
+    "FactorExposure",
+    "SectorAttribution",
+    "FactorModel",
+    "BrinsonAttribution",
+    "run_risk_attribution",
+    # Stress Testing
+    "StressTester",
+    "StressScenario",
+    "ScenarioResult",
+    "StressTestReport",
+    "HISTORICAL_SCENARIOS",
+    "HYPOTHETICAL_SCENARIOS",
+    "run_stress_test",
+    # Institutional Monitoring
+    "InstitutionalRiskMonitor",
+    "LiquidityMonitor",
+    "ModelDecayMonitor",
+    "LiquidityMetrics",
+    "ModelDecayMetrics",
+    "MonitoringReport",
 ]

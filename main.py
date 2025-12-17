@@ -145,6 +145,10 @@ from src.backtesting import (
     PerformanceMetrics,
     BacktestAnalyzer,
 )
+from src.backtesting.events.order import (
+    OrderSide,
+    create_market_order,
+)
 
 # Reports
 from src.backtesting.reports.dashboard import PerformanceDashboard, create_tear_sheet
@@ -455,21 +459,83 @@ def load_data(
     use_cache: bool = True,
     apply_survivorship_filter: bool = True,
     backtest_start_date: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, pd.DataFrame]:
     """
     Load and validate market data with survivorship bias handling.
 
+    Supports loading from:
+    1. TimescaleDB (if configured and available)
+    2. CSV files (fallback)
+
     Args:
-        data_path: Path to data directory
+        data_path: Path to data directory (for CSV fallback)
         symbols: List of symbols to load (None for all)
         min_bars: Minimum bars required
         use_cache: Whether to use data cache
         apply_survivorship_filter: Apply survivorship bias correction
         backtest_start_date: Start date for universe filtering
+        config: Configuration dictionary (for TimescaleDB settings)
 
     Returns:
         Dictionary of symbol -> DataFrame
     """
+    config = config or {}
+
+    # Check if TimescaleDB is enabled and available
+    timescale_config = config.get("timescale", {})
+    use_timescale = timescale_config.get("enabled", False) and TIMESCALE_AVAILABLE
+
+    if use_timescale:
+        logger.info("Loading data from TimescaleDB...")
+        try:
+            from src.data.storage.timescale_client import TimescaleClient, ConnectionConfig
+
+            # Create connection config
+            conn_config = ConnectionConfig(
+                host=timescale_config.get("host", "localhost"),
+                port=timescale_config.get("port", 5432),
+                database=timescale_config.get("database", "alphatrade_db"),
+                user=timescale_config.get("user", "alphatrade"),
+                password=timescale_config.get("password", ""),
+            )
+
+            data = {}
+            with TimescaleClient(conn_config) as client:
+                # Get available symbols if not specified
+                if symbols is None:
+                    symbols = client.get_symbols()
+                    logger.info(f"Found {len(symbols)} symbols in TimescaleDB")
+
+                for symbol in symbols:
+                    try:
+                        # Fetch OHLCV data
+                        df = client.get_ohlcv(
+                            symbol=symbol,
+                            timeframe="15min",
+                            start=backtest_start_date,
+                        )
+
+                        if df is not None and len(df) >= min_bars:
+                            # Ensure proper index
+                            if "timestamp" in df.columns:
+                                df = df.set_index("timestamp")
+                            df.index.name = "timestamp"
+                            data[symbol] = df
+                            logger.debug(f"Loaded {symbol} from TimescaleDB: {len(df)} bars")
+                    except Exception as e:
+                        logger.warning(f"Error loading {symbol} from TimescaleDB: {e}")
+
+            if data:
+                logger.info(f"Loaded {len(data)} symbols from TimescaleDB")
+                return data
+            else:
+                logger.warning("No data loaded from TimescaleDB, falling back to CSV")
+
+        except Exception as e:
+            logger.warning(f"TimescaleDB connection failed: {e}, falling back to CSV")
+
+    # Fallback to CSV loading
     logger.info(f"Loading data from {data_path}")
 
     data_dir = Path(data_path)
@@ -477,8 +543,15 @@ def load_data(
         logger.error(f"Data directory not found: {data_path}")
         return {}
 
-    # Initialize components
-    loader = DataLoader(data_dir=str(data_dir))
+    # Initialize components - Use Polars for JPMorgan-level performance (10-100x faster)
+    if POLARS_AVAILABLE:
+        from src.data.loaders.polars_loader import PolarsDataLoader
+        loader = PolarsDataLoader(data_dir=str(data_dir))
+        logger.info("Using PolarsDataLoader (high-performance)")
+    else:
+        loader = DataLoader(data_dir=str(data_dir))
+        logger.warning("Polars not available, using pandas DataLoader (slower)")
+
     validator = DataValidator()
     processor = DataProcessor()
 
@@ -582,47 +655,99 @@ def load_data(
 def generate_features(
     data: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
-) -> Dict[str, pd.DataFrame]:
-    """Generate all features - technical, fractional diff, macro."""
-    logger.info("Generating features...")
+    train_ratio: float = 0.8,
+) -> tuple[Dict[str, pd.DataFrame], Dict[str, FeaturePipeline]]:
+    """
+    Generate all features with proper fit/transform separation to prevent data leakage.
+
+    CRITICAL (JPMorgan-level requirement):
+    This function uses FeaturePipeline with proper fit/transform separation:
+    1. The pipeline is FIT only on TRAINING data (first train_ratio of each symbol)
+    2. The fitted parameters (scaling mean/std) are then APPLIED to the full dataset
+    3. This prevents future information from leaking into historical features
+
+    Args:
+        data: Dictionary of symbol -> OHLCV DataFrame
+        config: Configuration dictionary
+        train_ratio: Ratio of data to use for fitting (default 0.8)
+
+    Returns:
+        Tuple of (features_dict, pipelines_dict) where:
+            - features_dict: symbol -> processed feature DataFrame
+            - pipelines_dict: symbol -> fitted FeaturePipeline (for later use)
+    """
+    logger.info("Generating features with leakage-safe pipeline...")
 
     feature_config = config.get("features", {})
     features = {}
+    pipelines = {}
+
+    # Get pipeline parameters from config
+    ma_periods = feature_config.get("ma_periods", [5, 10, 20, 50, 100, 200])
+    max_lookback = max(ma_periods) if ma_periods else 200
 
     for symbol, df in data.items():
         try:
-            df_features = df.copy()
+            # Create pipeline for this symbol
+            pipeline = FeaturePipeline(
+                ma_periods=ma_periods,
+                scaling="robust",
+                strict_leakage_check=feature_config.get("leakage_check", "strict") == "strict",
+            )
 
-            # 1. Technical Indicators
-            if feature_config.get("technical", True):
-                indicators = TechnicalIndicators(df_features)
-                df_features = indicators.add_all()
+            # CRITICAL: Split data for fit/transform separation
+            n_samples = len(df)
+            train_end_idx = int(n_samples * train_ratio)
 
-            # 2. Fractional Differentiation (memory-preserving stationarity)
+            if train_end_idx < max_lookback + 50:
+                logger.warning(
+                    f"{symbol}: Insufficient training data ({train_end_idx} samples) "
+                    f"for max_lookback={max_lookback}. Using all data for fitting."
+                )
+                train_end_idx = n_samples
+
+            train_df = df.iloc[:train_end_idx]
+
+            # FIT pipeline on training data only
+            # This learns scaling parameters from training data
+            pipeline.fit(train_df)
+
+            # TRANSFORM full dataset using fitted parameters
+            # This applies the scaling learned from training data to the full dataset
+            # The pipeline.transform() method:
+            # 1. Generates the same features it was trained on
+            # 2. Applies the fitted scaling parameters (no refitting)
+            df_features = pipeline.transform(df)
+
+            # Apply fractional differentiation if enabled (after pipeline features)
             if feature_config.get("fractional_diff", True):
                 price_cols = ["close", "high", "low"]
                 for col in price_cols:
-                    if col in df_features.columns:
+                    if col in df.columns:
                         try:
-                            # Find optimal d
-                            d_opt = find_min_d(df_features[col].dropna())
-                            # Apply fractional diff
+                            # Find optimal d using ONLY training data
+                            train_col = df.iloc[:train_end_idx][col].dropna()
+                            d_opt = find_min_d(train_col)
+                            # Apply to full series
                             df_features[f"{col}_fracdiff"] = frac_diff_ffd(
-                                df_features[col], d=d_opt
+                                df[col], d=d_opt
                             )
                         except Exception:
                             pass  # Skip if fails
 
-            # 3. Cointegration features (for pairs)
-            if feature_config.get("cointegration", False):
-                # Will be computed across symbols later
-                pass
+            # Add original OHLCV columns back (needed for some strategies)
+            for col in ["open", "high", "low", "close", "volume"]:
+                if col in df.columns and col not in df_features.columns:
+                    df_features[col] = df[col]
 
             features[symbol] = df_features
-            logger.debug(f"{symbol}: {len(df_features.columns)} features")
+            pipelines[symbol] = pipeline
+            logger.debug(f"{symbol}: {len(df_features.columns)} features (fitted on {train_end_idx} samples)")
 
         except Exception as e:
             logger.error(f"Error generating features for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
 
     # Add macro features if enabled
     if feature_config.get("macro", False):
@@ -646,8 +771,8 @@ def generate_features(
         except Exception as e:
             logger.warning(f"Could not add macro features: {e}")
 
-    logger.info(f"Generated features for {len(features)} symbols")
-    return features
+    logger.info(f"Generated leakage-safe features for {len(features)} symbols")
+    return features, pipelines
 
 
 # =============================================================================
@@ -742,7 +867,7 @@ def run_backtest(
     backtest_config = config.get("backtest", {})
 
     if engine_type == "event-driven":
-        logger.info(f"Running event-driven backtest for {strategy.name}")
+        logger.info(f"Running event-driven backtest for {strategy.name} (JPMorgan-level)")
 
         engine_config = EventEngineConfig(
             initial_capital=backtest_config.get("initial_capital", 1_000_000),
@@ -751,7 +876,74 @@ def run_backtest(
         )
 
         engine = EventDrivenEngine(engine_config)
-        result = engine.run(data)
+
+        # Register strategy callback - converts bar events to signals/orders
+        def on_bar_callback(bar_event):
+            """Process bar event through strategy to generate signals."""
+            symbol = bar_event.symbol
+            if symbol not in data:
+                return
+
+            # Get feature data for this symbol if available
+            symbol_features = features.get(symbol) if features else None
+
+            # Get current bar index
+            df = data[symbol]
+            if bar_event.timestamp not in df.index:
+                return
+
+            bar_idx = df.index.get_loc(bar_event.timestamp)
+
+            # Need enough history for strategy
+            if bar_idx < 50:
+                return
+
+            # Get historical data up to this point (no look-ahead)
+            historical_data = df.iloc[:bar_idx + 1]
+            historical_features = symbol_features.iloc[:bar_idx + 1] if symbol_features is not None else None
+
+            # Generate signal from strategy
+            try:
+                signal = strategy.generate_signal(historical_data, historical_features)
+
+                if signal and signal != 0:
+                    # Calculate position size
+                    current_price = bar_event.close
+                    portfolio_value = engine.equity
+                    position_size = portfolio_value * 0.02  # 2% per position
+
+                    shares = int(position_size / current_price)
+                    if shares > 0:
+                        side = OrderSide.BUY if signal > 0 else OrderSide.SELL
+                        order = create_market_order(
+                            symbol=symbol,
+                            side=side,
+                            quantity=shares,
+                            timestamp=bar_event.timestamp,
+                        )
+                        engine.submit_order(order)
+
+            except Exception as e:
+                logger.debug(f"Strategy signal error for {symbol}: {e}")
+
+        engine.register_strategy(on_bar=on_bar_callback)
+        event_result = engine.run(data)
+
+        # Convert EventEngineResult to BacktestResult for compatibility
+        result = BacktestResult(
+            equity_curve=event_result.equity_curve,
+            returns=event_result.returns,
+            trades=pd.DataFrame([{
+                'timestamp': f.timestamp,
+                'symbol': f.symbol,
+                'side': f.side.value if hasattr(f.side, 'value') else str(f.side),
+                'quantity': f.quantity,
+                'price': f.fill_price,
+                'commission': f.commission,
+            } for f in event_result.trades if hasattr(f, 'fill_price')]),
+            positions=pd.DataFrame(),
+            metrics=event_result.metrics,
+        )
 
     else:  # vectorized
         logger.info(f"Running vectorized backtest for {strategy.name}")
@@ -791,6 +983,7 @@ def run_backtest(
             initial_capital=backtest_config.get("initial_capital", 1_000_000),
             commission_pct=backtest_config.get("commission_pct", 0.001),
             slippage_pct=backtest_config.get("slippage_pct", 0.0005),
+            symbol_adv=symbol_adv,  # CRITICAL: Pass per-symbol ADV for market impact
         )
 
         result = engine.run(strategy, data, features)
@@ -854,14 +1047,26 @@ def train_ml_model(
     features: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
 ) -> TrainingResult:
-    """Train ML model with full pipeline."""
-    logger.info("Training ML model...")
+    """
+    Train ML model with proper purged cross-validation.
+
+    CRITICAL (JPMorgan-level requirement):
+    This function implements MANUAL CV loop to ensure purge gap is properly applied.
+    sklearn's cross_validate() does NOT apply purge gap correctly.
+
+    The proper CV loop:
+    1. Use cv.split(X, y) to get train/test indices with purging
+    2. For each fold: fit model ONLY on train_idx, score on test_idx
+    3. Verify no index overlap between train and test (leakage check)
+    """
+    logger.info("Training ML model with purged cross-validation...")
 
     train_config = config.get("training", {})
 
     # Prepare data
     all_features = []
     all_targets = []
+    all_indices = []
 
     for symbol, df in features.items():
         target = df["close"].pct_change().shift(-1)
@@ -876,6 +1081,7 @@ def train_ml_model(
 
         all_features.append(X)
         all_targets.append(y)
+        all_indices.append(pd.Series(range(len(X)), name=symbol))
 
     X_train = pd.concat(all_features, axis=0)
     y_train = pd.concat(all_targets, axis=0)
@@ -894,7 +1100,6 @@ def train_ml_model(
 
     # Create model
     model_type = train_config.get("model_type", "lightgbm")
-    model = ModelFactory.create(model_type)
 
     # CRITICAL: Calculate purge gap dynamically based on feature lookback
     purge_gap_setting = train_config.get("purge_gap", "auto")
@@ -920,28 +1125,60 @@ def train_ml_model(
     else:
         embargo_pct = float(embargo_setting)
 
-    # Cross-validation - use CPCV for institutional-grade validation
-    cv_type = train_config.get("cv_type", "combinatorial_purged")
+    # Cross-validation setup - check walk-forward config first
+    backtest_config = config.get("backtest", {})
+    walk_forward_config = backtest_config.get("walk_forward", {})
+    use_walk_forward = walk_forward_config.get("enabled", False)
 
-    if cv_type == "combinatorial_purged":
-        cv = CombinatorialPurgedKFoldCV(
-            n_splits=train_config.get("cv_splits", 6),
-            n_test_splits=train_config.get("n_test_splits", 2),
+    if use_walk_forward:
+        # Walk-Forward Validation (simulates realistic model deployment)
+        # Convert days to bars (assuming 26 bars per day for 15-min data)
+        bars_per_day = 26
+        train_period = walk_forward_config.get("train_period_days", 126) * bars_per_day
+        test_period = walk_forward_config.get("test_period_days", 21) * bars_per_day
+        expanding = walk_forward_config.get("anchored", False)
+
+        cv = WalkForwardValidator(
+            train_period=train_period,
+            test_period=test_period,
+            step_size=test_period,  # Non-overlapping test periods
+            expanding=expanding,
             purge_gap=purge_gap,
-            embargo_pct=embargo_pct,
+            embargo_bars=int(embargo_pct * test_period),
+            min_train_samples=train_config.get("min_train_samples", 1000),
         )
-        logger.info(f"Using CombinatorialPurgedKFoldCV with purge_gap={purge_gap}")
+        logger.info(
+            f"Using WalkForwardValidator: train={train_period} bars, test={test_period} bars, "
+            f"{'expanding' if expanding else 'sliding'} window, purge_gap={purge_gap}"
+        )
     else:
-        cv = PurgedKFoldCV(
-            n_splits=train_config.get("cv_splits", 5),
-            purge_gap=purge_gap,
-            embargo_pct=embargo_pct,
-            prediction_horizon=train_config.get("prediction_horizon", 5),
-            max_feature_lookback=train_config.get("max_feature_lookback", 200),
-        )
-        logger.info(f"Using PurgedKFoldCV with purge_gap={purge_gap}")
+        # Standard cross-validation - use CPCV for institutional-grade validation
+        cv_type = train_config.get("cv_type", "combinatorial_purged")
 
-    # Optuna optimization if requested
+        if cv_type == "combinatorial_purged":
+            cv = CombinatorialPurgedKFoldCV(
+                n_splits=train_config.get("cv_splits", 6),
+                n_test_splits=train_config.get("n_test_splits", 2),
+                purge_gap=purge_gap,
+                embargo_pct=embargo_pct,
+            )
+            logger.info(f"Using CombinatorialPurgedKFoldCV with purge_gap={purge_gap}")
+        else:
+            cv = PurgedKFoldCV(
+                n_splits=train_config.get("cv_splits", 5),
+                purge_gap=purge_gap,
+                embargo_pct=embargo_pct,
+                prediction_horizon=train_config.get("prediction_horizon", 5),
+                max_feature_lookback=train_config.get("max_feature_lookback", 200),
+            )
+            logger.info(f"Using PurgedKFoldCV with purge_gap={purge_gap}")
+
+    # Convert to numpy for training
+    X_np = X_train.values
+    y_np = y_train.values
+
+    # Optuna optimization if requested (uses proper manual CV internally)
+    best_params = {}
     if train_config.get("optimize", False):
         logger.info("Running Optuna hyperparameter optimization...")
         optimizer = OptunaOptimizer(
@@ -950,25 +1187,157 @@ def train_ml_model(
             metric="sharpe_ratio",
             n_trials=train_config.get("optuna_trials", 50),
         )
-        best_params = optimizer.optimize(X_train.values, y_train.values)
-        model = ModelFactory.create(model_type, **best_params)
-
+        best_params = optimizer.optimize(X_np, y_np)
         if tracker:
             tracker.log_params({"best_params": best_params})
 
-    # Train
-    trainer = Trainer(model=model, cv=cv)
-    result = trainer.train(X_train.values, y_train.values)
+    # ==========================================================================
+    # CRITICAL: MANUAL CV LOOP WITH LEAKAGE VERIFICATION
+    # This replaces sklearn's cross_validate() which doesn't apply purge properly
+    # ==========================================================================
+    logger.info("Starting manual purged cross-validation loop...")
+
+    fold_scores = []
+    fold_predictions = []
+    fold_train_scores = []
+    total_leakage_checks = 0
+    leakage_detected = False
+
+    for fold_idx, (train_idx, test_idx) in enumerate(cv.split(X_np, y_np)):
+        # CRITICAL: Leakage verification - train and test indices must not overlap
+        train_set = set(train_idx)
+        test_set = set(test_idx)
+        overlap = train_set.intersection(test_set)
+
+        if overlap:
+            logger.error(
+                f"CRITICAL LEAKAGE DETECTED in fold {fold_idx}: "
+                f"{len(overlap)} overlapping indices!"
+            )
+            leakage_detected = True
+            continue
+
+        # Verify temporal separation (test indices should not precede train indices after purge)
+        if len(train_idx) > 0 and len(test_idx) > 0:
+            # Find the gap between training end and test start for each segment
+            train_max_before_test = train_idx[train_idx < test_idx.min()].max() if any(train_idx < test_idx.min()) else None
+            if train_max_before_test is not None:
+                actual_gap = test_idx.min() - train_max_before_test
+                if actual_gap < purge_gap:
+                    logger.warning(
+                        f"Fold {fold_idx}: Insufficient gap between train and test "
+                        f"(actual: {actual_gap}, required: {purge_gap})"
+                    )
+
+        total_leakage_checks += 1
+
+        # Split data for this fold
+        X_fold_train, X_fold_test = X_np[train_idx], X_np[test_idx]
+        y_fold_train, y_fold_test = y_np[train_idx], y_np[test_idx]
+
+        logger.debug(
+            f"Fold {fold_idx}: train={len(train_idx)}, test={len(test_idx)}, "
+            f"train_range=[{train_idx.min()}-{train_idx.max()}], "
+            f"test_range=[{test_idx.min()}-{test_idx.max()}]"
+        )
+
+        # Create fresh model for each fold
+        model = ModelFactory.create(model_type, **best_params)
+
+        # Train on this fold's training data ONLY
+        try:
+            model.fit(X_fold_train, y_fold_train)
+        except Exception as e:
+            logger.error(f"Fold {fold_idx} training failed: {e}")
+            continue
+
+        # Score on test data
+        try:
+            y_pred = model.predict(X_fold_test)
+            fold_predictions.append((test_idx, y_pred))
+
+            # Calculate metrics
+            # Correlation-based score (like IC - Information Coefficient)
+            if len(y_fold_test) > 10:
+                from scipy.stats import spearmanr
+                ic, _ = spearmanr(y_fold_test, y_pred)
+                fold_scores.append(ic if not np.isnan(ic) else 0.0)
+            else:
+                fold_scores.append(0.0)
+
+            # Also calculate train score for overfitting detection
+            y_train_pred = model.predict(X_fold_train)
+            if len(y_fold_train) > 10:
+                train_ic, _ = spearmanr(y_fold_train, y_train_pred)
+                fold_train_scores.append(train_ic if not np.isnan(train_ic) else 0.0)
+
+            logger.info(
+                f"Fold {fold_idx}: Test IC={fold_scores[-1]:.4f}, "
+                f"Train IC={fold_train_scores[-1] if fold_train_scores else 0:.4f}"
+            )
+
+        except Exception as e:
+            logger.error(f"Fold {fold_idx} prediction failed: {e}")
+            fold_scores.append(0.0)
+
+    # Summarize results
+    if leakage_detected:
+        logger.error("CRITICAL: Data leakage was detected during cross-validation!")
+
+    if not fold_scores:
+        logger.error("No valid CV folds completed!")
+        fold_scores = [0.0]
+
+    cv_scores = np.array(fold_scores)
+    mean_score = cv_scores.mean()
+    std_score = cv_scores.std()
+
+    # Overfitting check: compare train vs test scores
+    if fold_train_scores:
+        train_mean = np.mean(fold_train_scores)
+        overfit_ratio = train_mean / mean_score if mean_score != 0 else float('inf')
+        if overfit_ratio > 2.0:
+            logger.warning(
+                f"OVERFITTING WARNING: Train IC ({train_mean:.4f}) is {overfit_ratio:.1f}x "
+                f"higher than Test IC ({mean_score:.4f})"
+            )
+
+    logger.info(
+        f"CV Complete: Mean IC={mean_score:.4f} (+/- {std_score:.4f}), "
+        f"Folds={len(fold_scores)}, Leakage checks={total_leakage_checks}"
+    )
+
+    # Train final model on all data
+    final_model = ModelFactory.create(model_type, **best_params)
+    final_model.fit(X_np, y_np)
 
     # Log to MLflow
     if tracker:
         tracker.log_metrics({
-            "cv_score_mean": result.cv_scores.mean(),
-            "cv_score_std": result.cv_scores.std(),
+            "cv_score_mean": mean_score,
+            "cv_score_std": std_score,
+            "n_folds": len(fold_scores),
+            "leakage_detected": int(leakage_detected),
         })
         tracker.end_run()
 
-    logger.info(f"Training complete - CV Score: {result.cv_scores.mean():.4f}")
+    # Create result object
+    result = TrainingResult(
+        model=final_model,
+        cv_scores=cv_scores,
+        feature_names=list(X_train.columns),
+        best_params=best_params,
+        metadata={
+            "cv_type": cv_type,
+            "purge_gap": purge_gap,
+            "embargo_pct": embargo_pct,
+            "leakage_detected": leakage_detected,
+            "n_samples": len(X_train),
+            "n_features": len(X_train.columns),
+        }
+    )
+
+    logger.info(f"Training complete - CV Score: {mean_score:.4f}")
 
     return result
 
@@ -1129,12 +1498,13 @@ def main():
         help="Strategy to run",
     )
 
-    # Engine
+    # Engine - Default is event-driven for JPMorgan-level realism
+    # Use --engine vectorized for faster prototyping
     parser.add_argument(
         "--engine",
         choices=["vectorized", "event-driven"],
-        default="vectorized",
-        help="Backtest engine type",
+        default="event-driven",
+        help="Backtest engine type (event-driven=realistic, vectorized=fast)",
     )
 
     # ML
@@ -1183,11 +1553,12 @@ def main():
     config["training"]["model_type"] = args.model
     config["training"]["optimize"] = args.optimize
 
-    # Load data
+    # Load data (with TimescaleDB support if configured)
     data = load_data(
         args.data_path,
         args.symbols,
         config["data"].get("min_bars", 100),
+        config=config,
     )
 
     if not data:
@@ -1195,8 +1566,8 @@ def main():
         logger.info("Run: python scripts/generate_sample_data.py")
         sys.exit(1)
 
-    # Generate features
-    features = generate_features(data, config)
+    # Generate features with leakage-safe pipeline
+    features, feature_pipelines = generate_features(data, config)
 
     # Training mode
     if args.mode in ["train", "full"]:

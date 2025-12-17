@@ -1,0 +1,712 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2025-12-17T18:27:19.244756",
+  "data_source": "C:\\Users\\enera\\Desktop\\AlphaTrade_System\\data\\raw",
+  "symbols": {
+    "AAPL": {
+      "symbol": "AAPL",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 72261,
+      "avg_daily_value": 163559960.3448584,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "ABBV": {
+      "symbol": "ABBV",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 42154,
+      "avg_daily_value": 19509340.18833295,
+      "sector": "healthcare",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "ADBE": {
+      "symbol": "ADBE",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 44370,
+      "avg_daily_value": 31873694.85478256,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "AMGN": {
+      "symbol": "AMGN",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 37485,
+      "avg_daily_value": 16562428.248861479,
+      "sector": "healthcare",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "AMZN": {
+      "symbol": "AMZN",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 67691,
+      "avg_daily_value": 134222335.67538393,
+      "sector": "consumer_discretionary",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "AVGO": {
+      "symbol": "AVGO",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 48139,
+      "avg_daily_value": 51849455.483234815,
+      "sector": null,
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "AXP": {
+      "symbol": "AXP",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 41120,
+      "avg_daily_value": 14079649.143751938,
+      "sector": "financials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "BA": {
+      "symbol": "BA",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 62893,
+      "avg_daily_value": 29803752.132711735,
+      "sector": "industrials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "BAC": {
+      "symbol": "BAC",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 66660,
+      "avg_daily_value": 25082656.49866567,
+      "sector": "financials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "BRK.B": {
+      "symbol": "BRK.B",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 50187,
+      "avg_daily_value": 26166446.33496685,
+      "sector": "financials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "CAT": {
+      "symbol": "CAT",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 43175,
+      "avg_daily_value": 17233233.1309804,
+      "sector": "industrials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "COST": {
+      "symbol": "COST",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 42279,
+      "avg_daily_value": 28515562.44478401,
+      "sector": "consumer_staples",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "CRM": {
+      "symbol": "CRM",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 51331,
+      "avg_daily_value": 29616181.377577975,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "CSCO": {
+      "symbol": "CSCO",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 54671,
+      "avg_daily_value": 16645652.385089261,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "CVX": {
+      "symbol": "CVX",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 54203,
+      "avg_daily_value": 24295219.227070875,
+      "sector": "energy",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "DIS": {
+      "symbol": "DIS",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 62039,
+      "avg_daily_value": 21662974.470531672,
+      "sector": "consumer_discretionary",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "DOW": {
+      "symbol": "DOW",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 43119,
+      "avg_daily_value": 6309720.016880901,
+      "sector": null,
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "GOOGL": {
+      "symbol": "GOOGL",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 62488,
+      "avg_daily_value": 67627332.45117545,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "GS": {
+      "symbol": "GS",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 44198,
+      "avg_daily_value": 21708482.752593026,
+      "sector": "financials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "HD": {
+      "symbol": "HD",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 42712,
+      "avg_daily_value": 26519321.35015066,
+      "sector": "consumer_discretionary",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "HON": {
+      "symbol": "HON",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 37656,
+      "avg_daily_value": 14948109.718334567,
+      "sector": "industrials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "IBM": {
+      "symbol": "IBM",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 46363,
+      "avg_daily_value": 15312174.09854337,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "INTC": {
+      "symbol": "INTC",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 70444,
+      "avg_daily_value": 22529913.43010431,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "JNJ": {
+      "symbol": "JNJ",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 44975,
+      "avg_daily_value": 26415296.94721664,
+      "sector": "healthcare",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "JPM": {
+      "symbol": "JPM",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 54553,
+      "avg_daily_value": 32478878.76027363,
+      "sector": "financials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "KO": {
+      "symbol": "KO",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 56872,
+      "avg_daily_value": 14635938.139447805,
+      "sector": "consumer_staples",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "LLY": {
+      "symbol": "LLY",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 43194,
+      "avg_daily_value": 35387467.61080527,
+      "sector": "healthcare",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "MA": {
+      "symbol": "MA",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 37613,
+      "avg_daily_value": 30407752.178402238,
+      "sector": "financials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "MCD": {
+      "symbol": "MCD",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 40724,
+      "avg_daily_value": 18073866.334717806,
+      "sector": "consumer_discretionary",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "META": {
+      "symbol": "META",
+      "listing_date": "2021-06-30",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-06-30",
+      "last_data_date": "2025-08-01",
+      "n_bars": 54699,
+      "avg_daily_value": 89203373.9916441,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "MMM": {
+      "symbol": "MMM",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 41596,
+      "avg_daily_value": 11183785.734657006,
+      "sector": null,
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "MRK": {
+      "symbol": "MRK",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 47686,
+      "avg_daily_value": 18839713.818011343,
+      "sector": "healthcare",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "MSFT": {
+      "symbol": "MSFT",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 70866,
+      "avg_daily_value": 111071130.6255877,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "NKE": {
+      "symbol": "NKE",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 54167,
+      "avg_daily_value": 17079660.160215095,
+      "sector": "consumer_discretionary",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "NVDA": {
+      "symbol": "NVDA",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 68979,
+      "avg_daily_value": 289794390.39257944,
+      "sector": "technology",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "PEP": {
+      "symbol": "PEP",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 43026,
+      "avg_daily_value": 17684837.58035765,
+      "sector": "consumer_staples",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "PG": {
+      "symbol": "PG",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 42270,
+      "avg_daily_value": 22436414.352363233,
+      "sector": "consumer_staples",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "TMO": {
+      "symbol": "TMO",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 33685,
+      "avg_daily_value": 23782215.67953067,
+      "sector": "healthcare",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "TRV": {
+      "symbol": "TRV",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 33218,
+      "avg_daily_value": 6504812.470310874,
+      "sector": null,
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "TSLA": {
+      "symbol": "TSLA",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 67420,
+      "avg_daily_value": 373772731.8851949,
+      "sector": "consumer_discretionary",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "UNH": {
+      "symbol": "UNH",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 40885,
+      "avg_daily_value": 45380325.34511407,
+      "sector": "healthcare",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "V": {
+      "symbol": "V",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 45315,
+      "avg_daily_value": 34011094.8120306,
+      "sector": "financials",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "VZ": {
+      "symbol": "VZ",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 59159,
+      "avg_daily_value": 14772098.586621027,
+      "sector": "communication",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "WBA": {
+      "symbol": "WBA",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 52270,
+      "avg_daily_value": 4899681.054391814,
+      "sector": null,
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "WMT": {
+      "symbol": "WMT",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 53569,
+      "avg_daily_value": 21125727.32614687,
+      "sector": "consumer_staples",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    },
+    "XOM": {
+      "symbol": "XOM",
+      "listing_date": "2021-01-04",
+      "delisting_date": "2025-08-01",
+      "is_active": false,
+      "first_data_date": "2021-01-04",
+      "last_data_date": "2025-08-01",
+      "n_bars": 62023,
+      "avg_daily_value": 28821628.627196167,
+      "sector": "energy",
+      "data_quality": {
+        "days_since_update": 137,
+        "has_volume": true
+      }
+    }
+  },
+  "summary": {
+    "total_symbols": 46,
+    "active_symbols": 0,
+    "delisted_symbols": 46,
+    "sectors": {
+      "technology": 10,
+      "healthcare": 7,
+      "consumer_discretionary": 6,
+      "financials": 7,
+      "industrials": 3,
+      "consumer_staples": 5,
+      "energy": 2,
+      "communication": 1
+    }
+  }
+}

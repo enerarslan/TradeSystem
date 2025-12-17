@@ -72,23 +72,45 @@ class DataLoader:
 
     def _discover_symbols(self) -> list[str]:
         """Discover available symbols from data directory."""
-        pattern = f"*_15min.{self.file_format}"
-        files = list(self.data_dir.glob(pattern))
+        # Try primary format first (SYMBOL_15min.csv)
+        pattern_15min = f"*_15min.{self.file_format}"
+        files_15min = list(self.data_dir.glob(pattern_15min))
 
         symbols = []
-        for f in files:
+        for f in files_15min:
             # Extract symbol from filename (e.g., AAPL_15min.csv -> AAPL)
             symbol = f.stem.replace("_15min", "")
             if symbol and not symbol.startswith("."):
                 symbols.append(symbol)
+
+        # If no _15min files found, try fallback format (SYMBOL.csv)
+        if not symbols:
+            pattern_simple = f"*.{self.file_format}"
+            files_simple = list(self.data_dir.glob(pattern_simple))
+            for f in files_simple:
+                symbol = f.stem
+                # Exclude files that look like metadata or configs
+                if symbol and not symbol.startswith(".") and symbol not in ["symbol_metadata"]:
+                    symbols.append(symbol)
+            if symbols:
+                logger.info(f"Using fallback file format (SYMBOL.{self.file_format})")
 
         symbols.sort()
         logger.info(f"Discovered {len(symbols)} symbols")
         return symbols
 
     def _get_file_path(self, symbol: str) -> Path:
-        """Get file path for a symbol."""
-        return self.data_dir / f"{symbol}_15min.{self.file_format}"
+        """Get file path for a symbol, with fallback support."""
+        # Primary format
+        primary_path = self.data_dir / f"{symbol}_15min.{self.file_format}"
+        if primary_path.exists():
+            return primary_path
+        # Fallback format
+        fallback_path = self.data_dir / f"{symbol}.{self.file_format}"
+        if fallback_path.exists():
+            return fallback_path
+        # Return primary path (will raise FileNotFoundError later)
+        return primary_path
 
     def _load_file(self, file_path: Path) -> pd.DataFrame:
         """
@@ -110,11 +132,29 @@ class DataLoader:
         suffix = file_path.suffix.lower().lstrip(".")
 
         if suffix == "csv":
-            df = pd.read_csv(
-                file_path,
-                parse_dates=[self.date_column],
-                index_col=None,
-            )
+            # First read to detect columns
+            df = pd.read_csv(file_path, nrows=0)
+            available_cols = df.columns.tolist()
+
+            # Detect date column (support both 'timestamp' and 'date')
+            date_col = None
+            for col_name in [self.date_column, "timestamp", "date", "Date", "Timestamp"]:
+                if col_name in available_cols:
+                    date_col = col_name
+                    break
+
+            # Read the full file
+            if date_col:
+                df = pd.read_csv(
+                    file_path,
+                    parse_dates=[date_col],
+                    index_col=None,
+                )
+                # Normalize column name to 'timestamp'
+                if date_col != "timestamp":
+                    df = df.rename(columns={date_col: "timestamp"})
+            else:
+                df = pd.read_csv(file_path, index_col=None)
         elif suffix == "parquet":
             df = pd.read_parquet(file_path)
         elif suffix == "feather":
@@ -150,8 +190,11 @@ class DataLoader:
             file_path = self._get_file_path(symbol)
             df = self._load_file(file_path)
 
-            # Set datetime index
-            if self.date_column in df.columns:
+            # Set datetime index (check for 'timestamp' first, then fallback)
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df = df.set_index("timestamp")
+            elif self.date_column in df.columns:
                 df[self.date_column] = pd.to_datetime(df[self.date_column])
                 df = df.set_index(self.date_column)
             elif not isinstance(df.index, pd.DatetimeIndex):

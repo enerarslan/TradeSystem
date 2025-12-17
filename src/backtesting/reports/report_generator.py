@@ -26,6 +26,7 @@ except ImportError:
     HAS_PLOTLY = False
 
 from src.backtesting.engine import BacktestResult
+from src.backtesting.metrics import calculate_sharpe_statistics, SharpeStatistics
 
 
 class ReportGenerator:
@@ -37,6 +38,7 @@ class ReportGenerator:
     - Interactive charts
     - Trade analysis
     - Risk metrics
+    - Institutional-grade Sharpe statistics (DSR, PSR, MinTRL)
     """
 
     def __init__(
@@ -44,6 +46,7 @@ class ReportGenerator:
         result: BacktestResult,
         benchmark_result: BacktestResult | None = None,
         output_dir: Path | str | None = None,
+        n_trials: int = 1,
     ) -> None:
         """
         Initialize report generator.
@@ -52,11 +55,33 @@ class ReportGenerator:
             result: Backtest result
             benchmark_result: Optional benchmark result
             output_dir: Output directory for reports
+            n_trials: Number of strategies tested (for DSR calculation)
         """
         self.result = result
         self.benchmark = benchmark_result
         self.output_dir = Path(output_dir) if output_dir else Path("reports")
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.n_trials = n_trials
+
+        # Calculate institutional Sharpe statistics
+        self.sharpe_stats = self._calculate_sharpe_statistics()
+
+    def _calculate_sharpe_statistics(self) -> SharpeStatistics | None:
+        """Calculate institutional-grade Sharpe statistics."""
+        try:
+            if self.result.returns is None or len(self.result.returns) < 50:
+                return None
+
+            return calculate_sharpe_statistics(
+                returns=self.result.returns,
+                n_trials=self.n_trials,
+                benchmark_sharpe=0.0,
+                risk_free_rate=0.05,
+                periods_per_year=252 * 26,  # 15-min bars
+            )
+        except Exception as e:
+            logger.warning(f"Could not calculate Sharpe statistics: {e}")
+            return None
 
     def generate_html(self, filename: str | None = None) -> Path:
         """
@@ -412,6 +437,39 @@ class ReportGenerator:
                 <div class="metric-label">Profit Factor</div>
             </div>
         </div>
+
+        <!-- Institutional Sharpe Statistics (JPMorgan-level) -->
+        <h2>Statistical Significance (Institutional Metrics)</h2>
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-value {'positive' if self.sharpe_stats and self.sharpe_stats.deflated_sharpe > 0 else 'negative'}">
+                    {self.sharpe_stats.deflated_sharpe if self.sharpe_stats else 0:.3f}
+                </div>
+                <div class="metric-label">Deflated Sharpe Ratio (DSR)</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value {'positive' if self.sharpe_stats and self.sharpe_stats.probabilistic_sharpe > 0.95 else ''}">
+                    {(self.sharpe_stats.probabilistic_sharpe * 100) if self.sharpe_stats else 0:.1f}%
+                </div>
+                <div class="metric-label">Probabilistic Sharpe (PSR)</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value">
+                    {self.sharpe_stats.min_track_record_months if self.sharpe_stats and self.sharpe_stats.min_track_record_months < 1000 else 'N/A':.1f}
+                </div>
+                <div class="metric-label">Min Track Record (months)</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value {'positive' if self.sharpe_stats and self.sharpe_stats.is_significant else 'negative'}">
+                    {'YES' if self.sharpe_stats and self.sharpe_stats.is_significant else 'NO'}
+                </div>
+                <div class="metric-label">Statistically Significant</div>
+            </div>
+        </div>
+        <p style="color: #888; font-size: 12px; text-align: center;">
+            DSR > 0 indicates skill above random chance. PSR > 95% indicates statistical significance.
+            {f'Based on {self.n_trials} strategy trials tested.' if self.n_trials > 1 else ''}
+        </p>
 
         <div class="chart-container">
             <h3>Equity Curve</h3>
