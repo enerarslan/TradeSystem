@@ -32,13 +32,31 @@ import pandas as pd
 import joblib
 
 # Optional GPU detection
+CUDA_AVAILABLE = False
+MPS_AVAILABLE = False
+LIGHTGBM_GPU_AVAILABLE = False
+
 try:
     import torch
     CUDA_AVAILABLE = torch.cuda.is_available()
     MPS_AVAILABLE = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
 except ImportError:
-    CUDA_AVAILABLE = False
-    MPS_AVAILABLE = False
+    pass
+
+# Check LightGBM GPU support independently (doesn't need PyTorch)
+try:
+    import lightgbm as lgb
+    import numpy as np
+    # Quick test to check GPU support
+    test_data = lgb.Dataset(np.array([[1,2],[3,4]], dtype=np.float32), label=np.array([0,1], dtype=np.float32))
+    test_params = {'device': 'gpu', 'verbose': -1, 'num_iterations': 1}
+    try:
+        lgb.train(test_params, test_data, num_boost_round=1)
+        LIGHTGBM_GPU_AVAILABLE = True
+    except lgb.basic.LightGBMError:
+        LIGHTGBM_GPU_AVAILABLE = False
+except ImportError:
+    pass
 
 # Optional MLflow
 try:
@@ -148,7 +166,7 @@ class PipelineResult:
         ]
 
         for stage, result in self.stage_results.items():
-            status_icon = "✓" if result.status == PipelineStatus.COMPLETED else "✗"
+            status_icon = "[OK]" if result.status == PipelineStatus.COMPLETED else "[FAIL]"
             lines.append(f"  {status_icon} {stage.value}: {result.duration_seconds:.1f}s")
 
         if self.metadata.get("final_metrics"):
@@ -222,9 +240,10 @@ class TrainingPipeline:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        # GPU Configuration
-        self.use_gpu = use_gpu and (CUDA_AVAILABLE or MPS_AVAILABLE)
+        # GPU Configuration - check both PyTorch CUDA and LightGBM GPU
+        self.use_gpu = use_gpu and (CUDA_AVAILABLE or MPS_AVAILABLE or LIGHTGBM_GPU_AVAILABLE)
         self.device = self._detect_device() if self.use_gpu else "cpu"
+        self.lightgbm_gpu = LIGHTGBM_GPU_AVAILABLE  # Track LightGBM GPU separately
 
         # MLflow Configuration
         self.use_mlflow = use_mlflow and MLFLOW_AVAILABLE
@@ -237,7 +256,15 @@ class TrainingPipeline:
 
         # Log capabilities
         logger.info(f"Pipeline initialized:")
-        logger.info(f"  GPU: {'ENABLED (' + self.device + ')' if self.use_gpu else 'DISABLED'}")
+        gpu_status = "DISABLED"
+        if self.use_gpu:
+            if self.device == "cuda":
+                gpu_status = f"ENABLED (CUDA)"
+            elif self.device == "mps":
+                gpu_status = f"ENABLED (MPS)"
+            elif self.lightgbm_gpu:
+                gpu_status = f"ENABLED (LightGBM GPU)"
+        logger.info(f"  GPU: {gpu_status}")
         logger.info(f"  MLflow: {'ENABLED' if self.use_mlflow else 'DISABLED'}")
         logger.info(f"  TimescaleDB: {'ENABLED' if self.use_timescaledb else 'DISABLED'}")
 
@@ -265,6 +292,9 @@ class TrainingPipeline:
         elif MPS_AVAILABLE:
             logger.info("Apple MPS (Metal) detected")
             return "mps"
+        elif LIGHTGBM_GPU_AVAILABLE:
+            logger.info("LightGBM GPU support detected (no PyTorch CUDA)")
+            return "lightgbm_gpu"
         return "cpu"
 
     def _init_mlflow(self, run_name: str) -> None:
@@ -819,10 +849,13 @@ class TrainingPipeline:
         # Handle purge_gap - can be "auto" string or int
         purge_gap_setting = train_config.get("purge_gap", 50)
         if purge_gap_setting == "auto" or not isinstance(purge_gap_setting, (int, float)):
-            # Calculate auto purge gap: prediction_horizon + max_feature_lookback + buffer
-            max_lookback = train_config.get("max_feature_lookback", 200)
-            purge_gap = prediction_horizon + max_lookback + 10  # 10 bar buffer
-            logger.info(f"Auto-calculated purge_gap: {purge_gap}")
+            # Calculate auto purge gap based on prediction horizon
+            # For financial data, purge gap should be roughly 2x prediction_horizon
+            # to ensure no look-ahead bias, but not too large to waste data
+            # Use prediction_horizon * 2 + small buffer, NOT max_feature_lookback
+            # max_feature_lookback is for feature calculation, not purging
+            purge_gap = prediction_horizon * 2 + 5  # Reasonable purge: 2x horizon + buffer
+            logger.info(f"Auto-calculated purge_gap: {purge_gap} (prediction_horizon={prediction_horizon})")
         else:
             purge_gap = int(purge_gap_setting)
 
@@ -836,11 +869,35 @@ class TrainingPipeline:
         if target is None:
             raise ValueError(f"Target column '{target_col}' not found")
 
+        # Clean features before alignment
+        features_clean = self._features.copy()
+
+        # Drop columns that are entirely NaN
+        all_nan_cols = features_clean.columns[features_clean.isna().all()].tolist()
+        if all_nan_cols:
+            logger.warning(f"Dropping {len(all_nan_cols)} columns that are all NaN: {all_nan_cols}")
+            features_clean = features_clean.drop(columns=all_nan_cols)
+
+        # Forward fill then backward fill remaining NaN values
+        features_clean = features_clean.ffill().bfill()
+
+        # Log remaining NaN info
+        remaining_nan = features_clean.isna().sum().sum()
+        if remaining_nan > 0:
+            logger.warning(f"Still have {remaining_nan} NaN values after ffill/bfill")
+            # Fill any remaining with 0
+            features_clean = features_clean.fillna(0)
+
         # Align features and target
         aligned = pd.DataFrame({
-            **self._features,
+            **features_clean,
             "target": target,
-        }).dropna()
+        })
+
+        # Only drop rows where target is NaN (not features, since we cleaned those)
+        aligned = aligned.dropna(subset=["target"])
+
+        logger.info(f"After alignment: {len(aligned)} samples, {len(features_clean.columns)} features")
 
         X = aligned.drop(columns=["target"])
         y = aligned["target"]
@@ -981,14 +1038,13 @@ class TrainingPipeline:
         model_type_lower = model_type.lower()
 
         if "lightgbm" in model_type_lower:
-            # LightGBM GPU parameters
-            return {
-                "device": "gpu",
-                "gpu_platform_id": 0,
-                "gpu_device_id": 0,
-            }
+            # LightGBM GPU parameters - only use device=gpu, no platform/device ids
+            # which can cause issues with empty string parsing
+            if self.lightgbm_gpu or self.device in ("cuda", "lightgbm_gpu"):
+                return {"device": "gpu"}
+            return {}
         elif "xgboost" in model_type_lower:
-            # XGBoost GPU parameters
+            # XGBoost GPU parameters - only works with CUDA
             if self.device == "cuda":
                 return {
                     "tree_method": "gpu_hist",
@@ -998,10 +1054,12 @@ class TrainingPipeline:
             return {}
         elif "catboost" in model_type_lower:
             # CatBoost GPU parameters
-            return {
-                "task_type": "GPU",
-                "devices": "0",
-            }
+            if self.device == "cuda" or self.lightgbm_gpu:
+                return {
+                    "task_type": "GPU",
+                    "devices": "0",
+                }
+            return {}
 
         return {}
 

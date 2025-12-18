@@ -2149,17 +2149,21 @@ def main():
                 timescale_config=timescale_config,
             )
 
-            # Merge all data into single DataFrame for pipeline
-            merged_data = []
-            for symbol, df in data.items():
-                df_copy = df.copy()
-                df_copy["symbol"] = symbol
-                merged_data.append(df_copy)
+            # For TrainingPipeline, we train on a single symbol or the largest one
+            # Multi-symbol requires symbol-aware feature generation which is complex
+            # Select the symbol with most data for best model quality
+            if len(data) > 1:
+                symbol_sizes = {sym: len(df) for sym, df in data.items()}
+                best_symbol = max(symbol_sizes, key=symbol_sizes.get)
+                logger.info(f"Multi-symbol mode: selecting '{best_symbol}' ({symbol_sizes[best_symbol]} bars) for training")
+                logger.info(f"Available symbols: {list(data.keys())}")
+                combined_data = data[best_symbol].copy()
+            else:
+                # Single symbol
+                best_symbol = list(data.keys())[0]
+                combined_data = data[best_symbol].copy()
 
-            combined_data = pd.concat(merged_data, ignore_index=False)
-            combined_data = combined_data.sort_index()
-
-            logger.info(f"Pipeline input: {len(combined_data)} rows, {len(data)} symbols")
+            logger.info(f"Pipeline input: {len(combined_data)} rows from {best_symbol}")
 
             # Run the complete pipeline
             try:

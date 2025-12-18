@@ -145,6 +145,18 @@ class PurgedKFoldCV:
         # Calculate embargo period (applied after each test set)
         embargo = int(self.embargo_pct * fold_size)
 
+        # Log diagnostic info
+        logger.info(f"PurgedKFoldCV split: n_samples={n_samples}, n_splits={self.n_splits}, "
+                   f"fold_size={fold_size}, purge_gap={self.purge_gap}, embargo={embargo}")
+
+        # Adjust purge_gap if it's too large for the data
+        effective_purge_gap = self.purge_gap
+        max_reasonable_purge = fold_size // 2  # Purge shouldn't exceed half of fold size
+        if effective_purge_gap > max_reasonable_purge and max_reasonable_purge > 0:
+            logger.warning(f"Purge gap ({self.purge_gap}) is too large for data. "
+                          f"Reducing to {max_reasonable_purge}")
+            effective_purge_gap = max_reasonable_purge
+
         for i in range(self.n_splits):
             # Determine test indices for this fold
             test_start = i * fold_size
@@ -156,7 +168,7 @@ class PurgedKFoldCV:
 
             # Before test set (with purge gap)
             if test_start > 0:
-                train_before_end = test_start - self.purge_gap
+                train_before_end = test_start - effective_purge_gap
                 if train_before_end > 0:
                     train_indices.extend(indices[:train_before_end])
 
@@ -168,8 +180,15 @@ class PurgedKFoldCV:
 
             train_indices = np.array(train_indices)
 
+            logger.debug(f"Fold {i}: test=[{test_start}:{test_end}], "
+                        f"train_before_end={test_start - effective_purge_gap if test_start > 0 else 'N/A'}, "
+                        f"train_after_start={test_end + embargo if test_end < n_samples else 'N/A'}, "
+                        f"train_samples={len(train_indices)}")
+
             if len(train_indices) == 0:
-                logger.warning(f"Fold {i}: No training samples after purging")
+                logger.warning(f"Fold {i}: No training samples after purging "
+                              f"(test_start={test_start}, test_end={test_end}, "
+                              f"purge_gap={effective_purge_gap}, embargo={embargo})")
                 continue
 
             yield train_indices, test_indices
