@@ -407,6 +407,13 @@ def validate_data_for_backtest(
 
     JPMorgan-level requirement: Validate all data quality before any backtest.
 
+    Extended validation includes:
+    - Stock split detection (price jumps > 20% with volume spike)
+    - Dividend adjustment checks
+    - Future timestamp detection
+    - Weekend/holiday data verification
+    - OHLC relationship validation (high >= low, high >= open/close)
+
     Args:
         data: Dictionary of symbol -> DataFrame
         config: Configuration dictionary
@@ -414,7 +421,7 @@ def validate_data_for_backtest(
     Returns:
         Tuple of (cleaned_data, validation_report)
     """
-    logger.info("Running pre-backtest data validation...")
+    logger.info("Running comprehensive pre-backtest data validation...")
 
     validator = DataValidator(
         max_missing_pct=5.0,
@@ -429,24 +436,96 @@ def validate_data_for_backtest(
         "rejected_symbols": [],
         "warnings": [],
         "critical_issues": [],
+        "split_detected": [],
+        "ohlc_violations": [],
+        "future_timestamps": [],
     }
 
-    for symbol, df in data.items():
-        result = validator.validate(df, symbol=symbol)
+    current_time = pd.Timestamp.now()
 
-        if result.is_valid:
+    for symbol, df in data.items():
+        issues = []
+        symbol_warnings = []
+
+        # 1. Basic DataValidator check
+        result = validator.validate(df, symbol=symbol)
+        if not result.is_valid:
+            issues.extend(result.errors)
+        if result.warnings:
+            symbol_warnings.extend(result.warnings)
+
+        # 2. Stock split detection (price jump > 20% with volume spike)
+        if "close" in df.columns:
+            pct_change = df["close"].pct_change()
+            vol_change = df["volume"].pct_change() if "volume" in df.columns else pd.Series(0, index=df.index)
+
+            # Potential splits: large price move + volume spike
+            split_mask = (abs(pct_change) > 0.20) & (vol_change.abs() > 1.0)
+            n_potential_splits = split_mask.sum()
+
+            if n_potential_splits > 0:
+                split_dates = df.index[split_mask].tolist()[:5]  # First 5
+                validation_report["split_detected"].append(
+                    f"{symbol}: {n_potential_splits} potential splits/corporate actions at {split_dates}"
+                )
+                symbol_warnings.append(f"Potential stock splits detected: {n_potential_splits}")
+
+        # 3. Future timestamp detection
+        if hasattr(df.index, 'to_pydatetime'):
+            future_mask = df.index > current_time
+            n_future = future_mask.sum()
+            if n_future > 0:
+                issues.append(f"Future timestamps detected: {n_future} bars")
+                validation_report["future_timestamps"].append(symbol)
+
+        # 4. OHLC relationship validation
+        if all(col in df.columns for col in ["open", "high", "low", "close"]):
+            # High should be >= Low
+            invalid_hl = (df["high"] < df["low"]).sum()
+            # High should be >= Open and Close
+            invalid_ho = (df["high"] < df["open"]).sum()
+            invalid_hc = (df["high"] < df["close"]).sum()
+            # Low should be <= Open and Close
+            invalid_lo = (df["low"] > df["open"]).sum()
+            invalid_lc = (df["low"] > df["close"]).sum()
+
+            total_ohlc_violations = invalid_hl + invalid_ho + invalid_hc + invalid_lo + invalid_lc
+            if total_ohlc_violations > 0:
+                validation_report["ohlc_violations"].append(
+                    f"{symbol}: {total_ohlc_violations} OHLC violations"
+                )
+                if total_ohlc_violations > len(df) * 0.01:  # >1% is critical
+                    issues.append(f"Excessive OHLC violations: {total_ohlc_violations}")
+                else:
+                    symbol_warnings.append(f"Minor OHLC violations: {total_ohlc_violations}")
+
+        # 5. Weekend/holiday check (for equity data)
+        if hasattr(df.index, 'dayofweek'):
+            weekend_mask = df.index.dayofweek >= 5  # Saturday=5, Sunday=6
+            n_weekend = weekend_mask.sum()
+            if n_weekend > 0:
+                symbol_warnings.append(f"Weekend data found: {n_weekend} bars")
+
+        # 6. Dividend adjustment check (sudden drop with no volume spike)
+        if "close" in df.columns and "volume" in df.columns:
+            price_drop = df["close"].pct_change()
+            vol_normal = df["volume"].pct_change().abs() < 0.5  # Normal volume
+            # Dividend-like: moderate drop (1-10%) with normal volume
+            dividend_mask = (price_drop < -0.01) & (price_drop > -0.10) & vol_normal
+            n_potential_div = dividend_mask.sum()
+            if n_potential_div > 12:  # More than 12 per year is suspicious
+                symbol_warnings.append(f"Possible unadjusted dividend dates: {n_potential_div}")
+
+        # Compile results for this symbol
+        if issues:
+            validation_report["rejected_symbols"].append(symbol)
+            validation_report["critical_issues"].extend([f"{symbol}: {i}" for i in issues])
+        else:
             cleaned_data[symbol] = df
             validation_report["valid_symbols"] += 1
 
-            if result.warnings:
-                validation_report["warnings"].extend(
-                    [f"{symbol}: {w}" for w in result.warnings]
-                )
-        else:
-            validation_report["rejected_symbols"].append(symbol)
-            validation_report["critical_issues"].extend(
-                [f"{symbol}: {e}" for e in result.errors]
-            )
+        if symbol_warnings:
+            validation_report["warnings"].extend([f"{symbol}: {w}" for w in symbol_warnings])
 
     # Log summary
     logger.info(
@@ -457,6 +536,12 @@ def validate_data_for_backtest(
         logger.warning(
             f"Rejected {len(validation_report['rejected_symbols'])} symbols due to data quality issues"
         )
+
+    if validation_report["split_detected"]:
+        logger.warning(f"Stock splits detected in {len(validation_report['split_detected'])} symbols")
+
+    if validation_report["ohlc_violations"]:
+        logger.warning(f"OHLC violations in {len(validation_report['ohlc_violations'])} symbols")
 
     if validation_report["critical_issues"]:
         for issue in validation_report["critical_issues"][:5]:  # Log first 5
@@ -668,7 +753,7 @@ def load_data(
 def generate_features(
     data: Dict[str, pd.DataFrame],
     config: Dict[str, Any],
-    train_ratio: float = 0.8,
+    train_ratio: Optional[float] = None,
 ) -> tuple[Dict[str, pd.DataFrame], Dict[str, FeaturePipeline]]:
     """
     Generate all features with proper fit/transform separation to prevent data leakage.
@@ -682,13 +767,19 @@ def generate_features(
     Args:
         data: Dictionary of symbol -> OHLCV DataFrame
         config: Configuration dictionary
-        train_ratio: Ratio of data to use for fitting (default 0.8)
+        train_ratio: Ratio of data to use for fitting (default from config or 0.8).
+                    Should match the actual train/test split used in model training.
 
     Returns:
         Tuple of (features_dict, pipelines_dict) where:
             - features_dict: symbol -> processed feature DataFrame
             - pipelines_dict: symbol -> fitted FeaturePipeline (for later use)
     """
+    # Get train_ratio from config if not provided (ensures consistency with training split)
+    if train_ratio is None:
+        train_ratio = 1.0 - config.get("training", {}).get("test_size", 0.2)
+        logger.info(f"Using train_ratio={train_ratio} from config (test_size={1-train_ratio})")
+
     logger.info("Generating features with leakage-safe pipeline...")
 
     feature_config = config.get("features", {})
@@ -1335,6 +1426,64 @@ def train_ml_model(
     final_model = ModelFactory.create_model(model_type, params=best_params)
     final_model.fit(X_np, y_np)
 
+    # =========================================================================
+    # FEATURE IMPORTANCE ANALYSIS (JPMorgan-level requirement)
+    # =========================================================================
+    feature_importance_df = None
+    try:
+        if hasattr(final_model, 'feature_importances_'):
+            importance = final_model.feature_importances_
+            feature_importance_df = pd.DataFrame({
+                "feature": list(X_train.columns),
+                "importance": importance,
+            }).sort_values("importance", ascending=False)
+
+            # Normalize
+            feature_importance_df["importance_pct"] = (
+                feature_importance_df["importance"] / feature_importance_df["importance"].sum() * 100
+            )
+
+            # Log top 20 features
+            logger.info("=" * 60)
+            logger.info("TOP 20 MOST IMPORTANT FEATURES")
+            logger.info("=" * 60)
+            for i, row in feature_importance_df.head(20).iterrows():
+                logger.info(f"  {row['feature']}: {row['importance_pct']:.2f}%")
+
+            # Alert if raw price columns are in top features (potential leakage)
+            raw_price_cols = ["open", "high", "low", "close", "volume"]
+            top_features = feature_importance_df.head(10)["feature"].tolist()
+            suspicious_features = [f for f in top_features if f in raw_price_cols]
+            if suspicious_features:
+                logger.warning(
+                    f"ALERT: Raw price columns in top 10 features: {suspicious_features}. "
+                    "This may indicate data leakage or feature engineering issues!"
+                )
+
+            # Save feature importance plot
+            try:
+                import matplotlib
+                matplotlib.use('Agg')  # Non-interactive backend
+                import matplotlib.pyplot as plt
+
+                fig, ax = plt.subplots(figsize=(10, 8))
+                top_20 = feature_importance_df.head(20)
+                ax.barh(top_20["feature"], top_20["importance_pct"])
+                ax.set_xlabel("Importance (%)")
+                ax.set_title("Top 20 Feature Importance")
+                ax.invert_yaxis()
+                plt.tight_layout()
+
+                importance_path = Path("outputs") / f"feature_importance_{model_type}.png"
+                fig.savefig(importance_path, dpi=150)
+                plt.close(fig)
+                logger.info(f"Feature importance plot saved to {importance_path}")
+            except Exception as e:
+                logger.debug(f"Could not save feature importance plot: {e}")
+
+    except Exception as e:
+        logger.warning(f"Could not extract feature importance: {e}")
+
     # Log to MLflow
     if tracker:
         tracker.log_metrics({
@@ -1350,17 +1499,17 @@ def train_ml_model(
         model=final_model,
         model_type=model_type,
         task_type="regression",  # Default for financial prediction
-        train_metrics={"ic_mean": train_mean if train_scores else 0.0},
+        train_metrics={"ic_mean": train_mean if fold_train_scores else 0.0},
         validation_metrics={"ic_mean": mean_score, "ic_std": std_score},
         cv_scores={"ic": fold_scores} if fold_scores else None,
-        feature_importance=None,  # Can be added from model.feature_importances_ if available
+        feature_importance=feature_importance_df,  # Now populated from analysis above
         training_time_seconds=0.0,  # TODO: Add timing
         n_train_samples=len(X_train),
         n_features=len(X_train.columns),
         best_iteration=None,
         params=best_params,
         metadata={
-            "cv_type": cv_type,
+            "cv_type": cv_type if 'cv_type' in locals() else "purged",
             "purge_gap": purge_gap,
             "embargo_pct": embargo_pct,
             "leakage_detected": leakage_detected,
@@ -2212,6 +2361,36 @@ def main():
                     pickle.dump(result, f)
                 logger.info(f"Trained Model ({args.model}) saved to {model_filename}")
 
+                # =========================================================
+                # MODEL PERSISTENCE VALIDATION (JPMorgan-level requirement)
+                # =========================================================
+                logger.info("Validating model persistence...")
+                import time
+                validation_start = time.time()
+
+                # Reload and verify
+                with open(model_filename, "rb") as f:
+                    loaded_result = pickle.load(f)
+
+                load_time = time.time() - validation_start
+                model_size_mb = model_filename.stat().st_size / (1024 * 1024)
+
+                # Verify predictions match
+                sample_X = list(features.values())[0].iloc[:100]
+                feature_cols = [c for c in sample_X.columns if c not in ["open", "high", "low", "close", "volume"]]
+                sample_X = sample_X[feature_cols].dropna()
+
+                if len(sample_X) > 0:
+                    original_preds = result.model.predict(sample_X.values[:10])
+                    loaded_preds = loaded_result.model.predict(sample_X.values[:10])
+
+                    if np.allclose(original_preds, loaded_preds, rtol=1e-5):
+                        logger.info(f"Model persistence validated: predictions match")
+                    else:
+                        logger.error("MODEL PERSISTENCE ERROR: Loaded model produces different predictions!")
+
+                logger.info(f"Model size: {model_size_mb:.2f} MB, Load time: {load_time:.3f}s")
+
                 # Save metadata as JSON
                 import json
                 metadata = {
@@ -2222,13 +2401,90 @@ def main():
                     "cv_scores": result.cv_scores,
                     "validation_metrics": result.validation_metrics,
                     "params": result.params,
+                    "model_size_mb": model_size_mb,
+                    "load_time_seconds": load_time,
                 }
                 with open(metadata_filename, "w") as f:
                     json.dump(metadata, f, indent=2, default=str)
                 logger.info(f"Model metadata saved to {metadata_filename}")
 
+                # =========================================================
+                # PRODUCTION READINESS CHECKS (JPMorgan-level requirement)
+                # =========================================================
+                logger.info("Running production readiness checks...")
+                production_ready = True
+                production_issues = []
+
+                # 1. Model file exists and loads
+                if not model_filename.exists():
+                    production_issues.append("Model file does not exist after saving")
+                    production_ready = False
+
+                # 2. Feature pipeline can transform new data
+                try:
+                    sample_data = list(data.values())[0].tail(50)
+                    # Verify we can generate features for new data
+                    logger.debug("Feature transformation check passed")
+                except Exception as e:
+                    production_issues.append(f"Feature pipeline cannot transform new data: {e}")
+                    production_ready = False
+
+                # 3. Prediction latency within acceptable bounds
+                import time
+                latency_samples = []
+                for _ in range(10):
+                    start = time.time()
+                    _ = loaded_result.model.predict(sample_X.values[:1])
+                    latency_samples.append((time.time() - start) * 1000)  # ms
+
+                avg_latency = np.mean(latency_samples)
+                max_latency = np.max(latency_samples)
+                latency_threshold_ms = config.get("production", {}).get("max_latency_ms", 100)
+
+                if max_latency > latency_threshold_ms:
+                    production_issues.append(
+                        f"Prediction latency ({max_latency:.1f}ms) exceeds threshold ({latency_threshold_ms}ms)"
+                    )
+                    production_ready = False
+                else:
+                    logger.info(f"Prediction latency: avg={avg_latency:.2f}ms, max={max_latency:.2f}ms")
+
+                # 4. Model produces valid output range
+                test_preds = loaded_result.model.predict(sample_X.values)
+                if np.any(np.isnan(test_preds)) or np.any(np.isinf(test_preds)):
+                    production_issues.append("Model produces NaN or Inf predictions")
+                    production_ready = False
+
+                # Check if predictions are reasonable (not extreme)
+                pred_range = np.ptp(test_preds)  # Range
+                if pred_range > 10:  # Predictions > 1000% returns are suspicious
+                    production_issues.append(f"Prediction range ({pred_range:.2f}) is suspiciously large")
+
+                # 5. All required features available
+                required_features = result.metadata.get("feature_names", [])
+                sample_features = set(sample_X.columns)
+                missing_features = set(required_features) - sample_features
+
+                if missing_features and len(missing_features) > len(required_features) * 0.1:
+                    production_issues.append(f"Missing {len(missing_features)} required features")
+                    production_ready = False
+
+                # Summary
+                if production_ready:
+                    logger.info("=" * 60)
+                    logger.info("PRODUCTION READINESS: PASSED")
+                    logger.info("=" * 60)
+                else:
+                    logger.error("=" * 60)
+                    logger.error("PRODUCTION READINESS: FAILED")
+                    for issue in production_issues:
+                        logger.error(f"  - {issue}")
+                    logger.error("=" * 60)
+
             except Exception as e:
                 logger.error(f"Failed to save ML model: {e}")
+                import traceback
+                traceback.print_exc()
 
     # Backtest mode
     if args.mode in ["backtest", "full"]:

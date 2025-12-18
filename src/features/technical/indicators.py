@@ -555,6 +555,7 @@ class TechnicalIndicators:
         self,
         ma_periods: list[int] | None = None,
         rsi_periods: list[int] | None = None,
+        adaptive_periods: list[int] | None = None,
         prefix: str = "",
     ) -> pd.DataFrame:
         """
@@ -563,6 +564,7 @@ class TechnicalIndicators:
         Args:
             ma_periods: Periods for moving averages
             rsi_periods: Periods for RSI
+            adaptive_periods: Periods for adaptive indicators (KAMA, FRAMA, VIDYA, ALMA)
             prefix: Prefix for feature names
 
         Returns:
@@ -572,6 +574,8 @@ class TechnicalIndicators:
             ma_periods = [5, 10, 20, 50, 100, 200]
         if rsi_periods is None:
             rsi_periods = [7, 14, 21]
+        if adaptive_periods is None:
+            adaptive_periods = [10, 20, 50]
 
         features = pd.DataFrame(index=self.df.index)
         p = prefix
@@ -680,5 +684,320 @@ class TechnicalIndicators:
             vol_ma = self.df["volume"].rolling(20).mean()
             features[f"{p}volume_ratio"] = self.df["volume"] / vol_ma
 
+        # Adaptive Indicators
+        for period in adaptive_periods:
+            features[f"{p}kama_{period}"] = self.kama(period)
+            features[f"{p}frama_{period}"] = self.frama(period)
+            features[f"{p}vidya_{period}"] = self.vidya(period)
+            features[f"{p}alma_{period}"] = self.alma(period)
+
+        # Adaptive ATR
+        features[f"{p}adaptive_atr"] = self.adaptive_atr()
+
+        # McGinley Dynamic
+        features[f"{p}mcginley_dynamic"] = self.mcginley_dynamic()
+
         logger.info(f"Generated {len(features.columns)} technical features")
         return features
+
+    # =========================================================================
+    # ADAPTIVE INDICATORS - JPMorgan Institutional Level
+    # =========================================================================
+
+    def kama(
+        self,
+        period: int = 10,
+        fast_period: int = 2,
+        slow_period: int = 30,
+        column: str = "close",
+    ) -> pd.Series:
+        """
+        Kaufman's Adaptive Moving Average (KAMA).
+
+        KAMA adapts to volatility by using an Efficiency Ratio (ER) to adjust
+        the smoothing constant. In trending markets, KAMA moves faster; in
+        ranging markets, it smooths more heavily.
+
+        Args:
+            period: Lookback period for efficiency ratio calculation
+            fast_period: Fast EMA period (used in trending markets)
+            slow_period: Slow EMA period (used in ranging markets)
+            column: Column to use
+
+        Returns:
+            KAMA series
+        """
+        price = self.df[column].values
+        n = len(price)
+
+        # Calculate efficiency ratio
+        # ER = abs(price_change over period) / sum(abs(individual changes))
+        change = np.abs(price[period:] - price[:-period])
+        volatility = np.zeros(n)
+
+        for i in range(period, n):
+            volatility[i] = np.sum(np.abs(np.diff(price[i - period:i + 1])))
+
+        # Avoid division by zero
+        volatility = np.where(volatility == 0, 1, volatility)
+
+        er = np.zeros(n)
+        er[period:] = change / volatility[period:]
+
+        # Calculate smoothing constants
+        fast_sc = 2 / (fast_period + 1)
+        slow_sc = 2 / (slow_period + 1)
+
+        # Smoothing constant = (ER * (fast_sc - slow_sc) + slow_sc)^2
+        sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
+
+        # Calculate KAMA
+        kama = np.zeros(n)
+        kama[period - 1] = price[period - 1]
+
+        for i in range(period, n):
+            kama[i] = kama[i - 1] + sc[i] * (price[i] - kama[i - 1])
+
+        # Set initial values to NaN
+        kama[:period - 1] = np.nan
+
+        return pd.Series(kama, index=self.df.index, name=f"kama_{period}")
+
+    def frama(self, period: int = 16, column: str = "close") -> pd.Series:
+        """
+        Fractal Adaptive Moving Average (FRAMA).
+
+        Uses fractal dimension to adjust smoothing. In trending markets (low
+        fractal dimension), FRAMA follows price closely. In ranging markets
+        (high fractal dimension), it smooths more.
+
+        Args:
+            period: Lookback period (must be even)
+            column: Column to use
+
+        Returns:
+            FRAMA series
+        """
+        price = self.df[column].values
+        n = len(price)
+
+        # Ensure period is even
+        period = period if period % 2 == 0 else period + 1
+        half_period = period // 2
+
+        frama = np.zeros(n)
+        alpha = np.zeros(n)
+
+        for i in range(period, n):
+            # Get high and low over the period
+            high1 = np.max(price[i - period:i - half_period])
+            low1 = np.min(price[i - period:i - half_period])
+            high2 = np.max(price[i - half_period:i])
+            low2 = np.min(price[i - half_period:i])
+            high3 = np.max(price[i - period:i])
+            low3 = np.min(price[i - period:i])
+
+            n1 = (high1 - low1) / half_period if half_period > 0 else 0
+            n2 = (high2 - low2) / half_period if half_period > 0 else 0
+            n3 = (high3 - low3) / period if period > 0 else 0
+
+            if n1 + n2 > 0 and n3 > 0:
+                d = (np.log(n1 + n2) - np.log(n3)) / np.log(2)
+                alpha[i] = np.exp(-4.6 * (d - 1))
+                alpha[i] = max(0.01, min(alpha[i], 1))
+            else:
+                alpha[i] = 0.5
+
+        # Calculate FRAMA
+        frama[period - 1] = price[period - 1]
+        for i in range(period, n):
+            frama[i] = alpha[i] * price[i] + (1 - alpha[i]) * frama[i - 1]
+
+        frama[:period - 1] = np.nan
+
+        return pd.Series(frama, index=self.df.index, name=f"frama_{period}")
+
+    def vidya(
+        self,
+        period: int = 14,
+        cmo_period: int = 9,
+        column: str = "close",
+    ) -> pd.Series:
+        """
+        Variable Index Dynamic Average (VIDYA).
+
+        Uses Chande Momentum Oscillator (CMO) as the volatility index to
+        adaptively adjust smoothing. Tushar Chande's improvement on
+        traditional moving averages.
+
+        Args:
+            period: EMA period
+            cmo_period: CMO lookback period
+            column: Column to use
+
+        Returns:
+            VIDYA series
+        """
+        price = self.df[column].values
+        n = len(price)
+
+        # Calculate CMO (Chande Momentum Oscillator)
+        diff = np.diff(price)
+        diff = np.concatenate([[0], diff])
+
+        up_sum = np.zeros(n)
+        down_sum = np.zeros(n)
+
+        for i in range(cmo_period, n):
+            window_diff = diff[i - cmo_period + 1:i + 1]
+            up_sum[i] = np.sum(np.where(window_diff > 0, window_diff, 0))
+            down_sum[i] = np.sum(np.where(window_diff < 0, -window_diff, 0))
+
+        total = up_sum + down_sum
+        cmo = np.where(total != 0, (up_sum - down_sum) / total, 0)
+
+        # Smoothing constant
+        sc = 2 / (period + 1)
+
+        # Calculate VIDYA
+        vidya = np.zeros(n)
+        vidya[cmo_period - 1] = price[cmo_period - 1]
+
+        for i in range(cmo_period, n):
+            vidya[i] = sc * np.abs(cmo[i]) * price[i] + (1 - sc * np.abs(cmo[i])) * vidya[i - 1]
+
+        vidya[:cmo_period - 1] = np.nan
+
+        return pd.Series(vidya, index=self.df.index, name=f"vidya_{period}")
+
+    def alma(
+        self,
+        period: int = 9,
+        offset: float = 0.85,
+        sigma: float = 6,
+        column: str = "close",
+    ) -> pd.Series:
+        """
+        Arnaud Legoux Moving Average (ALMA).
+
+        Uses Gaussian distribution for weighting, with configurable
+        offset (controls timing) and sigma (controls smoothness).
+        Very smooth with minimal lag.
+
+        Args:
+            period: Lookback period
+            offset: Weight offset (0-1, higher = more weight to recent data)
+            sigma: Gaussian sigma (higher = smoother)
+            column: Column to use
+
+        Returns:
+            ALMA series
+        """
+        price = self.df[column].values
+        n = len(price)
+
+        # Calculate weights
+        m = np.floor(offset * (period - 1))
+        s = period / sigma
+
+        weights = np.zeros(period)
+        for i in range(period):
+            weights[i] = np.exp(-((i - m) ** 2) / (2 * s ** 2))
+
+        weights = weights / weights.sum()
+
+        # Calculate ALMA
+        alma = np.full(n, np.nan)
+        for i in range(period - 1, n):
+            alma[i] = np.sum(weights * price[i - period + 1:i + 1])
+
+        return pd.Series(alma, index=self.df.index, name=f"alma_{period}")
+
+    def adaptive_atr(
+        self,
+        period: int = 14,
+        fast_period: int = 5,
+        slow_period: int = 50,
+    ) -> pd.Series:
+        """
+        Adaptive ATR - ATR that adapts to market conditions.
+
+        Uses efficiency ratio to blend between fast and slow ATR.
+        More responsive in trending markets, smoother in ranging markets.
+
+        Args:
+            period: Base ATR period
+            fast_period: Fast ATR period
+            slow_period: Slow ATR period
+
+        Returns:
+            Adaptive ATR series
+        """
+        # Calculate standard ATR
+        high = self.df["high"].values
+        low = self.df["low"].values
+        close = self.df["close"].values
+        n = len(close)
+
+        # True Range
+        tr = np.zeros(n)
+        tr[0] = high[0] - low[0]
+        for i in range(1, n):
+            tr[i] = max(
+                high[i] - low[i],
+                abs(high[i] - close[i - 1]),
+                abs(low[i] - close[i - 1])
+            )
+
+        # Calculate efficiency ratio on close
+        change = np.abs(close[period:] - close[:-period])
+        volatility = np.zeros(n)
+        for i in range(period, n):
+            volatility[i] = np.sum(np.abs(np.diff(close[i - period:i + 1])))
+
+        volatility = np.where(volatility == 0, 1, volatility)
+        er = np.zeros(n)
+        er[period:] = change / volatility[period:]
+
+        # Fast and slow ATR
+        fast_atr = pd.Series(tr).ewm(span=fast_period, adjust=False).mean().values
+        slow_atr = pd.Series(tr).ewm(span=slow_period, adjust=False).mean().values
+
+        # Blend based on ER
+        adaptive_atr = er * fast_atr + (1 - er) * slow_atr
+
+        return pd.Series(adaptive_atr, index=self.df.index, name="adaptive_atr")
+
+    def mcginley_dynamic(
+        self,
+        period: int = 14,
+        column: str = "close",
+    ) -> pd.Series:
+        """
+        McGinley Dynamic Indicator.
+
+        A moving average that automatically adjusts for market speed.
+        Developed by John McGinley to avoid whipsaws while staying
+        responsive to price changes.
+
+        Args:
+            period: Lookback period
+            column: Column to use
+
+        Returns:
+            McGinley Dynamic series
+        """
+        price = self.df[column].values
+        n = len(price)
+
+        md = np.zeros(n)
+        md[0] = price[0]
+
+        for i in range(1, n):
+            if md[i - 1] != 0:
+                ratio = price[i] / md[i - 1]
+                md[i] = md[i - 1] + (price[i] - md[i - 1]) / (period * (ratio ** 4))
+            else:
+                md[i] = price[i]
+
+        return pd.Series(md, index=self.df.index, name=f"mcginley_dynamic_{period}")

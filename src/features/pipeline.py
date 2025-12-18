@@ -603,6 +603,8 @@ class FeaturePipeline:
         lag_periods: list[int] | None = None,
         scaling: str = "robust",
         strict_leakage_check: bool = True,
+        use_fractional_diff: bool = True,
+        frac_diff_threshold: float = 1e-5,
     ) -> None:
         """
         Initialize the pipeline.
@@ -614,6 +616,8 @@ class FeaturePipeline:
             lag_periods: Lag periods
             scaling: Feature scaling method
             strict_leakage_check: If True, warns on direct generate_features() calls
+            use_fractional_diff: If True, apply fractional differentiation to price features
+            frac_diff_threshold: Threshold for fractional diff weight cutoff
         """
         self.ma_periods = ma_periods or [5, 10, 20, 50, 100, 200]
         self.rsi_periods = rsi_periods or [7, 14, 21]
@@ -621,15 +625,70 @@ class FeaturePipeline:
         self.lag_periods = lag_periods or [1, 2, 5, 10]
         self.scaling = scaling
         self.strict_leakage_check = strict_leakage_check
+        self.use_fractional_diff = use_fractional_diff
+        self.frac_diff_threshold = frac_diff_threshold
 
         self.processor = FeatureProcessor(scaling=scaling)
         self._feature_names: list[str] = []
         self._is_fitted: bool = False
         self._internal_call: bool = False  # Flag for internal method calls
         self._direct_call_count: int = 0  # Track direct calls for monitoring
+        self._frac_diff_d: dict = {}  # Store optimal d values for each price column
 
         # Track max lookback for purge gap calculation
-        self._max_lookback: int = max(self.ma_periods) if self.ma_periods else 200
+        # CRITICAL: Must include ALL rolling windows, shifts, and lag periods
+        # used anywhere in feature generation to prevent data leakage
+        self._max_lookback: int = self._calculate_max_lookback()
+
+    def _calculate_max_lookback(self) -> int:
+        """
+        Calculate the maximum lookback period across ALL feature calculations.
+
+        This includes:
+        - Moving average periods (MA, EMA, etc.)
+        - Volatility windows
+        - Hurst exponent window (100 bars)
+        - Autocorrelation window (50 bars)
+        - Skewness/kurtosis window (20 bars)
+        - Z-score window (20 bars)
+        - RSI periods
+        - Correlation window (60 bars)
+        - Lag periods
+        - Safety buffer (50 bars)
+
+        Returns:
+            Maximum lookback in bars, with safety buffer added
+        """
+        # All lookback windows used in feature generation
+        lookback_windows = [
+            # From StatisticalFeatures
+            max(self.ma_periods) if self.ma_periods else 200,  # MA periods
+            100,  # Hurst exponent window (line 171)
+            50,   # Autocorrelation rolling window (line 164)
+            50,   # Default volatility windows: [10, 20, 50]
+            20,   # Skewness/kurtosis window
+            20,   # Z-score window
+            # From returns calculation
+            max([1, 5, 10, 20, 60]),  # Default return periods
+            # From RSI
+            max(self.rsi_periods) if self.rsi_periods else 21,
+            # From correlation features
+            60,   # Rolling correlation window
+            # From lag features
+            max(self.lag_periods) if self.lag_periods else 10,
+        ]
+
+        # Safety buffer of 50 bars to account for any edge cases
+        safety_buffer = 50
+
+        max_lookback = max(lookback_windows) + safety_buffer
+
+        logger.info(
+            f"Calculated max_lookback={max_lookback} "
+            f"(max_window={max(lookback_windows)}, buffer={safety_buffer})"
+        )
+
+        return max_lookback
 
     @property
     def max_lookback(self) -> int:
@@ -646,7 +705,7 @@ class FeaturePipeline:
         """Check if pipeline has been fitted."""
         return self._is_fitted
 
-    def generate_features(
+    def _generate_features(
         self,
         df: pd.DataFrame,
         include_technical: bool = True,
@@ -656,13 +715,10 @@ class FeaturePipeline:
         include_time: bool = True,
     ) -> pd.DataFrame:
         """
-        Generate all features for a single stock.
+        PRIVATE: Generate all features for a single stock.
 
-        This method generates technical, statistical, time-based, and microstructure
-        features from OHLCV data.
-
-        IMPORTANT: For proper leakage prevention, use fit() and transform()
-        methods instead of calling generate_features() directly.
+        This is a PRIVATE method. Do NOT call directly.
+        Use fit() and transform() methods instead.
 
         Args:
             df: OHLCV DataFrame with columns: open, high, low, close, volume
@@ -674,16 +730,24 @@ class FeaturePipeline:
 
         Returns:
             DataFrame with all generated features
+
+        Raises:
+            RuntimeError: If called directly without internal flag set
         """
-        # Leakage prevention warning for direct calls
+        # STRICT leakage prevention - block direct external calls
         if self.strict_leakage_check and not self._internal_call:
             self._direct_call_count += 1
-            if self._direct_call_count <= 3:
-                logger.warning(
-                    "Direct call to generate_features() detected. "
-                    "For proper leakage prevention, use fit() on training data "
-                    "and transform() on test data instead."
+            if self._direct_call_count >= 3:
+                raise RuntimeError(
+                    "Direct calls to _generate_features() are blocked to prevent data leakage. "
+                    "Use fit() on training data and transform() on test/validation data instead. "
+                    "This ensures scaling parameters are learned only from training data."
                 )
+            logger.error(
+                f"LEAKAGE WARNING ({self._direct_call_count}/3): Direct call to _generate_features() detected. "
+                "For proper leakage prevention, use fit() on training data "
+                "and transform() on test data instead. After 3 warnings, calls will be blocked."
+            )
 
         features = pd.DataFrame(index=df.index)
 
@@ -761,8 +825,73 @@ class FeaturePipeline:
             except Exception as e:
                 logger.warning(f"Failed to generate lagged features: {e}")
 
+        # 6. Fractional Differentiation features (for stationarity while preserving memory)
+        if self.use_fractional_diff:
+            try:
+                frac_features = self._generate_fractional_diff_features(df)
+                if frac_features is not None and not frac_features.empty:
+                    features = pd.concat([features, frac_features], axis=1)
+            except Exception as e:
+                logger.warning(f"Failed to generate fractional diff features: {e}")
+
         self._feature_names = features.columns.tolist()
         logger.info(f"Generated {len(features.columns)} total features")
+
+        return features
+
+    def _generate_fractional_diff_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate fractionally differentiated features for price columns.
+
+        Fractional differentiation achieves stationarity while preserving
+        memory (autocorrelation), unlike standard differencing which
+        destroys memory completely.
+
+        Reference: de Prado (2018), Chapter 5
+        """
+        try:
+            from src.features.fractional_diff import (
+                frac_diff_ffd,
+                find_min_d,
+                FractionalDiffTransformer,
+            )
+        except ImportError:
+            logger.warning("Fractional differentiation module not available")
+            return pd.DataFrame()
+
+        features = pd.DataFrame(index=df.index)
+
+        # Apply to key price-based columns
+        price_cols = ['close', 'high', 'low']
+        price_cols = [c for c in price_cols if c in df.columns]
+
+        for col in price_cols:
+            series = df[col].dropna()
+            if len(series) < 100:
+                continue
+
+            try:
+                # Find minimum d for stationarity (use cached value if available)
+                if col not in self._frac_diff_d:
+                    optimal_d = find_min_d(series, threshold=self.frac_diff_threshold)
+                    self._frac_diff_d[col] = optimal_d
+                    logger.info(f"Found optimal d={optimal_d:.3f} for {col}")
+                else:
+                    optimal_d = self._frac_diff_d[col]
+
+                # Apply fractional differentiation
+                frac_series = frac_diff_ffd(
+                    series,
+                    d=optimal_d,
+                    threshold=self.frac_diff_threshold,
+                )
+
+                # Align to original index
+                features[f'frac_diff_{col}'] = frac_series.reindex(df.index)
+                features[f'frac_diff_{col}_d'] = optimal_d  # Store d value as feature
+
+            except Exception as e:
+                logger.warning(f"Fractional diff failed for {col}: {e}")
 
         return features
 
@@ -787,7 +916,7 @@ class FeaturePipeline:
         """
         self._internal_call = True
         try:
-            features = self.generate_features(df, **kwargs)
+            features = self._generate_features(df, **kwargs)
             self.processor.fit(features)
             self._is_fitted = True
             logger.info(f"Pipeline fitted on {len(features)} training samples")
@@ -827,7 +956,7 @@ class FeaturePipeline:
         """
         self._internal_call = True
         try:
-            features = self.generate_features(df, **kwargs)
+            features = self._generate_features(df, **kwargs)
             self._is_fitted = True
             return self.processor.fit_transform(features)
         finally:
@@ -859,7 +988,7 @@ class FeaturePipeline:
             )
         self._internal_call = True
         try:
-            features = self.generate_features(df, **kwargs)
+            features = self._generate_features(df, **kwargs)
             return self.processor.transform(features)
         finally:
             self._internal_call = False

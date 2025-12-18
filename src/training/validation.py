@@ -879,3 +879,288 @@ def validate_cv_for_finance(
     results['leakage_check'] = leakage_results
 
     return results
+
+
+class GroupTimeSeriesSplit:
+    """
+    Group Time Series Split for multi-asset panel data.
+
+    This validator ensures that when working with multiple assets (symbols),
+    the time-based splits respect the panel structure and prevent
+    cross-asset information leakage.
+
+    Key features:
+    - Groups data by asset symbol
+    - Ensures all assets are split at the same time point
+    - Applies purge gap per asset group
+    - Prevents future data from one asset leaking into another
+
+    Example:
+        groups = df['symbol'].values
+        gts = GroupTimeSeriesSplit(n_splits=5, purge_gap=50)
+        for train_idx, test_idx in gts.split(X, y, groups):
+            X_train, X_test = X[train_idx], X[test_idx]
+    """
+
+    def __init__(
+        self,
+        n_splits: int = 5,
+        purge_gap: int = 0,
+        embargo_pct: float = 0.0,
+        test_size: Optional[float] = None,
+    ):
+        """
+        Initialize the group time series splitter.
+
+        Args:
+            n_splits: Number of folds
+            purge_gap: Number of samples to purge between train and test
+            embargo_pct: Percentage of test samples to embargo
+            test_size: Size of test set (fraction or None for equal splits)
+        """
+        self.n_splits = n_splits
+        self.purge_gap = purge_gap
+        self.embargo_pct = embargo_pct
+        self.test_size = test_size
+
+    def split(
+        self,
+        X: np.ndarray,
+        y: Optional[np.ndarray] = None,
+        groups: Optional[np.ndarray] = None,
+    ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
+        """
+        Generate train/test indices respecting group structure.
+
+        Args:
+            X: Features array
+            y: Target array (optional)
+            groups: Group labels (e.g., symbol identifiers)
+
+        Yields:
+            Tuple of (train_indices, test_indices)
+        """
+        n_samples = len(X)
+
+        if groups is None:
+            # Fall back to standard time series split
+            logger.warning("No groups provided, using standard TimeSeriesSplit")
+            for train_idx, test_idx in self._simple_split(n_samples):
+                yield train_idx, test_idx
+            return
+
+        # Get unique groups and their time ranges
+        unique_groups = np.unique(groups)
+        n_groups = len(unique_groups)
+
+        # Build group-to-indices mapping
+        group_indices = {g: np.where(groups == g)[0] for g in unique_groups}
+
+        # Find common time points (assuming sorted by time within groups)
+        # Use fractional position in each group as "time"
+        for fold in range(self.n_splits):
+            train_idx_list = []
+            test_idx_list = []
+
+            # Calculate split point for this fold
+            test_start_pct = (fold + 1) / (self.n_splits + 1)
+            test_end_pct = min(1.0, test_start_pct + 1.0 / (self.n_splits + 1))
+
+            for group in unique_groups:
+                g_idx = group_indices[group]
+                n_group = len(g_idx)
+
+                # Calculate split indices for this group
+                test_start = int(test_start_pct * n_group)
+                test_end = int(test_end_pct * n_group)
+
+                # Apply purge gap
+                train_end = max(0, test_start - self.purge_gap)
+
+                # Apply embargo
+                embargo_size = int(self.embargo_pct * (test_end - test_start))
+                actual_test_start = test_start + embargo_size
+
+                # Get indices
+                train_idx_list.extend(g_idx[:train_end])
+                test_idx_list.extend(g_idx[actual_test_start:test_end])
+
+            if len(train_idx_list) > 0 and len(test_idx_list) > 0:
+                yield np.array(train_idx_list), np.array(test_idx_list)
+
+    def _simple_split(
+        self,
+        n_samples: int,
+    ) -> Generator[Tuple[np.ndarray, np.ndarray], None, None]:
+        """Simple time series split without groups."""
+        indices = np.arange(n_samples)
+
+        for fold in range(self.n_splits):
+            test_start = int((fold + 1) * n_samples / (self.n_splits + 1))
+            test_end = int((fold + 2) * n_samples / (self.n_splits + 1))
+            train_end = max(0, test_start - self.purge_gap)
+
+            yield indices[:train_end], indices[test_start:test_end]
+
+    def get_n_splits(self, X=None, y=None, groups=None) -> int:
+        """Return number of splits."""
+        return self.n_splits
+
+
+class AdversarialValidator:
+    """
+    Adversarial Validation for detecting train/test distribution shift.
+
+    Trains a classifier to distinguish between train and test data.
+    If the classifier performs well (AUC >> 0.5), it indicates significant
+    distribution shift between train and test sets.
+
+    This is CRITICAL for financial ML where market regimes change.
+
+    Usage:
+        validator = AdversarialValidator()
+        result = validator.validate(X_train, X_test)
+        if result['warning']:
+            print("Distribution shift detected!")
+    """
+
+    def __init__(
+        self,
+        warning_threshold: float = 0.55,
+        critical_threshold: float = 0.60,
+        n_folds: int = 5,
+        random_state: int = 42,
+    ):
+        """
+        Initialize the adversarial validator.
+
+        Args:
+            warning_threshold: AUC above this triggers warning
+            critical_threshold: AUC above this triggers critical alert
+            n_folds: Number of CV folds for stable AUC estimate
+            random_state: Random seed
+        """
+        self.warning_threshold = warning_threshold
+        self.critical_threshold = critical_threshold
+        self.n_folds = n_folds
+        self.random_state = random_state
+
+    def validate(
+        self,
+        X_train: np.ndarray,
+        X_test: np.ndarray,
+        feature_names: Optional[List[str]] = None,
+    ) -> dict:
+        """
+        Run adversarial validation.
+
+        Args:
+            X_train: Training features
+            X_test: Test features
+            feature_names: Optional list of feature names for diagnostics
+
+        Returns:
+            Dict with validation results including AUC and problematic features
+        """
+        try:
+            import lightgbm as lgb
+            from sklearn.model_selection import cross_val_score
+        except ImportError:
+            logger.warning("LightGBM or sklearn not available for adversarial validation")
+            return {'auc': 0.5, 'warning': False, 'critical': False}
+
+        # Create adversarial labels
+        y_adv = np.concatenate([
+            np.zeros(len(X_train)),
+            np.ones(len(X_test))
+        ])
+        X_adv = np.vstack([X_train, X_test])
+
+        # Handle NaN
+        X_adv = np.nan_to_num(X_adv, nan=0.0)
+
+        # Train classifier
+        model = lgb.LGBMClassifier(
+            n_estimators=100,
+            max_depth=3,
+            random_state=self.random_state,
+            verbose=-1,
+        )
+
+        # Cross-validated AUC
+        auc_scores = cross_val_score(
+            model, X_adv, y_adv,
+            cv=self.n_folds,
+            scoring='roc_auc'
+        )
+        mean_auc = auc_scores.mean()
+
+        # Fit full model for feature analysis
+        model.fit(X_adv, y_adv)
+        importances = model.feature_importances_
+
+        # Build result
+        result = {
+            'auc': mean_auc,
+            'auc_std': auc_scores.std(),
+            'warning': mean_auc > self.warning_threshold,
+            'critical': mean_auc > self.critical_threshold,
+            'feature_importances': importances,
+        }
+
+        # Find most distinguishing features
+        if feature_names is not None:
+            top_indices = np.argsort(importances)[-10:][::-1]
+            result['top_distinguishing_features'] = [
+                (feature_names[i], importances[i])
+                for i in top_indices
+            ]
+
+        # Log results
+        if result['critical']:
+            logger.error(
+                f"CRITICAL: Adversarial validation AUC = {mean_auc:.3f}. "
+                f"Significant distribution shift between train and test!"
+            )
+        elif result['warning']:
+            logger.warning(
+                f"WARNING: Adversarial validation AUC = {mean_auc:.3f}. "
+                f"Possible distribution shift detected."
+            )
+        else:
+            logger.info(f"Adversarial validation passed. AUC = {mean_auc:.3f}")
+
+        return result
+
+    def find_problematic_features(
+        self,
+        X_train: np.ndarray,
+        X_test: np.ndarray,
+        feature_names: List[str],
+        threshold: float = 0.1,
+    ) -> List[str]:
+        """
+        Identify features that contribute most to train/test distinction.
+
+        These features may need to be removed or investigated for
+        potential data leakage or regime change.
+
+        Args:
+            X_train: Training features
+            X_test: Test features
+            feature_names: List of feature names
+            threshold: Importance threshold for flagging
+
+        Returns:
+            List of problematic feature names
+        """
+        result = self.validate(X_train, X_test, feature_names)
+
+        if 'top_distinguishing_features' in result:
+            problematic = [
+                name for name, imp in result['top_distinguishing_features']
+                if imp > threshold
+            ]
+            return problematic
+
+        return []

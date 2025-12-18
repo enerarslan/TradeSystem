@@ -59,24 +59,442 @@ try:
 except ImportError:
     OPTUNA_AVAILABLE = False
 
+try:
+    import torch
+    import torch.nn as nn
+    PYTORCH_AVAILABLE = True
+except ImportError:
+    PYTORCH_AVAILABLE = False
+
+try:
+    from sklearn.ensemble import (
+        StackingClassifier, StackingRegressor,
+        VotingClassifier, VotingRegressor
+    )
+    SKLEARN_ENSEMBLE_AVAILABLE = True
+except ImportError:
+    SKLEARN_ENSEMBLE_AVAILABLE = False
+
 
 logger = logging.getLogger(__name__)
 
 
+# ==============================================================================
+# PyTorch Neural Network Architectures (JPMorgan Institutional-Level)
+# ==============================================================================
+
+if PYTORCH_AVAILABLE:
+    class LSTMModel(nn.Module):
+        """
+        LSTM model for time series prediction.
+
+        Architecture follows institutional best practices:
+        - Bidirectional LSTM for capturing past and future context
+        - Layer normalization for training stability
+        - Dropout for regularization
+        - Residual connections for gradient flow
+        """
+
+        def __init__(
+            self,
+            input_size: int,
+            hidden_size: int = 128,
+            num_layers: int = 2,
+            dropout: float = 0.2,
+            bidirectional: bool = True,
+            output_size: int = 1,
+        ):
+            super().__init__()
+            self.hidden_size = hidden_size
+            self.num_layers = num_layers
+            self.bidirectional = bidirectional
+
+            self.lstm = nn.LSTM(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0,
+                bidirectional=bidirectional,
+            )
+
+            lstm_output_size = hidden_size * (2 if bidirectional else 1)
+
+            self.layer_norm = nn.LayerNorm(lstm_output_size)
+            self.dropout = nn.Dropout(dropout)
+
+            self.fc = nn.Sequential(
+                nn.Linear(lstm_output_size, hidden_size),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size, output_size),
+            )
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # x shape: (batch, seq_len, input_size)
+            lstm_out, _ = self.lstm(x)
+            # Take last timestep output
+            out = lstm_out[:, -1, :]
+            out = self.layer_norm(out)
+            out = self.dropout(out)
+            return self.fc(out)
+
+
+    class GRUModel(nn.Module):
+        """
+        GRU model for time series prediction.
+
+        GRU is computationally more efficient than LSTM
+        while maintaining comparable performance.
+        """
+
+        def __init__(
+            self,
+            input_size: int,
+            hidden_size: int = 128,
+            num_layers: int = 2,
+            dropout: float = 0.2,
+            bidirectional: bool = True,
+            output_size: int = 1,
+        ):
+            super().__init__()
+            self.hidden_size = hidden_size
+            self.num_layers = num_layers
+            self.bidirectional = bidirectional
+
+            self.gru = nn.GRU(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0,
+                bidirectional=bidirectional,
+            )
+
+            gru_output_size = hidden_size * (2 if bidirectional else 1)
+
+            self.layer_norm = nn.LayerNorm(gru_output_size)
+            self.dropout = nn.Dropout(dropout)
+
+            self.fc = nn.Sequential(
+                nn.Linear(gru_output_size, hidden_size),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size, output_size),
+            )
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            gru_out, _ = self.gru(x)
+            out = gru_out[:, -1, :]
+            out = self.layer_norm(out)
+            out = self.dropout(out)
+            return self.fc(out)
+
+
+    class PositionalEncoding(nn.Module):
+        """Positional encoding for Transformer models."""
+
+        def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
+            super().__init__()
+            self.dropout = nn.Dropout(p=dropout)
+
+            pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+            div_term = torch.exp(
+                torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model)
+            )
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            pe = pe.unsqueeze(0)
+            self.register_buffer('pe', pe)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            x = x + self.pe[:, :x.size(1), :]
+            return self.dropout(x)
+
+
+    class TransformerModel(nn.Module):
+        """
+        Transformer model for time series prediction.
+
+        Based on "Attention Is All You Need" (Vaswani et al., 2017)
+        adapted for financial time series.
+
+        Features:
+        - Multi-head self-attention
+        - Positional encoding
+        - Layer normalization
+        - Feedforward networks
+        """
+
+        def __init__(
+            self,
+            input_size: int,
+            d_model: int = 128,
+            nhead: int = 8,
+            num_layers: int = 4,
+            dim_feedforward: int = 512,
+            dropout: float = 0.1,
+            output_size: int = 1,
+            max_seq_len: int = 500,
+        ):
+            super().__init__()
+
+            self.input_projection = nn.Linear(input_size, d_model)
+            self.pos_encoder = PositionalEncoding(d_model, max_seq_len, dropout)
+
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=nhead,
+                dim_feedforward=dim_feedforward,
+                dropout=dropout,
+                batch_first=True,
+                norm_first=True,  # Pre-LN for better training stability
+            )
+            self.transformer_encoder = nn.TransformerEncoder(
+                encoder_layer, num_layers=num_layers
+            )
+
+            self.output_layer = nn.Sequential(
+                nn.Linear(d_model, d_model // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model // 2, output_size),
+            )
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            # x shape: (batch, seq_len, input_size)
+            x = self.input_projection(x)
+            x = self.pos_encoder(x)
+            x = self.transformer_encoder(x)
+            # Use CLS-like approach: take mean of sequence
+            x = x.mean(dim=1)
+            return self.output_layer(x)
+
+
+    class NeuralNetWrapper:
+        """
+        Sklearn-compatible wrapper for PyTorch neural networks.
+
+        Provides fit/predict interface compatible with sklearn,
+        enabling use in pipelines and cross-validation.
+        """
+
+        def __init__(
+            self,
+            model_class: Type[nn.Module],
+            model_params: Dict[str, Any],
+            task_type: str = "classification",
+            learning_rate: float = 1e-3,
+            batch_size: int = 64,
+            epochs: int = 100,
+            early_stopping_patience: int = 10,
+            device: Optional[str] = None,
+            sequence_length: int = 20,
+            random_state: int = 42,
+        ):
+            self.model_class = model_class
+            self.model_params = model_params
+            self.task_type = task_type
+            self.learning_rate = learning_rate
+            self.batch_size = batch_size
+            self.epochs = epochs
+            self.early_stopping_patience = early_stopping_patience
+            self.sequence_length = sequence_length
+            self.random_state = random_state
+
+            if device is None:
+                if torch.cuda.is_available():
+                    self.device = "cuda"
+                elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                    self.device = "mps"
+                else:
+                    self.device = "cpu"
+            else:
+                self.device = device
+
+            self.model_ = None
+            self.scaler_ = None
+            self.classes_ = None
+
+        def _prepare_sequences(self, X: np.ndarray) -> np.ndarray:
+            """Prepare sequential data for RNN/Transformer models."""
+            if len(X.shape) == 2:
+                # Create sequences from 2D data
+                n_samples = len(X) - self.sequence_length + 1
+                n_features = X.shape[1]
+                sequences = np.zeros((n_samples, self.sequence_length, n_features))
+                for i in range(n_samples):
+                    sequences[i] = X[i:i + self.sequence_length]
+                return sequences
+            return X
+
+        def fit(self, X: np.ndarray, y: np.ndarray) -> "NeuralNetWrapper":
+            """Fit the neural network model."""
+            torch.manual_seed(self.random_state)
+            np.random.seed(self.random_state)
+
+            # Prepare data
+            X_seq = self._prepare_sequences(X)
+            y_aligned = y[self.sequence_length - 1:] if len(X.shape) == 2 else y
+
+            # Store classes for classification
+            if self.task_type == "classification":
+                self.classes_ = np.unique(y_aligned)
+
+            # Initialize model
+            input_size = X_seq.shape[-1]
+            output_size = len(self.classes_) if self.task_type == "classification" else 1
+
+            self.model_ = self.model_class(
+                input_size=input_size,
+                output_size=output_size,
+                **self.model_params
+            ).to(self.device)
+
+            # Loss and optimizer
+            if self.task_type == "classification":
+                criterion = nn.CrossEntropyLoss()
+            else:
+                criterion = nn.MSELoss()
+
+            optimizer = torch.optim.AdamW(
+                self.model_.parameters(),
+                lr=self.learning_rate,
+                weight_decay=1e-4,
+            )
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=5
+            )
+
+            # Convert to tensors
+            X_tensor = torch.FloatTensor(X_seq).to(self.device)
+            if self.task_type == "classification":
+                y_tensor = torch.LongTensor(y_aligned).to(self.device)
+            else:
+                y_tensor = torch.FloatTensor(y_aligned).unsqueeze(1).to(self.device)
+
+            # Training loop with early stopping
+            dataset = torch.utils.data.TensorDataset(X_tensor, y_tensor)
+            train_size = int(0.9 * len(dataset))
+            val_size = len(dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(
+                dataset, [train_size, val_size]
+            )
+
+            train_loader = torch.utils.data.DataLoader(
+                train_dataset, batch_size=self.batch_size, shuffle=True
+            )
+            val_loader = torch.utils.data.DataLoader(
+                val_dataset, batch_size=self.batch_size
+            )
+
+            best_val_loss = float('inf')
+            patience_counter = 0
+
+            for epoch in range(self.epochs):
+                # Training
+                self.model_.train()
+                train_loss = 0
+                for batch_X, batch_y in train_loader:
+                    optimizer.zero_grad()
+                    outputs = self.model_(batch_X)
+                    loss = criterion(outputs, batch_y.squeeze() if self.task_type == "classification" else batch_y)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.model_.parameters(), 1.0)
+                    optimizer.step()
+                    train_loss += loss.item()
+
+                # Validation
+                self.model_.eval()
+                val_loss = 0
+                with torch.no_grad():
+                    for batch_X, batch_y in val_loader:
+                        outputs = self.model_(batch_X)
+                        loss = criterion(outputs, batch_y.squeeze() if self.task_type == "classification" else batch_y)
+                        val_loss += loss.item()
+
+                val_loss /= len(val_loader)
+                scheduler.step(val_loss)
+
+                # Early stopping
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    if patience_counter >= self.early_stopping_patience:
+                        logger.info(f"Early stopping at epoch {epoch}")
+                        break
+
+            return self
+
+        def predict(self, X: np.ndarray) -> np.ndarray:
+            """Make predictions."""
+            self.model_.eval()
+            X_seq = self._prepare_sequences(X)
+            X_tensor = torch.FloatTensor(X_seq).to(self.device)
+
+            with torch.no_grad():
+                outputs = self.model_(X_tensor)
+                if self.task_type == "classification":
+                    predictions = outputs.argmax(dim=1).cpu().numpy()
+                else:
+                    predictions = outputs.squeeze().cpu().numpy()
+
+            return predictions
+
+        def predict_proba(self, X: np.ndarray) -> np.ndarray:
+            """Predict class probabilities (classification only)."""
+            if self.task_type != "classification":
+                raise ValueError("predict_proba only available for classification")
+
+            self.model_.eval()
+            X_seq = self._prepare_sequences(X)
+            X_tensor = torch.FloatTensor(X_seq).to(self.device)
+
+            with torch.no_grad():
+                outputs = self.model_(X_tensor)
+                probabilities = torch.softmax(outputs, dim=1).cpu().numpy()
+
+            return probabilities
+
+        @property
+        def feature_importances_(self) -> np.ndarray:
+            """Return placeholder feature importances (not available for neural nets)."""
+            # Neural networks don't have native feature importance
+            # Use SHAP or integrated gradients for explanation
+            return np.array([])
+
+
 class ModelType(str, Enum):
     """Supported model types."""
+    # Gradient Boosting Models
     LIGHTGBM_CLASSIFIER = "lightgbm_classifier"
     LIGHTGBM_REGRESSOR = "lightgbm_regressor"
     XGBOOST_CLASSIFIER = "xgboost_classifier"
     XGBOOST_REGRESSOR = "xgboost_regressor"
     CATBOOST_CLASSIFIER = "catboost_classifier"
     CATBOOST_REGRESSOR = "catboost_regressor"
+    # Traditional ML Models
     RANDOM_FOREST_CLASSIFIER = "random_forest_classifier"
     RANDOM_FOREST_REGRESSOR = "random_forest_regressor"
     RIDGE = "ridge"
     LASSO = "lasso"
     ELASTIC_NET = "elastic_net"
     LOGISTIC_REGRESSION = "logistic_regression"
+    # Neural Network Models (JPMorgan Institutional-Level)
+    LSTM_CLASSIFIER = "lstm_classifier"
+    LSTM_REGRESSOR = "lstm_regressor"
+    GRU_CLASSIFIER = "gru_classifier"
+    GRU_REGRESSOR = "gru_regressor"
+    TRANSFORMER_CLASSIFIER = "transformer_classifier"
+    TRANSFORMER_REGRESSOR = "transformer_regressor"
+    # Ensemble Models
+    STACKING_CLASSIFIER = "stacking_classifier"
+    STACKING_REGRESSOR = "stacking_regressor"
+    VOTING_CLASSIFIER = "voting_classifier"
+    VOTING_REGRESSOR = "voting_regressor"
 
 
 class TaskType(str, Enum):
@@ -251,6 +669,75 @@ DEFAULT_PARAMS: Dict[ModelType, Dict[str, Any]] = {
         "solver": "lbfgs",
         "max_iter": 1000,
     },
+    # Neural Network Default Parameters
+    ModelType.LSTM_CLASSIFIER: {
+        "hidden_size": 128,
+        "num_layers": 2,
+        "dropout": 0.2,
+        "bidirectional": True,
+        "learning_rate": 1e-3,
+        "batch_size": 64,
+        "epochs": 100,
+        "early_stopping_patience": 10,
+        "sequence_length": 20,
+    },
+    ModelType.LSTM_REGRESSOR: {
+        "hidden_size": 128,
+        "num_layers": 2,
+        "dropout": 0.2,
+        "bidirectional": True,
+        "learning_rate": 1e-3,
+        "batch_size": 64,
+        "epochs": 100,
+        "early_stopping_patience": 10,
+        "sequence_length": 20,
+    },
+    ModelType.GRU_CLASSIFIER: {
+        "hidden_size": 128,
+        "num_layers": 2,
+        "dropout": 0.2,
+        "bidirectional": True,
+        "learning_rate": 1e-3,
+        "batch_size": 64,
+        "epochs": 100,
+        "early_stopping_patience": 10,
+        "sequence_length": 20,
+    },
+    ModelType.GRU_REGRESSOR: {
+        "hidden_size": 128,
+        "num_layers": 2,
+        "dropout": 0.2,
+        "bidirectional": True,
+        "learning_rate": 1e-3,
+        "batch_size": 64,
+        "epochs": 100,
+        "early_stopping_patience": 10,
+        "sequence_length": 20,
+    },
+    ModelType.TRANSFORMER_CLASSIFIER: {
+        "d_model": 128,
+        "nhead": 8,
+        "num_layers": 4,
+        "dim_feedforward": 512,
+        "dropout": 0.1,
+        "learning_rate": 1e-4,
+        "batch_size": 32,
+        "epochs": 100,
+        "early_stopping_patience": 15,
+        "sequence_length": 50,
+    },
+    ModelType.TRANSFORMER_REGRESSOR: {
+        "d_model": 128,
+        "nhead": 8,
+        "num_layers": 4,
+        "dim_feedforward": 512,
+        "dropout": 0.1,
+        "learning_rate": 1e-4,
+        "batch_size": 32,
+        "epochs": 100,
+        "early_stopping_patience": 15,
+        "sequence_length": 50,
+    },
 }
 
 # Default parameter spaces for Optuna optimization
@@ -298,6 +785,33 @@ DEFAULT_PARAM_SPACES[ModelType.LIGHTGBM_REGRESSOR] = DEFAULT_PARAM_SPACES[ModelT
 DEFAULT_PARAM_SPACES[ModelType.XGBOOST_REGRESSOR] = DEFAULT_PARAM_SPACES[ModelType.XGBOOST_CLASSIFIER]
 DEFAULT_PARAM_SPACES[ModelType.CATBOOST_REGRESSOR] = DEFAULT_PARAM_SPACES[ModelType.CATBOOST_CLASSIFIER]
 DEFAULT_PARAM_SPACES[ModelType.RANDOM_FOREST_REGRESSOR] = DEFAULT_PARAM_SPACES[ModelType.RANDOM_FOREST_CLASSIFIER]
+
+# Neural Network parameter spaces
+_LSTM_PARAM_SPACES = [
+    ParamSpace("hidden_size", "categorical", choices=[64, 128, 256]),
+    ParamSpace("num_layers", "int", 1, 4),
+    ParamSpace("dropout", "float", 0.1, 0.5),
+    ParamSpace("learning_rate", "float_log", 1e-5, 1e-2),
+    ParamSpace("batch_size", "categorical", choices=[32, 64, 128]),
+    ParamSpace("sequence_length", "categorical", choices=[10, 20, 50]),
+]
+
+_TRANSFORMER_PARAM_SPACES = [
+    ParamSpace("d_model", "categorical", choices=[64, 128, 256]),
+    ParamSpace("nhead", "categorical", choices=[4, 8, 16]),
+    ParamSpace("num_layers", "int", 2, 6),
+    ParamSpace("dim_feedforward", "categorical", choices=[256, 512, 1024]),
+    ParamSpace("dropout", "float", 0.05, 0.3),
+    ParamSpace("learning_rate", "float_log", 1e-5, 1e-3),
+    ParamSpace("sequence_length", "categorical", choices=[20, 50, 100]),
+]
+
+DEFAULT_PARAM_SPACES[ModelType.LSTM_CLASSIFIER] = _LSTM_PARAM_SPACES
+DEFAULT_PARAM_SPACES[ModelType.LSTM_REGRESSOR] = _LSTM_PARAM_SPACES
+DEFAULT_PARAM_SPACES[ModelType.GRU_CLASSIFIER] = _LSTM_PARAM_SPACES
+DEFAULT_PARAM_SPACES[ModelType.GRU_REGRESSOR] = _LSTM_PARAM_SPACES
+DEFAULT_PARAM_SPACES[ModelType.TRANSFORMER_CLASSIFIER] = _TRANSFORMER_PARAM_SPACES
+DEFAULT_PARAM_SPACES[ModelType.TRANSFORMER_REGRESSOR] = _TRANSFORMER_PARAM_SPACES
 
 
 class ModelFactory:
@@ -456,6 +970,124 @@ class ModelFactory:
                 raise ImportError("scikit-learn not available")
             return LogisticRegression(**params)
 
+        # Neural Network Models
+        elif model_type in [ModelType.LSTM_CLASSIFIER, ModelType.LSTM_REGRESSOR]:
+            if not PYTORCH_AVAILABLE:
+                raise ImportError("PyTorch not available for LSTM models")
+            task_type = "classification" if "classifier" in model_type.value else "regression"
+            model_params = {
+                "hidden_size": params.get("hidden_size", 128),
+                "num_layers": params.get("num_layers", 2),
+                "dropout": params.get("dropout", 0.2),
+                "bidirectional": params.get("bidirectional", True),
+            }
+            return NeuralNetWrapper(
+                model_class=LSTMModel,
+                model_params=model_params,
+                task_type=task_type,
+                learning_rate=params.get("learning_rate", 1e-3),
+                batch_size=params.get("batch_size", 64),
+                epochs=params.get("epochs", 100),
+                early_stopping_patience=params.get("early_stopping_patience", 10),
+                sequence_length=params.get("sequence_length", 20),
+                random_state=params.get("random_state", 42),
+            )
+
+        elif model_type in [ModelType.GRU_CLASSIFIER, ModelType.GRU_REGRESSOR]:
+            if not PYTORCH_AVAILABLE:
+                raise ImportError("PyTorch not available for GRU models")
+            task_type = "classification" if "classifier" in model_type.value else "regression"
+            model_params = {
+                "hidden_size": params.get("hidden_size", 128),
+                "num_layers": params.get("num_layers", 2),
+                "dropout": params.get("dropout", 0.2),
+                "bidirectional": params.get("bidirectional", True),
+            }
+            return NeuralNetWrapper(
+                model_class=GRUModel,
+                model_params=model_params,
+                task_type=task_type,
+                learning_rate=params.get("learning_rate", 1e-3),
+                batch_size=params.get("batch_size", 64),
+                epochs=params.get("epochs", 100),
+                early_stopping_patience=params.get("early_stopping_patience", 10),
+                sequence_length=params.get("sequence_length", 20),
+                random_state=params.get("random_state", 42),
+            )
+
+        elif model_type in [ModelType.TRANSFORMER_CLASSIFIER, ModelType.TRANSFORMER_REGRESSOR]:
+            if not PYTORCH_AVAILABLE:
+                raise ImportError("PyTorch not available for Transformer models")
+            task_type = "classification" if "classifier" in model_type.value else "regression"
+            model_params = {
+                "d_model": params.get("d_model", 128),
+                "nhead": params.get("nhead", 8),
+                "num_layers": params.get("num_layers", 4),
+                "dim_feedforward": params.get("dim_feedforward", 512),
+                "dropout": params.get("dropout", 0.1),
+            }
+            return NeuralNetWrapper(
+                model_class=TransformerModel,
+                model_params=model_params,
+                task_type=task_type,
+                learning_rate=params.get("learning_rate", 1e-4),
+                batch_size=params.get("batch_size", 32),
+                epochs=params.get("epochs", 100),
+                early_stopping_patience=params.get("early_stopping_patience", 15),
+                sequence_length=params.get("sequence_length", 50),
+                random_state=params.get("random_state", 42),
+            )
+
+        # Ensemble Models (require base_estimators to be passed in params)
+        elif model_type == ModelType.STACKING_CLASSIFIER:
+            if not SKLEARN_ENSEMBLE_AVAILABLE:
+                raise ImportError("sklearn ensemble not available")
+            base_estimators = params.pop("estimators", None)
+            final_estimator = params.pop("final_estimator", None)
+            if base_estimators is None:
+                raise ValueError("Stacking requires 'estimators' parameter")
+            return StackingClassifier(
+                estimators=base_estimators,
+                final_estimator=final_estimator,
+                **params
+            )
+
+        elif model_type == ModelType.STACKING_REGRESSOR:
+            if not SKLEARN_ENSEMBLE_AVAILABLE:
+                raise ImportError("sklearn ensemble not available")
+            base_estimators = params.pop("estimators", None)
+            final_estimator = params.pop("final_estimator", None)
+            if base_estimators is None:
+                raise ValueError("Stacking requires 'estimators' parameter")
+            return StackingRegressor(
+                estimators=base_estimators,
+                final_estimator=final_estimator,
+                **params
+            )
+
+        elif model_type == ModelType.VOTING_CLASSIFIER:
+            if not SKLEARN_ENSEMBLE_AVAILABLE:
+                raise ImportError("sklearn ensemble not available")
+            base_estimators = params.pop("estimators", None)
+            if base_estimators is None:
+                raise ValueError("Voting requires 'estimators' parameter")
+            return VotingClassifier(
+                estimators=base_estimators,
+                voting=params.pop("voting", "soft"),
+                **params
+            )
+
+        elif model_type == ModelType.VOTING_REGRESSOR:
+            if not SKLEARN_ENSEMBLE_AVAILABLE:
+                raise ImportError("sklearn ensemble not available")
+            base_estimators = params.pop("estimators", None)
+            if base_estimators is None:
+                raise ValueError("Voting requires 'estimators' parameter")
+            return VotingRegressor(
+                estimators=base_estimators,
+                **params
+            )
+
         else:
             raise ValueError(f"Unknown model type: {model_type}")
 
@@ -557,6 +1189,11 @@ class ModelFactory:
             ModelType.CATBOOST_CLASSIFIER,
             ModelType.RANDOM_FOREST_CLASSIFIER,
             ModelType.LOGISTIC_REGRESSION,
+            ModelType.LSTM_CLASSIFIER,
+            ModelType.GRU_CLASSIFIER,
+            ModelType.TRANSFORMER_CLASSIFIER,
+            ModelType.STACKING_CLASSIFIER,
+            ModelType.VOTING_CLASSIFIER,
         ]
 
         if model_type in classification_types:
@@ -752,4 +1389,479 @@ class ModelFactory:
                 ModelType.LOGISTIC_REGRESSION,
             ])
 
+        if PYTORCH_AVAILABLE:
+            available.extend([
+                ModelType.LSTM_CLASSIFIER,
+                ModelType.LSTM_REGRESSOR,
+                ModelType.GRU_CLASSIFIER,
+                ModelType.GRU_REGRESSOR,
+                ModelType.TRANSFORMER_CLASSIFIER,
+                ModelType.TRANSFORMER_REGRESSOR,
+            ])
+
+        if SKLEARN_ENSEMBLE_AVAILABLE:
+            available.extend([
+                ModelType.STACKING_CLASSIFIER,
+                ModelType.STACKING_REGRESSOR,
+                ModelType.VOTING_CLASSIFIER,
+                ModelType.VOTING_REGRESSOR,
+            ])
+
         return available
+
+
+# ==============================================================================
+# Ensemble Factory Methods (JPMorgan Institutional-Level)
+# ==============================================================================
+
+class EnsembleFactory:
+    """
+    Factory for creating ensemble models with predefined configurations.
+
+    Provides institutional-level ensemble strategies:
+    - Gradient Boosting ensemble (LightGBM + XGBoost + CatBoost)
+    - Diverse ensemble (mix of algorithms)
+    - Stacked ensemble with meta-learner
+    - Blended predictions
+
+    Example:
+        # Create a voting ensemble with default GB models
+        model = EnsembleFactory.create_gb_voting_ensemble(task_type="classification")
+
+        # Create a stacking ensemble with diverse base models
+        model = EnsembleFactory.create_diverse_stacking_ensemble(
+            task_type="classification",
+            final_estimator="logistic_regression"
+        )
+    """
+
+    @staticmethod
+    def create_gb_voting_ensemble(
+        task_type: str = "classification",
+        voting: str = "soft",
+        weights: Optional[List[float]] = None,
+        random_state: int = 42,
+        n_jobs: int = -1,
+    ) -> Any:
+        """
+        Create a voting ensemble using gradient boosting models.
+
+        Combines LightGBM, XGBoost, and CatBoost for robust predictions.
+
+        Args:
+            task_type: "classification" or "regression"
+            voting: "soft" or "hard" (classification only)
+            weights: Optional weights for each model
+            random_state: Random seed
+            n_jobs: Number of parallel jobs
+
+        Returns:
+            VotingClassifier or VotingRegressor
+        """
+        if task_type == "classification":
+            base_models = []
+
+            if LIGHTGBM_AVAILABLE:
+                base_models.append((
+                    "lgb",
+                    ModelFactory.create_model(
+                        ModelType.LIGHTGBM_CLASSIFIER,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if XGBOOST_AVAILABLE:
+                base_models.append((
+                    "xgb",
+                    ModelFactory.create_model(
+                        ModelType.XGBOOST_CLASSIFIER,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if CATBOOST_AVAILABLE:
+                base_models.append((
+                    "cb",
+                    ModelFactory.create_model(
+                        ModelType.CATBOOST_CLASSIFIER,
+                        random_state=random_state,
+                    )
+                ))
+
+            if not base_models:
+                raise ImportError("No gradient boosting libraries available")
+
+            return VotingClassifier(
+                estimators=base_models,
+                voting=voting,
+                weights=weights,
+                n_jobs=n_jobs,
+            )
+
+        else:  # regression
+            base_models = []
+
+            if LIGHTGBM_AVAILABLE:
+                base_models.append((
+                    "lgb",
+                    ModelFactory.create_model(
+                        ModelType.LIGHTGBM_REGRESSOR,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if XGBOOST_AVAILABLE:
+                base_models.append((
+                    "xgb",
+                    ModelFactory.create_model(
+                        ModelType.XGBOOST_REGRESSOR,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if CATBOOST_AVAILABLE:
+                base_models.append((
+                    "cb",
+                    ModelFactory.create_model(
+                        ModelType.CATBOOST_REGRESSOR,
+                        random_state=random_state,
+                    )
+                ))
+
+            if not base_models:
+                raise ImportError("No gradient boosting libraries available")
+
+            return VotingRegressor(
+                estimators=base_models,
+                weights=weights,
+                n_jobs=n_jobs,
+            )
+
+    @staticmethod
+    def create_diverse_stacking_ensemble(
+        task_type: str = "classification",
+        final_estimator: str = "logistic_regression",
+        include_neural: bool = False,
+        random_state: int = 42,
+        n_jobs: int = -1,
+        cv: int = 5,
+    ) -> Any:
+        """
+        Create a stacking ensemble with diverse model types.
+
+        Uses a variety of algorithms (tree-based, linear, optionally neural)
+        to capture different patterns in the data.
+
+        Args:
+            task_type: "classification" or "regression"
+            final_estimator: Type of meta-learner
+            include_neural: Include neural network models if available
+            random_state: Random seed
+            n_jobs: Number of parallel jobs
+            cv: Cross-validation folds for stacking
+
+        Returns:
+            StackingClassifier or StackingRegressor
+        """
+        if task_type == "classification":
+            base_models = []
+
+            # Gradient boosting models
+            if LIGHTGBM_AVAILABLE:
+                base_models.append((
+                    "lgb",
+                    ModelFactory.create_model(
+                        ModelType.LIGHTGBM_CLASSIFIER,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if XGBOOST_AVAILABLE:
+                base_models.append((
+                    "xgb",
+                    ModelFactory.create_model(
+                        ModelType.XGBOOST_CLASSIFIER,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            # Random Forest
+            if SKLEARN_AVAILABLE:
+                base_models.append((
+                    "rf",
+                    ModelFactory.create_model(
+                        ModelType.RANDOM_FOREST_CLASSIFIER,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            # Neural network (optional)
+            if include_neural and PYTORCH_AVAILABLE:
+                base_models.append((
+                    "lstm",
+                    ModelFactory.create_model(
+                        ModelType.LSTM_CLASSIFIER,
+                        random_state=random_state,
+                    )
+                ))
+
+            # Create meta-learner
+            if final_estimator == "logistic_regression":
+                meta = LogisticRegression(
+                    C=1.0, max_iter=1000, random_state=random_state
+                )
+            elif final_estimator == "lightgbm" and LIGHTGBM_AVAILABLE:
+                meta = ModelFactory.create_model(
+                    ModelType.LIGHTGBM_CLASSIFIER,
+                    params={"n_estimators": 50, "max_depth": 4},
+                    random_state=random_state,
+                )
+            else:
+                meta = LogisticRegression(
+                    C=1.0, max_iter=1000, random_state=random_state
+                )
+
+            return StackingClassifier(
+                estimators=base_models,
+                final_estimator=meta,
+                cv=cv,
+                n_jobs=n_jobs,
+                passthrough=False,
+            )
+
+        else:  # regression
+            base_models = []
+
+            if LIGHTGBM_AVAILABLE:
+                base_models.append((
+                    "lgb",
+                    ModelFactory.create_model(
+                        ModelType.LIGHTGBM_REGRESSOR,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if XGBOOST_AVAILABLE:
+                base_models.append((
+                    "xgb",
+                    ModelFactory.create_model(
+                        ModelType.XGBOOST_REGRESSOR,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if SKLEARN_AVAILABLE:
+                base_models.append((
+                    "rf",
+                    ModelFactory.create_model(
+                        ModelType.RANDOM_FOREST_REGRESSOR,
+                        random_state=random_state,
+                        n_jobs=n_jobs,
+                    )
+                ))
+
+            if include_neural and PYTORCH_AVAILABLE:
+                base_models.append((
+                    "lstm",
+                    ModelFactory.create_model(
+                        ModelType.LSTM_REGRESSOR,
+                        random_state=random_state,
+                    )
+                ))
+
+            # Meta-learner
+            if final_estimator == "ridge":
+                meta = Ridge(alpha=1.0, random_state=random_state)
+            elif final_estimator == "lightgbm" and LIGHTGBM_AVAILABLE:
+                meta = ModelFactory.create_model(
+                    ModelType.LIGHTGBM_REGRESSOR,
+                    params={"n_estimators": 50, "max_depth": 4},
+                    random_state=random_state,
+                )
+            else:
+                meta = Ridge(alpha=1.0, random_state=random_state)
+
+            return StackingRegressor(
+                estimators=base_models,
+                final_estimator=meta,
+                cv=cv,
+                n_jobs=n_jobs,
+                passthrough=False,
+            )
+
+    @staticmethod
+    def create_weighted_blend(
+        predictions: List[np.ndarray],
+        weights: Optional[List[float]] = None,
+    ) -> np.ndarray:
+        """
+        Create a weighted blend of model predictions.
+
+        Args:
+            predictions: List of prediction arrays (same shape)
+            weights: Weights for each model (default: equal weights)
+
+        Returns:
+            Blended predictions
+        """
+        if weights is None:
+            weights = [1.0 / len(predictions)] * len(predictions)
+
+        if len(weights) != len(predictions):
+            raise ValueError("Number of weights must match number of predictions")
+
+        weights = np.array(weights)
+        weights = weights / weights.sum()  # Normalize
+
+        blended = np.zeros_like(predictions[0])
+        for pred, weight in zip(predictions, weights):
+            blended += pred * weight
+
+        return blended
+
+    @staticmethod
+    def optimize_blend_weights(
+        predictions: List[np.ndarray],
+        y_true: np.ndarray,
+        metric: str = "accuracy",
+    ) -> Tuple[List[float], float]:
+        """
+        Optimize blend weights using scipy optimization.
+
+        Args:
+            predictions: List of prediction arrays
+            y_true: True labels
+            metric: Metric to optimize ("accuracy", "rmse", "auc")
+
+        Returns:
+            Tuple of (optimal_weights, best_score)
+        """
+        from scipy.optimize import minimize
+        from sklearn.metrics import accuracy_score, roc_auc_score, mean_squared_error
+
+        n_models = len(predictions)
+
+        def objective(weights: np.ndarray) -> float:
+            weights = np.abs(weights) / np.abs(weights).sum()
+            blended = EnsembleFactory.create_weighted_blend(predictions, list(weights))
+
+            if metric == "accuracy":
+                blended_labels = (blended > 0.5).astype(int)
+                return -accuracy_score(y_true, blended_labels)
+            elif metric == "auc":
+                return -roc_auc_score(y_true, blended)
+            elif metric == "rmse":
+                return np.sqrt(mean_squared_error(y_true, blended))
+            else:
+                raise ValueError(f"Unknown metric: {metric}")
+
+        # Initial weights (equal)
+        x0 = np.ones(n_models) / n_models
+
+        # Optimize
+        result = minimize(
+            objective,
+            x0,
+            method="SLSQP",
+            bounds=[(0, 1)] * n_models,
+            constraints={"type": "eq", "fun": lambda w: np.sum(w) - 1},
+        )
+
+        optimal_weights = list(np.abs(result.x) / np.abs(result.x).sum())
+        best_score = -result.fun if metric in ["accuracy", "auc"] else result.fun
+
+        return optimal_weights, best_score
+
+    @staticmethod
+    def create_custom_ensemble(
+        model_configs: List[Dict[str, Any]],
+        ensemble_type: str = "voting",
+        task_type: str = "classification",
+        final_estimator: Optional[Any] = None,
+        voting: str = "soft",
+        n_jobs: int = -1,
+    ) -> Any:
+        """
+        Create a custom ensemble from model configurations.
+
+        Args:
+            model_configs: List of dicts with keys:
+                - "name": Estimator name
+                - "model_type": ModelType enum value
+                - "params": Optional dict of parameters
+            ensemble_type: "voting" or "stacking"
+            task_type: "classification" or "regression"
+            final_estimator: Meta-learner for stacking (optional)
+            voting: Voting method for VotingClassifier
+            n_jobs: Number of parallel jobs
+
+        Returns:
+            Ensemble model
+
+        Example:
+            configs = [
+                {"name": "lgb", "model_type": ModelType.LIGHTGBM_CLASSIFIER,
+                 "params": {"n_estimators": 200}},
+                {"name": "xgb", "model_type": ModelType.XGBOOST_CLASSIFIER,
+                 "params": {"max_depth": 8}},
+            ]
+            model = EnsembleFactory.create_custom_ensemble(
+                configs,
+                ensemble_type="voting",
+                task_type="classification"
+            )
+        """
+        estimators = []
+
+        for config in model_configs:
+            name = config["name"]
+            model_type = config["model_type"]
+            params = config.get("params", {})
+
+            model = ModelFactory.create_model(model_type, params=params)
+            estimators.append((name, model))
+
+        if ensemble_type == "voting":
+            if task_type == "classification":
+                return VotingClassifier(
+                    estimators=estimators,
+                    voting=voting,
+                    n_jobs=n_jobs,
+                )
+            else:
+                return VotingRegressor(
+                    estimators=estimators,
+                    n_jobs=n_jobs,
+                )
+
+        elif ensemble_type == "stacking":
+            if final_estimator is None:
+                if task_type == "classification":
+                    final_estimator = LogisticRegression(max_iter=1000)
+                else:
+                    final_estimator = Ridge()
+
+            if task_type == "classification":
+                return StackingClassifier(
+                    estimators=estimators,
+                    final_estimator=final_estimator,
+                    n_jobs=n_jobs,
+                )
+            else:
+                return StackingRegressor(
+                    estimators=estimators,
+                    final_estimator=final_estimator,
+                    n_jobs=n_jobs,
+                )
+
+        else:
+            raise ValueError(f"Unknown ensemble_type: {ensemble_type}")

@@ -707,7 +707,10 @@ class TrainingPipeline:
             raise
 
     def _merge_data(self, data_dict: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """Merge multiple DataFrames into one."""
+        """Merge multiple DataFrames into one with timestamp alignment validation."""
+        # First validate timestamp alignment across all symbols
+        self._validate_multi_asset_alignment(data_dict)
+
         frames = []
         for symbol, df in data_dict.items():
             df = df.copy()
@@ -715,6 +718,111 @@ class TrainingPipeline:
             frames.append(df)
 
         return pd.concat(frames, ignore_index=False)
+
+    def _validate_multi_asset_alignment(self, data_dict: Dict[str, pd.DataFrame]) -> None:
+        """
+        Validate timestamp alignment across multiple assets to prevent cross-asset leakage.
+
+        CRITICAL: When training on multiple symbols, we must ensure:
+        1. All symbols have identical timestamp ranges
+        2. No cross-asset future data contamination
+        3. Features are calculated per-symbol before combining
+
+        Raises:
+            ValueError: If timestamp alignment issues are detected
+        """
+        if len(data_dict) <= 1:
+            return  # Single asset, no cross-asset validation needed
+
+        logger.info(f"Validating multi-asset timestamp alignment for {len(data_dict)} symbols...")
+
+        symbols = list(data_dict.keys())
+        alignment_issues = []
+        leakage_warnings = []
+
+        # Get timestamp info for each symbol
+        timestamp_info = {}
+        for symbol, df in data_dict.items():
+            if isinstance(df.index, pd.DatetimeIndex):
+                timestamp_info[symbol] = {
+                    'start': df.index.min(),
+                    'end': df.index.max(),
+                    'count': len(df),
+                    'timestamps': set(df.index),
+                }
+            else:
+                # Try to convert index to datetime
+                try:
+                    ts_index = pd.to_datetime(df.index)
+                    timestamp_info[symbol] = {
+                        'start': ts_index.min(),
+                        'end': ts_index.max(),
+                        'count': len(df),
+                        'timestamps': set(ts_index),
+                    }
+                except Exception:
+                    alignment_issues.append(f"{symbol}: Cannot parse timestamps from index")
+                    continue
+
+        if alignment_issues:
+            logger.error(f"Timestamp parsing issues: {alignment_issues}")
+            raise ValueError(f"Multi-asset timestamp validation failed: {alignment_issues}")
+
+        # Check timestamp range alignment
+        reference_symbol = symbols[0]
+        ref_info = timestamp_info[reference_symbol]
+
+        for symbol in symbols[1:]:
+            sym_info = timestamp_info[symbol]
+
+            # Check start date alignment
+            if abs((sym_info['start'] - ref_info['start']).total_seconds()) > 86400:  # >1 day difference
+                alignment_issues.append(
+                    f"{symbol} start date ({sym_info['start']}) differs from "
+                    f"{reference_symbol} ({ref_info['start']}) by more than 1 day"
+                )
+
+            # Check end date alignment
+            if abs((sym_info['end'] - ref_info['end']).total_seconds()) > 86400:
+                alignment_issues.append(
+                    f"{symbol} end date ({sym_info['end']}) differs from "
+                    f"{reference_symbol} ({ref_info['end']}) by more than 1 day"
+                )
+
+            # Check for significant sample count differences
+            count_diff_pct = abs(sym_info['count'] - ref_info['count']) / ref_info['count'] * 100
+            if count_diff_pct > 10:  # More than 10% difference
+                leakage_warnings.append(
+                    f"{symbol} has {sym_info['count']} samples vs {reference_symbol} "
+                    f"with {ref_info['count']} ({count_diff_pct:.1f}% difference)"
+                )
+
+        # Check for cross-asset timestamp overlap issues
+        # This could indicate one asset has future data relative to another
+        all_timestamps = set()
+        for symbol, info in timestamp_info.items():
+            if len(all_timestamps) > 0:
+                overlap = all_timestamps.intersection(info['timestamps'])
+                non_overlap = info['timestamps'] - all_timestamps
+                if len(non_overlap) > len(overlap) * 0.1:  # >10% non-overlapping
+                    leakage_warnings.append(
+                        f"{symbol} has {len(non_overlap)} timestamps not present in other assets"
+                    )
+            all_timestamps.update(info['timestamps'])
+
+        # Log warnings
+        for warning in leakage_warnings:
+            logger.warning(f"Multi-asset alignment warning: {warning}")
+
+        # Fail on critical alignment issues
+        if alignment_issues:
+            logger.error(f"Multi-asset alignment errors: {alignment_issues}")
+            raise ValueError(
+                f"Multi-asset timestamp alignment validation failed. "
+                f"This could cause cross-asset data leakage. Issues: {alignment_issues}"
+            )
+
+        logger.info(f"Multi-asset timestamp alignment validated successfully for {len(symbols)} symbols")
 
     def _validate_data(self, data: pd.DataFrame) -> Dict[str, Any]:
         """
@@ -805,7 +913,11 @@ class TrainingPipeline:
 
     def _generate_features(self, data: pd.DataFrame) -> Dict[str, Any]:
         """
-        Step 2: Generate features with leakage prevention.
+        Step 2: Generate features with proper fit/transform pattern to prevent leakage.
+
+        IMPORTANT: This method uses fit_transform() which should only be called
+        on the FULL dataset before train/test split. The scaling parameters
+        will be fit on training data only in _prepare_training_data().
         """
         logger.info("Generating features...")
 
@@ -814,15 +926,21 @@ class TrainingPipeline:
             from src.features.pipeline import FeaturePipeline
             self.feature_pipeline = FeaturePipeline(
                 scaling=self.config.get("feature_scaling", "robust"),
+                strict_leakage_check=False,  # Allow internal generation for pipeline
             )
 
-        # Generate features (pipeline handles leakage prevention internally)
-        self._features = self.feature_pipeline.generate_features(
-            data,
-            include_technical=self.config.get("include_technical", True),
-            include_statistical=self.config.get("include_statistical", True),
-            include_lagged=self.config.get("include_lagged", True),
-        )
+        # Set internal call flag to allow feature generation
+        self.feature_pipeline._internal_call = True
+        try:
+            # Generate features using internal method (leakage prevention handled in CV)
+            self._features = self.feature_pipeline._generate_features(
+                data,
+                include_technical=self.config.get("include_technical", True),
+                include_statistical=self.config.get("include_statistical", True),
+                include_lagged=self.config.get("include_lagged", True),
+            )
+        finally:
+            self.feature_pipeline._internal_call = False
 
         n_features = len(self._features.columns)
         logger.info(f"Generated {n_features} features")
@@ -847,17 +965,36 @@ class TrainingPipeline:
         prediction_horizon = train_config.get("prediction_horizon", 5)
 
         # Handle purge_gap - can be "auto" string or int
+        # CRITICAL: Purge gap must account for BOTH prediction horizon AND feature lookback
+        # to prevent any look-ahead bias from features that use historical data
         purge_gap_setting = train_config.get("purge_gap", 50)
+
+        # Get max_feature_lookback from feature pipeline or config
+        max_feature_lookback = train_config.get("max_feature_lookback", 200)
+        if self.feature_pipeline is not None and hasattr(self.feature_pipeline, 'max_lookback'):
+            max_feature_lookback = self.feature_pipeline.max_lookback
+            logger.info(f"Using max_feature_lookback from feature pipeline: {max_feature_lookback}")
+
         if purge_gap_setting == "auto" or not isinstance(purge_gap_setting, (int, float)):
-            # Calculate auto purge gap based on prediction horizon
-            # For financial data, purge gap should be roughly 2x prediction_horizon
-            # to ensure no look-ahead bias, but not too large to waste data
-            # Use prediction_horizon * 2 + small buffer, NOT max_feature_lookback
-            # max_feature_lookback is for feature calculation, not purging
-            purge_gap = prediction_horizon * 2 + 5  # Reasonable purge: 2x horizon + buffer
-            logger.info(f"Auto-calculated purge_gap: {purge_gap} (prediction_horizon={prediction_horizon})")
+            # CORRECT formula: purge_gap = prediction_horizon + max_feature_lookback + buffer
+            # This ensures NO information from future data leaks through features
+            # Example: 5-bar prediction + 250-bar max lookback + 10-bar buffer = 265 bar purge
+            buffer = 10
+            purge_gap = prediction_horizon + max_feature_lookback + buffer
+            logger.info(
+                f"Auto-calculated purge_gap: {purge_gap} "
+                f"(prediction_horizon={prediction_horizon} + max_feature_lookback={max_feature_lookback} + buffer={buffer})"
+            )
         else:
             purge_gap = int(purge_gap_setting)
+            # Warn if purge_gap seems too small
+            min_recommended = prediction_horizon + max_feature_lookback
+            if purge_gap < min_recommended:
+                logger.warning(
+                    f"Configured purge_gap ({purge_gap}) is less than recommended minimum "
+                    f"({min_recommended} = prediction_horizon + max_feature_lookback). "
+                    f"This may cause data leakage!"
+                )
 
         # Create target
         target_col = train_config.get("target_column", "close")

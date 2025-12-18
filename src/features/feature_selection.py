@@ -51,6 +51,12 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+
 
 class SelectionMethod(str, Enum):
     """Available feature selection methods."""
@@ -61,6 +67,9 @@ class SelectionMethod(str, Enum):
     RFE = "rfe"
     STABILITY = "stability"
     COMBINED = "combined"
+    SHAP = "shap"  # SHAP-based selection
+    ADVERSARIAL = "adversarial"  # Adversarial validation-based selection
+    TEMPORAL = "temporal"  # Temporal importance tracking
 
 
 @dataclass
@@ -193,6 +202,12 @@ class FeatureSelector(BaseEstimator, TransformerMixin):
             self._fit_stability(X_arr, y_arr)
         elif self.method == SelectionMethod.COMBINED:
             self._fit_combined(X_arr, y_arr)
+        elif self.method == SelectionMethod.SHAP:
+            self._fit_shap(X_arr, y_arr)
+        elif self.method == SelectionMethod.ADVERSARIAL:
+            self._fit_adversarial(X_arr, y_arr)
+        elif self.method == SelectionMethod.TEMPORAL:
+            self._fit_temporal(X_arr, y_arr)
         else:
             raise ValueError(f"Unknown method: {self.method}")
 
@@ -580,6 +595,284 @@ class FeatureSelector(BaseEstimator, TransformerMixin):
             )
             n_select = max(10, self.n_features or 10)
             self._selected_features = sorted_features[:n_select]
+
+    def _fit_shap(self, X: np.ndarray, y: np.ndarray) -> None:
+        """
+        SHAP-based feature selection.
+
+        Uses SHAP (SHapley Additive exPlanations) values to select features
+        based on their average contribution to model predictions.
+
+        SHAP values are theoretically grounded in game theory and provide
+        consistent, locally accurate feature importance.
+        """
+        if not SHAP_AVAILABLE:
+            logger.warning("SHAP not available, falling back to importance-based selection")
+            self._fit_importance(X, y)
+            return
+
+        if not LIGHTGBM_AVAILABLE:
+            logger.warning("LightGBM not available for SHAP, falling back to TreeExplainer with RF")
+            self._fit_shap_rf(X, y)
+            return
+
+        logger.info("Computing SHAP values for feature selection...")
+
+        # Train model
+        if self.task_type == "classification":
+            model = lgb.LGBMClassifier(
+                n_estimators=100,
+                max_depth=5,
+                random_state=self.random_state,
+                n_jobs=self.n_jobs,
+                verbose=-1,
+            )
+        else:
+            model = lgb.LGBMRegressor(
+                n_estimators=100,
+                max_depth=5,
+                random_state=self.random_state,
+                n_jobs=self.n_jobs,
+                verbose=-1,
+            )
+
+        X_clean = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        y_clean = np.nan_to_num(y, nan=0.0)
+
+        model.fit(X_clean, y_clean)
+
+        # Calculate SHAP values
+        explainer = shap.TreeExplainer(model)
+
+        # Use subset for large datasets
+        if len(X_clean) > 5000:
+            sample_idx = np.random.choice(len(X_clean), 5000, replace=False)
+            X_sample = X_clean[sample_idx]
+        else:
+            X_sample = X_clean
+
+        shap_values = explainer.shap_values(X_sample)
+
+        # Handle multi-class case
+        if isinstance(shap_values, list):
+            shap_values = np.abs(np.array(shap_values)).mean(axis=0)
+
+        # Mean absolute SHAP value per feature
+        mean_shap = np.abs(shap_values).mean(axis=0)
+        mean_shap = mean_shap / mean_shap.sum()  # Normalize
+
+        # Store scores
+        for i, score in enumerate(mean_shap):
+            self._feature_scores[self._feature_names[i]] = float(score)
+
+        # Sort by SHAP importance
+        sorted_features = sorted(
+            self._feature_names,
+            key=lambda f: self._feature_scores[f],
+            reverse=True,
+        )
+
+        # Select top features
+        n_select = self.n_features or int(len(sorted_features) * 0.5)
+        self._selected_features = sorted_features[:n_select]
+
+        logger.info(f"SHAP-based selection complete: {len(self._selected_features)} features selected")
+
+    def _fit_shap_rf(self, X: np.ndarray, y: np.ndarray) -> None:
+        """Fallback SHAP with Random Forest."""
+        if self.task_type == "classification":
+            model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=5,
+                random_state=self.random_state,
+                n_jobs=self.n_jobs,
+            )
+        else:
+            model = RandomForestRegressor(
+                n_estimators=100,
+                max_depth=5,
+                random_state=self.random_state,
+                n_jobs=self.n_jobs,
+            )
+
+        X_clean = np.nan_to_num(X, nan=0.0)
+        y_clean = np.nan_to_num(y, nan=0.0)
+        model.fit(X_clean, y_clean)
+
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer.shap_values(X_clean[:min(1000, len(X_clean))])
+
+        if isinstance(shap_values, list):
+            shap_values = np.abs(np.array(shap_values)).mean(axis=0)
+
+        mean_shap = np.abs(shap_values).mean(axis=0)
+
+        for i, score in enumerate(mean_shap):
+            self._feature_scores[self._feature_names[i]] = float(score)
+
+        sorted_features = sorted(
+            self._feature_names,
+            key=lambda f: self._feature_scores[f],
+            reverse=True,
+        )
+
+        n_select = self.n_features or int(len(sorted_features) * 0.5)
+        self._selected_features = sorted_features[:n_select]
+
+    def _fit_adversarial(self, X: np.ndarray, y: np.ndarray) -> None:
+        """
+        Adversarial validation-based feature selection.
+
+        Removes features that help distinguish train from test data,
+        as these may indicate distribution shift or data leakage.
+
+        Process:
+        1. Split data into "train" and "holdout" portions
+        2. Train classifier to distinguish them
+        3. Features with high importance for distinction are problematic
+        4. Remove features that distinguish too well (potential leakage)
+        """
+        logger.info("Running adversarial feature selection...")
+
+        # Split data temporally (last 20% as "future")
+        split_idx = int(len(X) * 0.8)
+        X_train = X[:split_idx]
+        X_holdout = X[split_idx:]
+
+        # Create adversarial labels (0 = train, 1 = holdout)
+        y_adv = np.concatenate([
+            np.zeros(len(X_train)),
+            np.ones(len(X_holdout))
+        ])
+        X_adv = np.vstack([X_train, X_holdout])
+
+        # Train classifier to distinguish train from holdout
+        if LIGHTGBM_AVAILABLE:
+            model = lgb.LGBMClassifier(
+                n_estimators=100,
+                max_depth=3,
+                random_state=self.random_state,
+                verbose=-1,
+            )
+        else:
+            model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=3,
+                random_state=self.random_state,
+            )
+
+        X_clean = np.nan_to_num(X_adv, nan=0.0)
+        model.fit(X_clean, y_adv)
+
+        # Get feature importance for adversarial task
+        importances = model.feature_importances_
+
+        # Features that distinguish well are PROBLEMATIC
+        # Lower score = better (less able to distinguish)
+        for i, imp in enumerate(importances):
+            # Invert: higher adversarial importance = lower selection score
+            self._feature_scores[self._feature_names[i]] = 1.0 - imp
+
+        # Sort by score (higher = better, i.e., less adversarial)
+        sorted_features = sorted(
+            self._feature_names,
+            key=lambda f: self._feature_scores[f],
+            reverse=True,
+        )
+
+        # Remove highly adversarial features (top 10% most distinguishing)
+        n_keep = int(len(sorted_features) * 0.9)
+        self._selected_features = sorted_features[:n_keep]
+
+        # Also apply n_features limit if specified
+        if self.n_features and len(self._selected_features) > self.n_features:
+            self._selected_features = self._selected_features[:self.n_features]
+
+        logger.info(
+            f"Adversarial selection: Removed {len(sorted_features) - len(self._selected_features)} "
+            f"potentially problematic features"
+        )
+
+    def _fit_temporal(self, X: np.ndarray, y: np.ndarray, n_windows: int = 5) -> None:
+        """
+        Temporal feature importance tracking.
+
+        Tracks feature importance over time to identify:
+        1. Features with decaying importance (remove)
+        2. Features with stable importance (keep)
+        3. Features with improving importance (prioritize)
+
+        This helps detect concept drift at the feature level.
+        """
+        logger.info("Running temporal feature importance analysis...")
+
+        window_size = len(X) // n_windows
+        temporal_scores = {f: [] for f in self._feature_names}
+
+        for i in range(n_windows):
+            start_idx = i * window_size
+            end_idx = start_idx + window_size if i < n_windows - 1 else len(X)
+
+            X_window = X[start_idx:end_idx]
+            y_window = y[start_idx:end_idx]
+
+            # Get importance for this window
+            if LIGHTGBM_AVAILABLE:
+                model = lgb.LGBMRegressor(
+                    n_estimators=50,
+                    max_depth=3,
+                    random_state=self.random_state,
+                    verbose=-1,
+                ) if self.task_type != "classification" else lgb.LGBMClassifier(
+                    n_estimators=50,
+                    max_depth=3,
+                    random_state=self.random_state,
+                    verbose=-1,
+                )
+            else:
+                model = RandomForestRegressor(
+                    n_estimators=50,
+                    random_state=self.random_state,
+                ) if self.task_type != "classification" else RandomForestClassifier(
+                    n_estimators=50,
+                    random_state=self.random_state,
+                )
+
+            X_clean = np.nan_to_num(X_window, nan=0.0)
+            y_clean = np.nan_to_num(y_window, nan=0.0)
+            model.fit(X_clean, y_clean)
+
+            importances = model.feature_importances_
+            for j, imp in enumerate(importances):
+                temporal_scores[self._feature_names[j]].append(imp)
+
+        # Calculate temporal stability and trend
+        for f in self._feature_names:
+            scores = np.array(temporal_scores[f])
+            mean_score = scores.mean()
+            stability = 1.0 / (1.0 + scores.std())  # Higher stability = better
+
+            # Check for trend (decaying = bad)
+            if len(scores) >= 3:
+                trend = np.polyfit(range(len(scores)), scores, 1)[0]
+                trend_factor = 1.0 + np.clip(trend, -0.5, 0.5)  # Penalize decay
+            else:
+                trend_factor = 1.0
+
+            # Combined score: importance * stability * trend
+            self._feature_scores[f] = mean_score * stability * trend_factor
+
+        # Sort and select
+        sorted_features = sorted(
+            self._feature_names,
+            key=lambda f: self._feature_scores[f],
+            reverse=True,
+        )
+
+        n_select = self.n_features or int(len(sorted_features) * 0.5)
+        self._selected_features = sorted_features[:n_select]
+
+        logger.info(f"Temporal selection complete: {len(self._selected_features)} stable features selected")
 
 
 def select_features(
