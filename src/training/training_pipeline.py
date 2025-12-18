@@ -81,6 +81,8 @@ class PipelineStage(str, Enum):
     DATA_VALIDATION = "data_validation"
     FEATURE_GENERATION = "feature_generation"
     DATA_PREPARATION = "data_preparation"
+    DRIFT_DETECTION = "drift_detection"  # Added: Detect train/test distribution shift
+    ADVERSARIAL_VALIDATION = "adversarial_validation"  # Added: Adversarial validation stage
     MODEL_TRAINING = "model_training"
     MODEL_EVALUATION = "model_evaluation"
     SIGNIFICANCE_TESTING = "significance_testing"
@@ -589,6 +591,20 @@ class TrainingPipeline:
                     self._prepare_training_data,
                 )
 
+            # Step 3.5: Drift Detection (after data preparation, before training)
+            if PipelineStage.DRIFT_DETECTION not in skip_stages:
+                self._run_stage(
+                    PipelineStage.DRIFT_DETECTION,
+                    self._detect_drift,
+                )
+
+            # Step 3.6: Adversarial Validation
+            if PipelineStage.ADVERSARIAL_VALIDATION not in skip_stages:
+                self._run_stage(
+                    PipelineStage.ADVERSARIAL_VALIDATION,
+                    self._adversarial_validation,
+                )
+
             # Step 4: Model Training
             if PipelineStage.MODEL_TRAINING not in skip_stages and mode != "evaluate_only":
                 self._run_stage(
@@ -1058,12 +1074,54 @@ class TrainingPipeline:
         )
 
         # Setup cross-validation
-        from src.training.validation import PurgedKFoldCV
-        self._cv = PurgedKFoldCV(
-            n_splits=train_config.get("cv_splits", 5),
-            purge_gap=purge_gap,
-            embargo_pct=train_config.get("embargo_pct", 0.01),
-        )
+        # Use CombinatorialPurgedKFoldCV by default for more robust performance estimation
+        # This provides multiple backtest paths as recommended by de Prado
+        cv_type = train_config.get("cv_type", "combinatorial_purged")
+
+        if cv_type == "combinatorial_purged":
+            from src.training.validation import CombinatorialPurgedKFoldCV
+            self._cv = CombinatorialPurgedKFoldCV(
+                n_splits=train_config.get("cv_splits", 5),
+                n_test_splits=train_config.get("n_test_splits", 2),
+                purge_gap=purge_gap,
+                embargo_pct=train_config.get("embargo_pct", 0.01),
+            )
+            logger.info("Using CombinatorialPurgedKFoldCV for robust performance estimation")
+        elif cv_type == "purged":
+            from src.training.validation import PurgedKFoldCV
+            self._cv = PurgedKFoldCV(
+                n_splits=train_config.get("cv_splits", 5),
+                purge_gap=purge_gap,
+                embargo_pct=train_config.get("embargo_pct", 0.01),
+            )
+            logger.info("Using standard PurgedKFoldCV")
+        elif cv_type == "walk_forward":
+            from src.training.validation import WalkForwardCV
+            self._cv = WalkForwardCV(
+                n_splits=train_config.get("cv_splits", 5),
+                train_period=train_config.get("wf_train_period", 252),
+                test_period=train_config.get("wf_test_period", 21),
+                purge_gap=purge_gap,
+            )
+            logger.info("Using WalkForwardCV")
+        elif cv_type == "group_time_series":
+            from src.training.validation import GroupTimeSeriesSplit
+            self._cv = GroupTimeSeriesSplit(
+                n_splits=train_config.get("cv_splits", 5),
+                purge_gap=purge_gap,
+                embargo_pct=train_config.get("embargo_pct", 0.01),
+            )
+            logger.info("Using GroupTimeSeriesSplit for multi-asset data")
+        else:
+            # Fallback to combinatorial purged
+            from src.training.validation import CombinatorialPurgedKFoldCV
+            self._cv = CombinatorialPurgedKFoldCV(
+                n_splits=train_config.get("cv_splits", 5),
+                n_test_splits=train_config.get("n_test_splits", 2),
+                purge_gap=purge_gap,
+                embargo_pct=train_config.get("embargo_pct", 0.01),
+            )
+            logger.warning(f"Unknown cv_type '{cv_type}', defaulting to combinatorial_purged")
 
         return {
             "n_train": len(self._X_train),
@@ -1071,6 +1129,145 @@ class TrainingPipeline:
             "n_features": len(self._X_train.columns),
             "purge_gap": purge_gap,
         }
+
+    def _detect_drift(self) -> Dict[str, Any]:
+        """
+        Step 3.5: Detect distribution drift between train and test data.
+
+        Uses PSI (Population Stability Index) and KS test to identify
+        features with significant drift that may impact model performance.
+        """
+        logger.info("Running drift detection stage...")
+
+        if self._X_train is None or self._X_test is None:
+            raise ValueError("Training data not prepared - run _prepare_training_data first")
+
+        train_config = self.config.get("training", {})
+        psi_threshold = train_config.get("drift_psi_threshold", 0.2)
+
+        try:
+            from src.training.drift_detection import DriftDetector, DriftThresholds
+
+            # Configure thresholds
+            thresholds = DriftThresholds(
+                psi_warning=psi_threshold * 0.5,  # Warning at half threshold
+                psi_critical=psi_threshold,
+            )
+
+            # Create detector with training data as reference
+            detector = DriftDetector(
+                reference_data=self._X_train,
+                reference_target=self._y_train,
+                thresholds=thresholds,
+                feature_names=list(self._X_train.columns),
+            )
+
+            # Detect feature drift
+            drift_result = detector.detect_feature_drift(self._X_test)
+
+            # Log results
+            if drift_result.is_drift_detected:
+                logger.warning(
+                    f"Drift detected in {len(drift_result.affected_features)} features "
+                    f"(severity: {drift_result.severity.value})"
+                )
+                logger.warning(f"Drifted features: {drift_result.affected_features[:10]}")
+
+                if drift_result.severity.value == "critical":
+                    logger.critical(
+                        "CRITICAL: Significant distribution shift detected. "
+                        "Model performance may be unreliable."
+                    )
+            else:
+                logger.info("No significant drift detected between train and test data")
+
+            return {
+                "drift_detected": drift_result.is_drift_detected,
+                "drift_score": drift_result.drift_score,
+                "severity": drift_result.severity.value,
+                "n_drifted_features": len(drift_result.affected_features),
+                "drifted_features": drift_result.affected_features[:20],
+                "recommendation": drift_result.recommendation.value,
+                "details": {
+                    k: v for k, v in drift_result.details.items()
+                    if k not in ["psi_scores", "ks_results", "js_scores"]  # Exclude large dicts
+                },
+            }
+
+        except ImportError:
+            logger.warning("Drift detection module not available - skipping")
+            return {"status": "skipped", "reason": "drift_detection module not available"}
+        except Exception as e:
+            logger.error(f"Drift detection failed: {e}")
+            return {"status": "error", "error": str(e)}
+
+    def _adversarial_validation(self) -> Dict[str, Any]:
+        """
+        Step 3.6: Run adversarial validation to detect train/test leakage.
+
+        Trains a classifier to distinguish train from test samples.
+        High AUC (>0.55) indicates potential data leakage or distribution shift.
+        """
+        logger.info("Running adversarial validation stage...")
+
+        if self._X_train is None or self._X_test is None:
+            raise ValueError("Training data not prepared - run _prepare_training_data first")
+
+        train_config = self.config.get("training", {})
+        warn_threshold = train_config.get("adversarial_warn_auc", 0.55)
+        critical_threshold = train_config.get("adversarial_critical_auc", 0.60)
+
+        try:
+            from src.training.validation import AdversarialValidator
+
+            validator = AdversarialValidator(
+                warn_threshold=warn_threshold,
+                critical_threshold=critical_threshold,
+            )
+
+            result = validator.validate(
+                train_data=self._X_train,
+                test_data=self._X_test,
+            )
+
+            auc = result.get("auc", 0.5)
+            severity = result.get("severity", "ok")
+
+            if auc > critical_threshold:
+                logger.critical(
+                    f"CRITICAL: Adversarial AUC = {auc:.3f}. "
+                    "Train/test distributions differ significantly! "
+                    "Check for data leakage or temporal drift."
+                )
+            elif auc > warn_threshold:
+                logger.warning(
+                    f"Adversarial AUC = {auc:.3f}. "
+                    "Some distribution shift detected between train and test."
+                )
+            else:
+                logger.info(
+                    f"Adversarial validation passed. AUC = {auc:.3f} "
+                    "(train/test distributions are similar)"
+                )
+
+            # Get top discriminative features
+            top_features = result.get("top_discriminative_features", [])
+            if top_features and auc > warn_threshold:
+                logger.warning(f"Top discriminative features: {top_features[:5]}")
+
+            return {
+                "auc": auc,
+                "severity": severity,
+                "passed": auc <= warn_threshold,
+                "top_discriminative_features": top_features[:10],
+            }
+
+        except ImportError:
+            logger.warning("AdversarialValidator not available - skipping")
+            return {"status": "skipped", "reason": "AdversarialValidator not available"}
+        except Exception as e:
+            logger.error(f"Adversarial validation failed: {e}")
+            return {"status": "error", "error": str(e)}
 
     def _train_model(self) -> Dict[str, Any]:
         """

@@ -450,3 +450,306 @@ model_registry:
       sharpe_ratio: 1.0
       max_drawdown: 0.20
       min_observations: 252         # At least 1 year of data
+
+# -----------------------------------------------------------------------------
+# Market Regime Detection Configuration (Directive 5.1)
+# -----------------------------------------------------------------------------
+regime_detection:
+  # Detection method: hmm, volatility, trend, composite
+  method: composite
+
+  # HMM regime detector
+  hmm:
+    n_regimes: 3                    # Number of hidden states
+    n_iter: 100                     # EM iterations
+    covariance_type: full           # full, diag, tied, spherical
+    features:                       # Features for regime detection
+      - returns
+      - volatility
+      - volume_ratio
+    lookback_period: 252            # Days for regime calibration
+
+  # Volatility-based regime detector
+  volatility:
+    method: percentile              # percentile, rolling_std, garch
+    lookback: 60                    # Rolling window for volatility
+    low_threshold: 0.33             # Percentile cutoff for low vol regime
+    high_threshold: 0.67            # Percentile cutoff for high vol regime
+
+  # Trend regime detector (ADX-based)
+  trend:
+    adx_period: 14                  # ADX calculation period
+    trending_threshold: 25          # ADX above = trending market
+    strong_trend_threshold: 40      # ADX above = strong trend
+
+  # Per-regime position scaling
+  regime_position_scaling:
+    low_volatility:
+      position_multiplier: 1.2      # Scale up in calm markets
+      max_position_pct: 0.15
+      prediction_horizon: 5
+    normal:
+      position_multiplier: 1.0
+      max_position_pct: 0.10
+      prediction_horizon: 5
+    high_volatility:
+      position_multiplier: 0.5      # Scale down in volatile markets
+      max_position_pct: 0.05
+      prediction_horizon: 3         # Shorter horizon in volatile markets
+
+  # Per-regime model parameters (optional overrides)
+  regime_model_params:
+    low_volatility:
+      lightgbm:
+        n_estimators: 150
+        learning_rate: 0.05
+    high_volatility:
+      lightgbm:
+        n_estimators: 50
+        learning_rate: 0.15
+        max_depth: 4                # Simpler model for volatile regimes
+
+# -----------------------------------------------------------------------------
+# Online Learning Configuration (Directive 5.2)
+# -----------------------------------------------------------------------------
+online_learning:
+  enabled: false                    # Enable incremental model updates
+
+  # Update frequency
+  update_frequency: weekly          # daily, weekly, on_drift
+  update_schedule:
+    day_of_week: 0                  # Monday (0) for weekly updates
+    hour: 2                         # 2 AM local time
+
+  # Minimum samples for update
+  min_samples_for_update: 500
+  max_model_age_days: 30            # Force retrain after N days
+
+  # Drift-triggered updates
+  drift_detection:
+    enabled: true
+    method: adwin                   # adwin, ddm, eddm, page_hinkley
+    adwin_delta: 0.002              # ADWIN sensitivity
+    ddm_warning_level: 2.0          # DDM warning threshold
+    ddm_out_control_level: 3.0      # DDM drift threshold
+    page_hinkley_delta: 0.005       # Page-Hinkley threshold
+    page_hinkley_lambda: 50         # Page-Hinkley threshold
+
+  # Incremental training settings
+  incremental:
+    warm_start: true                # Continue from existing model
+    learning_rate_decay: 0.95       # LR decay per update
+    memory_limit_mb: 500            # Max memory for sample replay
+    importance_weighting: true      # Weight recent samples higher
+    sample_decay: 0.99              # Weight decay for old samples
+
+  # Model versioning
+  versioning:
+    keep_n_versions: 5              # Number of model versions to keep
+    rollback_on_degradation: true   # Auto-rollback if performance drops
+    performance_threshold: 0.9      # Min relative performance vs previous
+
+# -----------------------------------------------------------------------------
+# Feature Store Configuration (Directive 5.3)
+# -----------------------------------------------------------------------------
+feature_store:
+  # Backend selection: redis, timescaledb, parquet, sqlite
+  backend: parquet
+
+  # Parquet backend settings
+  parquet:
+    base_path: data/feature_store
+    partition_by: symbol            # Partition by symbol for efficiency
+    compression: snappy             # snappy, gzip, lz4
+    row_group_size: 100000
+
+  # Redis backend settings (for real-time)
+  redis:
+    host: localhost
+    port: 6379
+    db: 0
+    key_prefix: alphatrade:features
+    ttl_seconds: 86400              # 24 hours
+
+  # TimescaleDB backend settings
+  timescaledb:
+    host: localhost
+    port: 5432
+    database: alphatrade_features
+    schema: feature_store
+    hypertable_chunk_interval: 7d   # Chunk by week
+
+  # Cache settings
+  cache:
+    enabled: true
+    ttl_seconds: 3600               # 1 hour cache TTL
+    max_size_mb: 1000               # Max cache size in memory
+    eviction_policy: lru            # lru, lfu, ttl
+
+  # Feature versioning
+  versioning:
+    enabled: true
+    track_lineage: true             # Track feature computation lineage
+    retention_days: 90              # Keep feature versions for 90 days
+
+  # Monitoring and alerting
+  monitoring:
+    stale_feature_threshold_hours: 2  # Alert if feature older than N hours
+    missing_feature_alert: true
+    null_ratio_threshold: 0.05      # Alert if >5% null values
+
+# -----------------------------------------------------------------------------
+# Model Monitoring Configuration (Directive 5.4)
+# -----------------------------------------------------------------------------
+monitoring:
+  enabled: true
+
+  # Performance monitoring thresholds
+  performance:
+    sharpe_ratio_warning: 0.5       # Warn if Sharpe drops below
+    sharpe_ratio_critical: 0.0      # Critical if Sharpe goes negative
+    max_drawdown_warning: 0.15      # Warn at 15% drawdown
+    max_drawdown_critical: 0.25     # Critical at 25% drawdown
+    win_rate_warning: 0.45          # Warn if win rate drops below 45%
+    win_rate_critical: 0.40         # Critical below 40%
+    profit_factor_warning: 1.0      # Warn if profit factor < 1
+    ic_degradation_warning: 0.3     # Warn if IC drops 30% from baseline
+
+  # Feature drift alert thresholds (PSI)
+  drift:
+    psi_warning: 0.10               # PSI warning threshold
+    psi_critical: 0.25              # PSI critical threshold
+    ks_pvalue_warning: 0.05         # KS test warning p-value
+    check_frequency: daily          # daily, hourly, per_prediction
+    features_to_monitor: null       # null = all features
+
+  # Prediction latency thresholds
+  latency:
+    warning_ms: 50                  # Warn if prediction > 50ms
+    critical_ms: 100                # Critical if prediction > 100ms
+    track_percentiles:              # Track these percentiles
+      - 50
+      - 95
+      - 99
+    batch_size_for_test: 100        # Samples for latency testing
+
+  # Alerting configuration
+  alerting:
+    enabled: true
+
+    # Email alerts
+    email:
+      enabled: false
+      smtp_host: smtp.gmail.com
+      smtp_port: 587
+      from_address: alerts@alphatrade.com
+      to_addresses:
+        - team@alphatrade.com
+      subject_prefix: "[AlphaTrade Alert]"
+
+    # Slack alerts
+    slack:
+      enabled: false
+      webhook_url: null             # Slack webhook URL
+      channel: "#ml-alerts"
+      mention_on_critical: "@here"
+
+    # PagerDuty integration
+    pagerduty:
+      enabled: false
+      routing_key: null             # PagerDuty routing key
+      severity_mapping:
+        warning: warning
+        critical: critical
+
+  # Monitoring report generation
+  reports:
+    daily_report: true
+    weekly_summary: true
+    report_output_path: reports/monitoring
+    include_plots: true
+    retention_days: 30
+
+# -----------------------------------------------------------------------------
+# Training Pipeline Configuration
+# -----------------------------------------------------------------------------
+training:
+  # Default model type
+  model_type: lightgbm_classifier
+
+  # Train/test split
+  train_ratio: 0.8
+  test_size: 0.2
+
+  # Cross-validation (uses combinatorial purged by default)
+  cv_type: combinatorial_purged     # combinatorial_purged, purged, walk_forward, group_time_series
+  cv_splits: 5
+  n_test_splits: 2                  # For combinatorial CV
+  embargo_pct: 0.01
+
+  # Walk-forward specific
+  wf_train_period: 252              # Trading days for WF training window
+  wf_test_period: 21                # Trading days for WF test window
+
+  # Drift detection thresholds
+  drift_psi_threshold: 0.2          # PSI threshold for drift detection stage
+  adversarial_warn_auc: 0.55        # Adversarial validation warning threshold
+  adversarial_critical_auc: 0.60    # Adversarial validation critical threshold
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.001
+
+# -----------------------------------------------------------------------------
+# Fractional Differentiation Configuration
+# -----------------------------------------------------------------------------
+fractional_diff:
+  enabled: true                     # Enable in feature pipeline
+  d_range: [0.0, 1.0]               # Range for d parameter search
+  threshold: 0.01                   # ADF test threshold for stationarity
+  max_lag: null                     # null = auto-calculate
+  columns:                          # Columns to fractionally differentiate
+    - close
+    - open
+    - high
+    - low
+    - volume
+
+# -----------------------------------------------------------------------------
+# Meta-Labeling Configuration
+# -----------------------------------------------------------------------------
+meta_labeling:
+  enabled: false                    # Enable meta-labeling for position sizing
+  primary_model: lightgbm_classifier
+  meta_model: lightgbm_classifier
+  bet_size_from_proba: true         # Use probabilities for bet sizing
+  min_probability: 0.55             # Min probability to take position
+  max_bet_size: 1.0                 # Maximum bet size multiplier
+
+# -----------------------------------------------------------------------------
+# Triple-Barrier Labeling Configuration
+# -----------------------------------------------------------------------------
+triple_barrier:
+  enabled: false                    # Use triple-barrier instead of simple returns
+  take_profit_bps: 50               # Take profit in basis points
+  stop_loss_bps: 25                 # Stop loss in basis points
+  time_barrier_bars: 20             # Maximum holding period
+  min_return_bps: 5                 # Minimum return to label as non-zero
+
+# -----------------------------------------------------------------------------
+# Position Sizing Configuration
+# -----------------------------------------------------------------------------
+position_sizing:
+  method: kelly                     # kelly, fixed, volatility_scaled, confidence_weighted
+  kelly:
+    fraction: 0.25                  # Kelly fraction (conservative = 0.25)
+    max_position: 0.10              # Max position as % of capital
+    min_position: 0.01              # Min position as % of capital
+  volatility_scaled:
+    target_volatility: 0.15         # Target annualized volatility
+    lookback: 20                    # Volatility lookback period
+  confidence_weighted:
+    use_meta_labels: true           # Use meta-model confidence
+    confidence_threshold: 0.6       # Min confidence to trade
